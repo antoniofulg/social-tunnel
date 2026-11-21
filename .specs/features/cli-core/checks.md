@@ -216,6 +216,8 @@ Proof: run unit | (pass) [C54]
 
 ### S6 - The CLI never blocks an agent
 
+Complete: C55, C56 - proofs green
+
 **C55** - `social-tunnel frobnicate` and `status --bogus` print usage on stderr and exit 2; `--help` and `--version` exit 0 (CLI-01, AC 42)
 Proof: run unit | (pass) [C55]
 

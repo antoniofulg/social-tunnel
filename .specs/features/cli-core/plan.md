@@ -186,7 +186,7 @@ The user or an agent learns which hop failed and what to do about it.
 | TUN-01 | S3 | 18-28, 48, 49, 50, 57 | Done |
 | STA-01 | S4 | 29-34, 51 | Done |
 | DOC-01 | S5 | 35-41, 52, 53, 54 | Done |
-| CLI-01 | S6 | 42, 43 | Pending |
+| CLI-01 | S6 | 42, 43 | Done |
 
 ## Security Surfaces
 
