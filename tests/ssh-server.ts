@@ -14,7 +14,12 @@ export interface ServerOptions {
   forward?: (port: number) => boolean;
   // Really open the forwarded port and pass its connections down the tunnel.
   open?: boolean;
+  // Runs commands sent to a shell session (with or without a terminal).
   shell?: boolean;
+  pty?: boolean;
+  exec?: boolean;
+  // Grants shell and exec requests but runs only its own command, like `command="/bin/false"`.
+  forced?: boolean;
   sftp?: boolean;
   localForward?: boolean;
   banner?: string;
@@ -108,10 +113,30 @@ export async function startServer(options: ServerOptions): Promise<TestServer> {
         } else reject?.();
       });
       client.on("session", (accept, reject) => {
-        if (!options.shell && !options.sftp) return reject();
+        if (!options.shell && !options.sftp && !options.exec && !options.forced) return reject();
         const session = accept();
-        session.on("pty", (ok, no) => (options.shell ? ok?.() : no?.()));
-        session.on("shell", (ok, no) => (options.shell ? ok().end() : no?.()));
+        // What a real shell prints for doctor's probe command; only a server that runs it answers so.
+        const evaluate = (text: string) => (text.includes("echo social-tunnel-$((6*7))") ? "social-tunnel-42\n" : "");
+        // A forced command: the request is granted, the server's own command runs and exits.
+        const forcedCommand = (channel: { exit(code: number): void; end(): void }) => {
+          channel.exit(1);
+          channel.end();
+        };
+        session.on("pty", (ok, no) => (options.pty ? ok?.() : no?.()));
+        session.on("shell", (ok, no) => {
+          if (options.forced) return forcedCommand(ok());
+          if (!options.shell) return no?.();
+          const channel = ok();
+          channel.on("data", (chunk: Buffer) => channel.write(evaluate(chunk.toString())));
+        });
+        session.on("exec", (ok, no, info) => {
+          if (options.forced) return forcedCommand(ok());
+          if (!options.exec) return no?.();
+          const channel = ok();
+          channel.write(evaluate(info.command));
+          channel.exit(0);
+          channel.end();
+        });
         session.on("sftp", (ok, no) => (options.sftp ? ok() : no?.()));
       });
       client.on("tcpip", (accept, reject) => (options.localForward ? accept().end() : reject()));

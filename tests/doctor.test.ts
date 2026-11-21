@@ -227,7 +227,7 @@ test("[C52] doctor exits with the failing hop's code, and 0 when every hop passe
 });
 
 test("[C53] the lockdown hop fails naming exactly what the server allowed, and passes when it allows nothing", async () => {
-  const names = ["shell", "sftp", "local forward", "remote forward"];
+  const names = ["shell", "exec", "sftp", "local forward", "remote forward"];
   const table: [Server | "other-port", string | null][] = [
     [{ shell: true }, "shell"],
     [{ sftp: true }, "sftp"],
@@ -276,4 +276,30 @@ test("[C54] keyPath ~/.ssh/id_ed25519 passes the key hop with advice to use a de
   const dedicated = await doctor((await locked()).path, { ...seams().io, homedir: () => home });
   expect(dedicated.hop("key")).toMatchObject({ ok: true });
   expect(dedicated.hop("key").detail).not.toMatch(/dedicated key/);
+});
+
+test("[C64] the lockdown hop fails for a shell without a PTY and for exec, and passes a forced command", async () => {
+  const names = ["shell", "exec", "sftp", "local forward", "remote forward"];
+  const table: [Server, string | null][] = [
+    // Terminals refused, yet a shell runs commands: what `restrict` without `command=` gives.
+    [{ shell: true, pty: false }, "shell"],
+    [{ exec: true }, "exec"],
+    // The requests are granted but only the server's own command runs: nothing was allowed.
+    [{ forced: true }, null],
+  ];
+  for (const [server, allowed] of table) {
+    const env = await locked(server);
+    const { code, hop } = await doctor(env.path, seams().io);
+    const lockdown = hop("lockdown");
+    if (allowed === null) {
+      expect(code).toBe(0);
+      expect(lockdown).toMatchObject({ ok: true, skipped: false });
+    } else {
+      expect([allowed, code]).toEqual([allowed, 14]);
+      expect(lockdown).toMatchObject({ ok: false, skipped: false });
+      expect(lockdown.fix.length).toBeGreaterThan(0);
+      const named = lockdown.detail.slice(lockdown.detail.indexOf(":") + 1);
+      expect(names.filter((n) => named.includes(n))).toEqual([allowed]);
+    }
+  }
 });

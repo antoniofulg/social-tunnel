@@ -1,5 +1,5 @@
 import path from "node:path";
-import type { Client } from "ssh2";
+import type { Client, ClientChannel } from "ssh2";
 import { isRefusedAddress } from "./address-guard";
 import { loadConfig, loadKey, type Config, type KeyFs } from "./config";
 import { DEFAULTS, EXIT } from "./defaults";
@@ -154,8 +154,32 @@ export async function runDoctor(
         const c = client!;
         const other = config.remotePort + 1;
         // Everything the tunnel user must not be able to do. Each probe is undone if it works.
+        // A granted session proves nothing: with a forced command the server accepts the request and
+        // runs its own command. The probe counts only when a shell evaluated it.
+        const command = "echo social-tunnel-$((6*7))";
+        const ran = (channel: ClientChannel | undefined, answer: (granted: boolean) => void) => {
+          if (!channel) return answer(false);
+          let output = "";
+          channel.on("data", (chunk: Buffer) => {
+            output += chunk.toString("latin1");
+            if (output.includes("social-tunnel-42")) {
+              channel.close();
+              answer(true);
+            }
+          });
+          channel.on("close", () => answer(false));
+        };
         const probes: [string, (answer: (granted: boolean) => void) => void][] = [
-          ["shell", (answer) => c.shell((err, channel) => (channel?.close(), answer(!err)))],
+          [
+            "shell",
+            // No PTY: a server that refuses terminals may still hand out a shell.
+            (answer) =>
+              c.shell(false, (err, channel) => {
+                ran(channel, answer);
+                if (!err) channel.write(`${command}\nexit\n`);
+              }),
+          ],
+          ["exec", (answer) => c.exec(command, (_err, channel) => ran(channel, answer))],
           ["sftp", (answer) => c.sftp((err, sftp) => (sftp?.end(), answer(!err)))],
           [
             "local forward",
@@ -179,7 +203,7 @@ export async function runDoctor(
             EXIT.lockdown,
           );
         }
-        return pass("the server refused a shell, sftp, a local forward and a forward on another port");
+        return pass("the server ran no shell or exec command and refused sftp, a local forward and a forward on another port");
       },
     },
     {
