@@ -44,9 +44,9 @@ None - no stored-data shape change beyond two new local JSON files, whose litera
 
 | Interface | In | Out | Outcomes |
 | --- | --- | --- | --- |
-| `social-tunnel run` | `--config <path>`, `--json` | log lines on stderr (JSON lines with `--json`); `state.json` | exit 0 on SIGINT/SIGTERM, 2 config/usage or already running, 13 host key mismatch |
+| `social-tunnel run` | `--config <path>`, `--json` | log lines on stderr (JSON lines with `--json`); `state.json`; on exit one JSON object on stdout with `--json` | exit 0 on SIGINT/SIGTERM, 2 config/usage or already running, 13 host key mismatch |
 | `social-tunnel status` | `--config <path>`, `--json` | `{ok, command, configPath, state, reason, since, retryAt, pid, server, remotePort, domains}` | exit 0 connected, 10 not connected, 11 port blocked, 13 host key mismatch, 2 config |
-| `social-tunnel doctor` | `--config <path>`, `--json`, `--domain <host>` | `{ok, command, configPath, hops: [{hop, ok, detail, fix}]}` | exit 0 all pass, 2 config/key, 10 unreachable/auth/egress, 11 forward refused, 12 domain refused, 13 host key mismatch, 14 lockdown failed |
+| `social-tunnel doctor` | `--config <path>`, `--json`, `--domain <host>` | `{ok, command, configPath, hops: [{hop, ok, skipped, detail, fix}]}` | exit 0 all pass, 2 config/key, 10 unreachable/auth/egress, 11 forward refused, 12 domain refused, 13 host key mismatch, 14 lockdown failed |
 | any verb, `--help`, `--version` | unknown verb or flag | usage on stderr | exit 2 for unknown input, 0 for help/version |
 | proxy over a forwarded channel | `CONNECT host:443 HTTP/1.1` | relayed bytes | `200 Connection Established`, `400`, `403`, `405`, `408`, `502`, `503`, `504` |
 
@@ -75,11 +75,12 @@ A command either gets a valid config or tells the user exactly what is wrong, in
 
 1. WHEN a command starts THEN the system SHALL read the config from `--config`, else `$SOCIAL_TUNNEL_CONFIG`, else `<platform config dir>/social-tunnel/config.json` where the dir is `~/Library/Application Support` on macOS, `$XDG_CONFIG_HOME` or `~/.config` on Linux, and `%APPDATA%` on Windows
 55. WHEN `status` or `doctor` prints `--json` THEN the object SHALL include `configPath`, the absolute path the config was resolved from
-2. IF the config file is missing, is not JSON, or fails schema v1 validation THEN the system SHALL exit 2 and, with `--json`, print `{"ok":false,"command":<verb>,"error":{"code":"config_invalid","field":<json path>,"message":<text>}}`
+2. IF the config file is missing, is not JSON, or fails schema v1 validation THEN `status` and `run` SHALL exit 2 and, with `--json`, print `{"ok":false,"command":<verb>,"error":{"code":"config_invalid","field":<json path>,"message":<text>}}`
 3. IF a domain entry is not a DNS hostname with at least two labels, or contains a scheme, port, path, wildcard or IP literal THEN the system SHALL reject the config naming that entry
 4. WHEN a domain entry has upper-case letters or one trailing dot THEN the system SHALL store it lower-cased without the dot
 5. IF the config contains a key not in schema v1 THEN the system SHALL reject it naming that key
-6. IF `run` or `doctor` finds the key file readable or writable by group or others on macOS or Linux THEN the system SHALL exit 2 with error code `key_permissions` and the key path, without reading the key
+6. IF `run` finds the key file readable or writable by group or others on macOS or Linux THEN it SHALL exit 2 with error code `key_permissions` and the key path, without reading the key; `doctor` reports the same condition as a failed `key` hop (criterion 41)
+56. IF `server.hostKey` is missing or is not `SHA256:` followed by 43 unpadded base64 characters THEN the system SHALL reject the config naming `server.hostKey`
 
 **Independent test:** run `social-tunnel status --json --config <fixture>` against valid, missing, malformed and bad-domain fixtures and read the exit code and JSON.
 
@@ -89,18 +90,18 @@ The proxy handler, given a forwarded stream, relays only allowlisted `host:443` 
 
 **Acceptance Criteria**
 
-7. WHEN a CONNECT request names `host:443` and the host equals an allowlisted domain or ends with `.` + an allowlisted domain THEN the system SHALL connect to a checked address, reply `HTTP/1.1 200 Connection Established`, and relay bytes both ways until either side closes
+7. WHEN a CONNECT request names `host:443` and the host, lower-cased with one trailing dot removed, equals an allowlisted domain or ends with `.` + an allowlisted domain THEN the system SHALL connect to a checked address, reply `HTTP/1.1 200 Connection Established`, and relay bytes both ways until either side closes
 8. IF the CONNECT host matches no allowlisted domain THEN the system SHALL reply `403 Forbidden` and close without a DNS lookup or outbound connection
 9. IF the CONNECT port is not 443 THEN the system SHALL reply `403 Forbidden` and close without an outbound connection
 10. IF the CONNECT host is an IPv4 or IPv6 literal THEN the system SHALL reply `403 Forbidden` and close without an outbound connection
-11. IF every resolved address is in a refused range - IPv4 `0/8`, `10/8`, `100.64/10`, `127/8`, `169.254/16`, `172.16/12`, `192.0.0/24`, `192.168/16`, `198.18/15`, `224/4`, `240/4`; IPv6 `::/128`, `::1`, `fc00::/7`, `fe80::/10`, `ff00::/8`; the IPv4 embedded in `::ffff:0:0/96`, `64:ff9b::/96` or `2002::/16` falling in a refused IPv4 range; or any prefix assigned to the home machine's own network interfaces - THEN the system SHALL reply `403 Forbidden` and close without an outbound connection
+11. IF every resolved address is in a refused range - IPv4 `0/8`, `10/8`, `100.64/10`, `127/8`, `169.254/16`, `172.16/12`, `192.0.0/24`, `192.168/16`, `198.18/15`, `224/4`, `240/4`; IPv6 `::/128`, `::1`, `100::/64`, `2001::/32`, `64:ff9b:1::/48`, `fc00::/7`, `fe80::/10`, `fec0::/10`, `ff00::/8`; the IPv4 embedded in `::/96`, `::ffff:0:0/96`, `64:ff9b::/96` or `2002::/16` falling in a refused IPv4 range; or any prefix assigned to the home machine's own network interfaces - THEN the system SHALL reply `403 Forbidden` and close without an outbound connection
 12. WHEN the host resolves to at least one public address THEN the system SHALL connect to that exact address without a second DNS lookup
 13. IF the request method is not CONNECT THEN the system SHALL reply `405 Method Not Allowed` and close
 14. IF the request head exceeds 8 KiB or is not complete within 10 s THEN the system SHALL reply `400 Bad Request` or `408 Request Timeout` respectively and close
-15. IF the outbound connection fails THEN the system SHALL reply `502 Bad Gateway`, and IF the DNS lookup or connection does not complete within 10 s THEN `504 Gateway Timeout`, and close
+15. IF the DNS lookup returns no address or the outbound connection fails THEN the system SHALL reply `502 Bad Gateway`, and IF the DNS lookup or connection does not complete within 10 s THEN `504 Gateway Timeout`, and close
 16. IF 256 relays are already open THEN the system SHALL reply `503 Service Unavailable` to the next CONNECT and close it
 17. The system SHALL open no listening socket on the home machine
-44. IF the CONNECT host is not dot-separated labels of letters, digits and hyphens (1-63 characters each, 253 total) or the port is not exactly the digits `443` THEN the system SHALL reply `400 Bad Request` and close
+44. IF the CONNECT host is not an IP literal (criterion 10 decides those, including bracketed IPv6) and is not dot-separated labels of letters, digits and hyphens (1-63 characters each, 253 total) or the port is not exactly the digits `443` THEN the system SHALL reply `400 Bad Request` and close
 45. WHEN the request head completes THEN the system SHALL relay any bytes after it upstream without parsing them as a request
 46. The system SHALL send refusal responses with a fixed body that names no resolved address
 47. IF a relay carries no bytes in either direction for 300 s THEN the system SHALL close both sides
@@ -126,6 +127,7 @@ The home machine keeps a reverse tunnel to the server and records connected, los
 25. WHEN the state changes THEN the system SHALL replace `state.json` atomically with `{version, pid, state, reason, since, retryAt, server, remotePort, updatedAt}`
 26. WHEN `run` receives SIGINT or SIGTERM THEN the system SHALL cancel the forward, close the connection, write state `stopped` and exit 0
 27. IF `state.json` names a live pid other than its own with a state other than `stopped` THEN `run` SHALL exit 2 with error code `already_running`
+57. WHEN `run --json` exits THEN it SHALL print one JSON object `{ok, command: "run", state, reason}` on stdout, and its log lines SHALL go to stderr only
 28. The system SHALL write no private key material and no passphrase to stdout, stderr, `state.json` or `--json` output
 
 **Independent test:** start `run` against an in-process `ssh2` test server; kill the server, watch `state.json` go `connected` -> `disconnected` -> `reconnecting` -> `connected`; present a wrong host key and see exit 13.
@@ -137,11 +139,11 @@ An agent or the tray learns the tunnel state and acts on the exit code.
 **Acceptance Criteria**
 
 29. WHEN `status` runs and `state.json` names a live pid in state `connected` THEN the system SHALL exit 0 and print state, since, server host, remote port and domain count
-30. IF `state.json` is absent, names a dead pid, or holds state `stopped` THEN `status` SHALL report state `stopped` and exit 10
+30. IF `state.json` is absent, holds state `stopped`, or names a dead pid with any state other than `blocked`/`host_key_mismatch` THEN `status` SHALL report state `stopped` and exit 10
 31. WHILE the state is `connecting`, `disconnected` or `reconnecting` `status` SHALL exit 10 and include `reason` and `retryAt`
 32. WHILE the state is `blocked` with reason `port_blocked` `status` SHALL exit 11
-33. WHILE the state is `blocked` with reason `host_key_mismatch` `status` SHALL exit 13
-51. IF `updatedAt` in `state.json` is older than 90 s THEN `status` SHALL report state `stopped` with reason `stale` and exit 10
+33. WHILE `state.json` holds `blocked` with reason `host_key_mismatch`, whether or not its pid is alive, `status` SHALL exit 13
+51. IF `state.json` names a live pid and its `updatedAt` is older than 90 s THEN `status` SHALL report state `stopped` with reason `stale` and exit 10
 34. WHEN any command gets `--json` THEN the system SHALL write exactly one JSON object and a newline to stdout and nothing else
 
 **Independent test:** write fixture `state.json` files for each state and pid case; run `status --json` and assert exit code and fields.
@@ -152,12 +154,12 @@ The user or an agent learns which hop failed and what to do about it.
 
 **Acceptance Criteria**
 
-35. WHEN `doctor` runs THEN the system SHALL run hops `config`, `key`, `server_reachable`, `ssh_auth`, `forward`, `lockdown`, `egress` in that order, stop at the first failure, and report the remaining hops as `skipped`
-36. The system SHALL report each hop as `{hop, ok, detail, fix}` where `fix` is a non-empty sentence whenever `ok` is false
+35. WHEN `doctor` runs THEN the system SHALL run hops `config`, `domain` (only with `--domain`), `key`, `server_reachable`, `ssh_auth`, `forward`, `lockdown`, `egress` in that order, stop at the first failure, and report the remaining hops as `skipped`
+36. The system SHALL report each hop as `{hop, ok, skipped, detail, fix}` where a skipped hop has `ok: false`, `skipped: true` and an empty `fix`, and a failed hop has `skipped: false` and a non-empty `fix`; `doctor` reports a bad config or key as a failed hop, never as an `error` envelope
 37. WHEN a live `run` is `connected` THEN the `forward` hop SHALL pass from `state.json` without requesting a second forward
 38. WHEN no live `run` holds the forward THEN the `forward` hop SHALL request the forward on `127.0.0.1:<remotePort>` and cancel it on success
 39. WHEN the `egress` hop runs THEN the system SHALL resolve the first allowlisted domain and open a TCP connection to it on port 443 from the home machine within 10 s
-40. WHEN `--domain <host>` is given THEN the system SHALL add hop `domain`, passing when the host matches the allowlist (criteria 4 and 7) and failing otherwise
+40. WHEN `--domain <host>` is given THEN the system SHALL add hop `domain` right after `config`, passing when the host matches the allowlist (criteria 4 and 7) and failing otherwise
 41. WHEN a hop fails THEN `doctor` SHALL exit with that hop's code: `config`/`key` 2, `server_reachable`/`ssh_auth`/`egress` 10, `forward` 11, `domain` 12, host key mismatch 13, `lockdown` 14; all pass exits 0
 52. WHEN the `ssh_auth` hop connects THEN the system SHALL verify the host key exactly as criterion 19 does, through the same connect path as `run`
 53. WHEN the `lockdown` hop runs THEN the system SHALL, as the tunnel user, try a shell session, an `sftp` subsystem, a local forward to `127.0.0.1:22` and a remote forward on `127.0.0.1:<remotePort + 1>`, and fail naming each attempt the server allowed
@@ -178,9 +180,9 @@ The user or an agent learns which hop failed and what to do about it.
 
 | ID | Slice | Criteria | Status |
 | --- | --- | --- | --- |
-| CFG-01 | S1 | 1, 2, 3, 4, 5, 6, 55 | Pending |
+| CFG-01 | S1 | 1, 2, 3, 4, 5, 6, 55, 56 | Pending |
 | PRX-01 | S2 | 7-17, 44, 45, 46, 47 | Pending |
-| TUN-01 | S3 | 18-28, 48, 49, 50 | Pending |
+| TUN-01 | S3 | 18-28, 48, 49, 50, 57 | Pending |
 | STA-01 | S4 | 29-34, 51 | Pending |
 | DOC-01 | S5 | 35-41, 52, 53, 54 | Pending |
 | CLI-01 | S6 | 42, 43 | Pending |
@@ -189,12 +191,12 @@ The user or an agent learns which hop failed and what to do about it.
 
 | ID | Surface | Control | Requirements |
 | --- | --- | --- | --- |
-| S1 | New runtime, `ssh2` dependency, config and state files | Pinned dependency in `bun.lock`; strict schema v1 with unknown keys rejected | Criteria 2, 3, 5 |
-| S2 | Forwarded channels from the server's loopback port into the home machine | Allowlist, port 443 only, IP literal and refused-range check incl. own interface prefixes, only the expected forward accepted, no local listener | Criteria 7-12, 17, 48 |
-| S5 | SSH private key and server host key | Key file permission check, dedicated-key advice, no key material in output, one pinned connect path for `run` and `doctor` | Criteria 6, 19, 28, 52, 54 |
-| S6 | Untrusted CONNECT request head and server-supplied text | 8 KiB / 10 s head bounds, strict hostname and port grammar, post-head bytes never parsed, sanitised logs, generic refusal bodies | Criteria 13, 14, 44, 45, 46, 50 |
-| S9 | Server-side tunnel user restrictions (configured by hand in v0.1) | `doctor` lockdown hop proves shell, sftp, local forward and other ports are refused | Criterion 53 |
-| S11 | Long-running process on the user's laptop | 256-relay cap, DNS/connect and idle timeouts, single-instance guard, stale-state detection | Criteria 15, 16, 27, 47, 49, 51 |
+| S1 | New runtime, `ssh2` dependency, config and state files | Pinned dependency in `bun.lock`; strict schema v1 with unknown keys rejected | SEC-001; criteria 2, 3, 5, 56 |
+| S2 | Forwarded channels from the server's loopback port into the home machine | Allowlist, port 443 only, IP literal and refused-range check incl. own interface prefixes, only the expected forward accepted, no local listener | SEC-002, SEC-003, SEC-004; criteria 7-12, 17, 48 |
+| S5 | SSH private key and server host key | Key file permission check, dedicated-key advice, no key material in output, one pinned connect path for `run` and `doctor` | SEC-005, SEC-006; criteria 6, 19, 28, 52, 54 |
+| S6 | Untrusted CONNECT request head and server-supplied text | 8 KiB / 10 s head bounds, strict hostname and port grammar, post-head bytes never parsed, sanitised logs, generic refusal bodies | SEC-007; criteria 13, 14, 44, 45, 46, 50 |
+| S9 | Server-side tunnel user restrictions (configured by hand in v0.1) | `doctor` lockdown hop proves shell, sftp, local forward and other ports are refused | SEC-008; criterion 53 |
+| S11 | Long-running process on the user's laptop | 256-relay cap, DNS/connect and idle timeouts, single-instance guard, stale-state detection | SEC-009; criteria 15, 16, 27, 47, 49, 51 |
 
 ## Out of scope
 
@@ -209,8 +211,9 @@ The user or an agent learns which hop failed and what to do about it.
 | Windows key-permission check | Windows ACLs need a different mechanism; v0.1 checks macOS and Linux |
 | Tray app and MCP server | v0.2 and later |
 | Per-host rate limits and per-host counters in `status` (threat T4) | Needs real traffic data to set limits; the 256-relay cap bounds damage meanwhile |
-| Server-side guard against another process binding the port while the tunnel is down (threat T3) | Needs root on the server; belongs to `setup` |
+| Server-side guard against another process taking the port while the tunnel is down (threat T3) | Needs root on the server; belongs to `setup` |
 | Rejecting public-suffix allowlist entries (threat T1) | Belongs to `domains add`, which writes the list |
+| Probing the server's `GatewayPorts` setting (AGENTS.md invariant 4) | Not observable from the client: OpenSSH silently binds loopback when it is off; `setup` will write and verify the sshd config |
 | Refusing the home's own public IP (threat T2) | Needs an external IP lookup; recorded as open question 2 |
 
 ## Assumptions
@@ -266,3 +269,4 @@ The user or an agent learns which hop failed and what to do about it.
 - Date: 2026-11-21
 - Reviewed revision: commit fd86af3 plus the door 3 change the user chose
 - Scope: build S1-S6 with tests and local commits only; no push, publish or server changes
+- Revision after criteria review (2026-11-21): settled contradictions and ambiguities the reviewer found (criteria 2, 6, 7, 11, 15, 30, 33, 35, 36, 40, 44, 51 clarified; 56 and 57 added; `skipped` added to the doctor hop shape). No capability added or removed; reported to the user for objection
