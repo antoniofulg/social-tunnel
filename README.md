@@ -30,7 +30,7 @@ One TypeScript codebase compiled with `bun build --compile` to single binaries f
 
 | Command | Does |
 | --- | --- |
-| `social-tunnel setup` | Creates the key, sets up the server side (tunnel user, keepalive, browser policy) and the local config |
+| `social-tunnel setup` | Creates the key, sets up the server side (tunnel user, keepalive, browser policy) and the local config, starting with the default domains `instagram.com`, `facebook.com`, `threads.net`, `linkedin.com` and `tiktok.com` |
 | `social-tunnel install` / `uninstall` | Starts at login: launchd, systemd user unit, or Task Scheduler |
 | `social-tunnel status` | Proxy, tunnel and server port state |
 | `social-tunnel doctor` | Tests every hop and says which one broke and how to fix it |

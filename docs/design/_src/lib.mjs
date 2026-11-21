@@ -6,7 +6,7 @@ export const r2 = (v) => Math.round(v * 100) / 100;
 export const D = {
   host: 'vps.example.com', sshPort: 22, admin: 'root', port: 8888, ip: '203.0.113.42',
   tunnelUser: 'social-tunnel',
-  domains: ['instagram.com', 'facebook.com', 'threads.net', 'linkedin.com'],
+  domains: ['instagram.com', 'facebook.com', 'threads.net', 'linkedin.com', 'tiktok.com'],
   keyFp: 'SHA256:8fK2mQ7vXc1Rt5YhLp9WzJ3nBd6Ga0Es4Uo2TiNfM1k',
   hostFp: 'SHA256:Jq4vT0x9mYb2Rk7LwPz3Ue8NcHs5AdG1FoXi6VtKyM0',
   cmd: 'agentes-runner services allow tcp/8888',
