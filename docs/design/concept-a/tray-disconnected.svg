@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 18 18" fill="none" stroke="#000" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
+  <title>social-tunnel disconnected</title>
+  <mask id="cut" maskUnits="userSpaceOnUse" x="0" y="0" width="18" height="18"><rect width="18" height="18" fill="#fff" stroke="none"/><path d="M3.2 3.4l11.6 12" stroke="#000" stroke-width="4.6" stroke-linecap="butt"/></mask>
+  <path d="M3.5 14.6V9a5.5 5.5 0 0 1 11 0v5.6" mask="url(#cut)"/>
+  <path d="M3.2 3.4l11.6 12"/>
+</svg>
