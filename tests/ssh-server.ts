@@ -21,7 +21,9 @@ export interface ServerOptions {
   // Grants shell and exec requests but runs only its own command, like `command="/bin/false"`.
   forced?: boolean;
   sftp?: boolean;
-  localForward?: boolean;
+  // true: the forward is opened. "connect-failed": permitted, but nothing answers at the target.
+  localForward?: boolean | "connect-failed";
+  shellFlavor?: "posix" | "fish" | "tcsh";
   banner?: string;
 }
 
@@ -32,6 +34,7 @@ export interface TestServer {
   // Authentication methods the server was asked for, in order.
   auth: string[];
   requests: { name: string; bindAddr?: string; bindPort?: number }[];
+  localForwards: { destIP: string; destPort: number }[];
   clients: Connection[];
   options: ServerOptions;
   dropAll: () => void;
@@ -59,6 +62,7 @@ export async function startServer(options: ServerOptions): Promise<TestServer> {
     hostKey: "SHA256:" + createHash("sha256").update(hostBlob).digest("base64").replace(/=+$/, ""),
     auth: [],
     requests: [],
+    localForwards: [],
     clients: [],
     options,
     dropAll: () => t.clients.forEach((c) => c.end()),
@@ -79,6 +83,12 @@ export async function startServer(options: ServerOptions): Promise<TestServer> {
 
   const server = new Server({ hostKeys: [host.private], banner: options.banner }, (client) => {
     t.clients.push(client);
+    // ssh2's reject() answers a channel open with "connect failed". A server that forbids the
+    // channel answers "administratively prohibited" (1), so the harness sends that unless the
+    // test asks for a permitted forward whose target is unreachable.
+    const proto = (client as unknown as { _protocol: { channelOpenFail(id: number, reason: number, text?: string): void } })._protocol;
+    const openFail = proto.channelOpenFail.bind(proto);
+    proto.channelOpenFail = (id, reason, text) => openFail(id, options.localForward === "connect-failed" ? reason : 1, text);
     client.on("error", () => {});
     client.on("authentication", (ctx) => {
       t.auth.push(ctx.method);
@@ -115,8 +125,24 @@ export async function startServer(options: ServerOptions): Promise<TestServer> {
       client.on("session", (accept, reject) => {
         if (!options.shell && !options.sftp && !options.exec && !options.forced) return reject();
         const session = accept();
-        // What a real shell prints for doctor's probe command; only a server that runs it answers so.
-        const evaluate = (text: string) => (text.includes("echo social-tunnel-$((6*7))") ? "social-tunnel-42\n" : "");
+        // A small stand-in for the account's login shell: joins quoted pieces like every shell,
+        // and evaluates $((...)) only when it is a POSIX shell (fish and tcsh report an error).
+        const evaluate = (text: string) => {
+          let out = "";
+          let err = "";
+          for (const line of text.split("\n")) {
+            const echo = /^echo (.+)$/.exec(line.trim());
+            if (!echo) continue;
+            if (echo[1]!.includes("$((") && (options.shellFlavor ?? "posix") !== "posix") err += "syntax error\n";
+            else out += echo[1]!.replace(/'/g, "").replace("$((6*7))", "42") + "\n";
+          }
+          return { out, err };
+        };
+        const answer = (channel: { write(text: string): unknown; stderr: { write(text: string): unknown } }, text: string) => {
+          const { out, err } = evaluate(text);
+          if (err) channel.stderr.write(err);
+          if (out) channel.write(out);
+        };
         // A forced command: the request is granted, the server's own command runs and exits.
         const forcedCommand = (channel: { exit(code: number): void; end(): void }) => {
           channel.exit(1);
@@ -127,19 +153,23 @@ export async function startServer(options: ServerOptions): Promise<TestServer> {
           if (options.forced) return forcedCommand(ok());
           if (!options.shell) return no?.();
           const channel = ok();
-          channel.on("data", (chunk: Buffer) => channel.write(evaluate(chunk.toString())));
+          channel.on("data", (chunk: Buffer) => answer(channel, chunk.toString()));
         });
         session.on("exec", (ok, no, info) => {
           if (options.forced) return forcedCommand(ok());
           if (!options.exec) return no?.();
           const channel = ok();
-          channel.write(evaluate(info.command));
+          answer(channel, info.command);
           channel.exit(0);
           channel.end();
         });
         session.on("sftp", (ok, no) => (options.sftp ? ok() : no?.()));
       });
-      client.on("tcpip", (accept, reject) => (options.localForward ? accept().end() : reject()));
+      client.on("tcpip", (accept, reject, info) => {
+        t.localForwards.push({ destIP: info.destIP, destPort: info.destPort });
+        if (options.localForward === true) accept().end();
+        else reject();
+      });
     });
   });
   await new Promise<void>((resolve) => server.listen(options.port ?? 0, "127.0.0.1", resolve));

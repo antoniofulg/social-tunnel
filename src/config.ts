@@ -162,7 +162,10 @@ export function loadKey(keyPath: string, fs: KeyFs, platform: string): KeyResult
   } catch {
     return { ok: false, code: "key_unreadable", message: `cannot read key file ${keyPath}` };
   }
-  if (utils.parseKey(key) instanceof Error) {
+  // ssh2 also parses public keys; only a private key can authenticate.
+  const parsed = utils.parseKey(key);
+  const first = Array.isArray(parsed) ? parsed[0] : parsed;
+  if (first === undefined || first instanceof Error || !first.isPrivateKey()) {
     return {
       ok: false,
       code: "key_invalid",

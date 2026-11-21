@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { chmodSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { chmodSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { join, relative, resolve } from "node:path";
 import { loadKey, parseConfig, resolveConfigPath } from "../src/config";
 import { baseConfig, cli, tmp, writeConfig, writeKey } from "./helpers";
@@ -179,6 +179,7 @@ test("[C68] bad server fields, keyPath, unknown server keys and misplaced flags 
   const { path } = writeConfig();
   const misuse = [
     ["status", "--config"],
+    ["status", "--config", ""],
     ["status", "--domain", "instagram.com", "--config", path],
     ["run", "--domain", "instagram.com", "--config", path],
     ["doctor", "--config", path, "--domain"],
@@ -188,5 +189,28 @@ test("[C68] bad server fields, keyPath, unknown server keys and misplaced flags 
     expect([argv, result.code]).toEqual([argv, 2]);
     expect(result.stderr).toContain("usage: social-tunnel");
     expect(result.stdout).toBe("");
+  }
+});
+
+test("[C72] a missing key exits 2 with key_unreadable, and a non-private-key file with key_invalid", async () => {
+  const cases: [string, (keyPath: string, publicKey: string) => void][] = [
+    ["key_unreadable", (keyPath) => rmSync(keyPath)],
+    ["key_invalid", (keyPath) => writeFileSync(keyPath, "not a key\n", { mode: 0o600 })],
+    // A public key parses as a key, but it is not a private key.
+    ["key_invalid", (keyPath, publicKey) => writeFileSync(keyPath, publicKey, { mode: 0o600 })],
+  ];
+  for (const [code, breakKey] of cases) {
+    const files = writeConfig();
+    breakKey(files.keyPath, files.publicKey);
+
+    const run = await cli(["run", "--json", "--config", files.path]);
+    expect([code, run.code]).toEqual([code, 2]);
+    expect(run.json()).toMatchObject({ ok: false, command: "run", error: { code } });
+    expect(run.json().error.message).toContain(files.keyPath);
+
+    const doctor = await cli(["doctor", "--json", "--config", files.path]);
+    expect(doctor.code).toBe(2);
+    expect(doctor.json().error).toBeUndefined();
+    expect(doctor.json().hops.find((h: any) => h.hop === "key")).toMatchObject({ ok: false, skipped: false });
   }
 });

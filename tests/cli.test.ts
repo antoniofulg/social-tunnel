@@ -1,4 +1,5 @@
 import { afterEach, expect, test } from "bun:test";
+import { writeFileSync } from "node:fs";
 import pkg from "../package.json" with { type: "json" };
 import { cli, spawnCli, writeConfig } from "./helpers";
 import { setup, type TestServer } from "./ssh-server";
@@ -53,3 +54,45 @@ test("[C56] no verb waits on stdin, and an unexpected exception exits 1 with err
   expect(crashed.code).toBe(1);
   expect(crashed.json()).toMatchObject({ ok: false, command: "status", error: { code: "internal" } });
 }, 30_000);
+
+test("[C77] status and doctor without --json print readable lines with control characters stripped", async () => {
+  const files = writeConfig((c) => {
+    c.server.host = "vps.example.com";
+    c.domains = ["instagram.com", "facebook.com"];
+  });
+  const esc = String.fromCharCode(0x1b);
+  writeFileSync(
+    files.statePath,
+    JSON.stringify({
+      version: 1,
+      pid: process.pid,
+      state: "disconnected",
+      reason: `connection_lost${esc}[2J`,
+      since: "2026-11-21T10:00:00.000Z",
+      retryAt: "2026-11-21T10:00:04.000Z",
+      server: { host: "vps.example.com", port: 22 },
+      remotePort: 8888,
+      updatedAt: new Date().toISOString(),
+    }),
+  );
+  const status = await cli(["status", "--config", files.path]);
+  expect(status.code).toBe(10);
+  expect(status.stderr).toBe("");
+  expect(status.stdout).toBe(
+    "state: disconnected (connection_lost[2J)\n" +
+      "since: 2026-11-21T10:00:00.000Z\n" +
+      "retry at: 2026-11-21T10:00:04.000Z\n" +
+      "server: vps.example.com:22\n" +
+      "remote port: 8888\n" +
+      "domains: 2\n",
+  );
+
+  const loose = writeConfig(() => {}, 0o644);
+  const doctor = await cli(["doctor", "--config", loose.path]);
+  expect(doctor.code).toBe(2);
+  const lines = doctor.stdout.trimEnd().split("\n");
+  expect(lines[0]).toBe(`ok   config: ${loose.path} is valid`);
+  expect(lines[1]).toBe(`FAIL key: key file ${loose.keyPath} is accessible by group or others`);
+  expect(lines[2]).toBe(`     fix: Run: chmod 600 '${loose.keyPath}'`);
+  expect(lines.slice(3)).toEqual(["server_reachable", "ssh_auth", "forward", "lockdown", "egress"].map((hop) => `skip ${hop}: skipped`));
+});

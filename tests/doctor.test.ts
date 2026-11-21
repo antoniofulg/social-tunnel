@@ -1,5 +1,5 @@
 import { afterEach, expect, test } from "bun:test";
-import { chmodSync, copyFileSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { chmodSync, copyFileSync, existsSync, mkdirSync, readdirSync, readFileSync, renameSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { Io } from "../src/cli";
 import { cli, localDial, tmp, writeConfig } from "./helpers";
@@ -255,7 +255,7 @@ test("[C53] the lockdown hop fails naming exactly what the server allowed, and p
       const named = lockdown.detail.slice(lockdown.detail.indexOf(":") + 1);
       expect(names.filter((n) => named.includes(n))).toEqual([allowed]);
     }
-    // Every probe was really attempted against the server.
+    // The forward on another port was really requested from the server.
     expect(env.ssh.requests.some((r) => r.name === "tcpip-forward" && r.bindPort === env.remotePort + 1)).toBe(true);
   }
 });
@@ -302,4 +302,109 @@ test("[C64] the lockdown hop fails for a shell without a PTY and for exec, and p
       expect(names.filter((n) => named.includes(n))).toEqual([allowed]);
     }
   }
+});
+
+test("[C73] status and doctor do not credit a live run that serves another server or port", async () => {
+  const env = await locked();
+  const mine = liveState(env);
+
+  writeFileSync(env.statePath, JSON.stringify(mine));
+  const matching = await cli(["status", "--json", "--config", env.path]);
+  expect(matching.code).toBe(0);
+
+  // The config now names another port, or another server, than the run that wrote state.json.
+  for (const other of [{ ...mine, remotePort: env.remotePort + 7 }, { ...mine, server: { host: "10.9.8.7", port: env.ssh.port } }, { ...mine, server: { host: "127.0.0.1", port: env.ssh.port + 1 } }]) {
+    writeFileSync(env.statePath, JSON.stringify(other));
+    const status = await cli(["status", "--json", "--config", env.path]);
+    expect(status.code).toBe(10);
+    expect(status.json()).toMatchObject({ ok: false, state: "stopped", reason: "config_changed", pid: process.pid, remotePort: env.remotePort });
+  }
+
+  // doctor does not take that run's word for this config's forward: it asks the server itself.
+  const { code, hop } = await doctor(env.path, seams().io);
+  expect(code).toBe(0);
+  expect(hop("forward").detail).not.toContain("running tunnel");
+  expect(env.ssh.requests.slice(0, 2).map((r) => [r.name, r.bindPort])).toEqual([
+    ["tcpip-forward", env.remotePort],
+    ["cancel-tcpip-forward", env.remotePort],
+  ]);
+});
+
+test("[C74] doctor's fixes are safe to run: the chmod path is quoted and each fix says what to do", async () => {
+  // A key path with a space, a quote and a command separator, as a default macOS config dir or a hostile config could give.
+  const files = writeConfig(() => {}, 0o644);
+  const awkward = join(files.dir, "Application Support");
+  mkdirSync(awkward);
+  const keyPath = join(awkward, "k'; touch pwned #");
+  renameSync(files.keyPath, keyPath);
+  const config = JSON.parse(readFileSync(files.path, "utf8"));
+  config.keyPath = keyPath;
+  writeFileSync(files.path, JSON.stringify(config));
+
+  const loose = await doctor(files.path, seams().io);
+  expect(loose.code).toBe(2);
+  const fix: string = loose.hop("key").fix;
+  expect(fix.startsWith("Run: chmod 600 '")).toBe(true);
+
+  // Run it exactly as printed, in an empty directory: the key becomes private and nothing else happens.
+  const cwd = tmp();
+  const ran = Bun.spawnSync(["sh", "-c", fix.slice("Run: ".length)], { cwd });
+  expect(ran.exitCode).toBe(0);
+  expect(statSync(keyPath).mode & 0o777).toBe(0o600);
+  expect(readdirSync(cwd)).toEqual([]);
+  expect(existsSync(join(files.dir, "pwned"))).toBe(false);
+
+  const missing = join(tmp(), "config.json");
+  const absent = await doctor(missing, seams().io);
+  expect(absent.hop("config").fix).toBe(`Create ${missing} as a JSON object with version, server, remotePort, keyPath and domains.`);
+
+  // The lockdown fix names a restriction for every kind of access the hop probes.
+  const env = await locked({ localForward: true });
+  const open = await doctor(env.path, seams().io);
+  expect(open.code).toBe(14);
+  const lockdownFix: string = open.hop("lockdown").fix;
+  for (const part of ["restrict", `permitlisten="127.0.0.1:${env.remotePort}"`, 'command="/usr/sbin/nologin"', "PermitOpen none", "PermitTTY no", "ForceCommand", "Match User tunnel"]) {
+    expect(lockdownFix).toContain(part);
+  }
+});
+
+test("[C75] a fish or tcsh login shell that runs commands fails the lockdown hop", async () => {
+  const names = ["shell", "exec", "sftp", "local forward", "remote forward"];
+  const table: [Server, string][] = [
+    [{ shell: true, shellFlavor: "fish" }, "shell"],
+    [{ exec: true, shellFlavor: "fish" }, "exec"],
+    [{ shell: true, shellFlavor: "tcsh" }, "shell"],
+    [{ exec: true, shellFlavor: "tcsh" }, "exec"],
+  ];
+  for (const [server, allowed] of table) {
+    const { code, hop } = await doctor((await locked(server)).path, seams().io);
+    expect([server.shellFlavor, allowed, code]).toEqual([server.shellFlavor, allowed, 14]);
+    const detail: string = hop("lockdown").detail;
+    expect(names.filter((n) => detail.slice(detail.indexOf(":") + 1).includes(n))).toEqual([allowed]);
+  }
+});
+
+test("[C76] a permitted local forward that cannot connect, and a forward two ports up, both fail the lockdown hop", async () => {
+  // The server permits local forwards; the probe's target simply does not answer.
+  const permitted = await locked({ localForward: "connect-failed" });
+  const first = await doctor(permitted.path, seams().io);
+  expect(first.code).toBe(14);
+  expect(first.hop("lockdown").detail).toContain("local forward");
+  // The probe aims at the server's own SSH port, not a fixed 22.
+  expect(permitted.ssh.localForwards).toEqual([{ destIP: "127.0.0.1", destPort: permitted.ssh.port }]);
+
+  // A forbidden local forward still passes.
+  const forbidden = await locked();
+  expect((await doctor(forbidden.path, seams().io)).code).toBe(0);
+  expect(forbidden.ssh.localForwards.length).toBe(1);
+
+  // remotePort + 1 is refused (say, taken) but remotePort + 2 is granted: other ports are open.
+  let remotePort = 0;
+  const env = await setup({ forward: (port) => port === remotePort || port === remotePort + 2 });
+  remotePort = env.remotePort;
+  servers.push(env.ssh);
+  const second = await doctor(env.path, seams().io);
+  expect(second.code).toBe(14);
+  expect(second.hop("lockdown").detail).toContain("remote forward");
+  expect(second.hop("lockdown").detail).not.toContain("local forward");
 });

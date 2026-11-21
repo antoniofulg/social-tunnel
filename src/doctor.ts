@@ -25,6 +25,14 @@ export interface DoctorDeps extends KeyFs {
   connectTimeoutMs?: number;
 }
 
+// RFC 4254 channel open failure reason 2.
+const CONNECT_FAILED = 2;
+
+// Quotes a path for a POSIX shell, so a suggested command works with spaces and runs nothing else.
+function shellQuote(text: string): string {
+  return `'${text.replace(/'/g, `'\\''`)}'`;
+}
+
 type Outcome = { ok: true; detail: string } | { ok: false; detail: string; fix: string; exit: number };
 type Step = { hop: string; run: () => Outcome | Promise<Outcome> };
 
@@ -61,7 +69,11 @@ export async function runDoctor(
       run: () => {
         const loaded = loadConfig(configPath, deps.readFile, deps.homedir);
         if (!loaded.ok) {
-          return fail(`${loaded.field}: ${loaded.message}`, `Fix ${loaded.field} in ${configPath}.`, EXIT.usage);
+          const fix =
+            loaded.field === "$"
+              ? `Create ${configPath} as a JSON object with version, server, remotePort, keyPath and domains.`
+              : `Fix ${loaded.field} in ${configPath}.`;
+          return fail(`${loaded.field}: ${loaded.message}`, fix, EXIT.usage);
         }
         config = loaded.config;
         return pass(`${configPath} is valid`);
@@ -74,7 +86,7 @@ export async function runDoctor(
         if (!loaded.ok) {
           const fix =
             loaded.code === "key_permissions"
-              ? `Run: chmod 600 ${config.keyPath}`
+              ? `Run: chmod 600 ${shellQuote(config.keyPath)}`
               : `Point keyPath at an unencrypted SSH private key that only you can read.`;
           return fail(loaded.message, fix, EXIT.usage);
         }
@@ -134,7 +146,7 @@ export async function runDoctor(
       hop: "forward",
       run: async () => {
         const port = config.remotePort;
-        const live = evaluateStatus(readState(statePath(configPath)), pidAlive, Date.now());
+        const live = evaluateStatus(readState(statePath(configPath)), pidAlive, Date.now(), DEFAULTS.staleMs, config);
         if (live.exit === EXIT.ok) return pass(`held by the running tunnel (pid ${live.pid})`);
         const c = client!;
         if (!(await allowed((answer) => c.forwardIn("127.0.0.1", port, (err) => answer(!err))))) {
@@ -152,17 +164,17 @@ export async function runDoctor(
       hop: "lockdown",
       run: async () => {
         const c = client!;
-        const other = config.remotePort + 1;
         // Everything the tunnel user must not be able to do. Each probe is undone if it works.
         // A granted session proves nothing: with a forced command the server accepts the request and
-        // runs its own command. The probe counts only when a shell evaluated it.
-        const command = "echo social-tunnel-$((6*7))";
+        // runs its own command. The probe counts only when a shell evaluated it: joining the quoted
+        // pieces works in sh, bash, zsh, fish and tcsh, and the joined text is not in the command.
+        const command = "echo social-tunnel'-'ok";
         const ran = (channel: ClientChannel | undefined, answer: (granted: boolean) => void) => {
           if (!channel) return answer(false);
           let output = "";
           channel.on("data", (chunk: Buffer) => {
             output += chunk.toString("latin1");
-            if (output.includes("social-tunnel-42")) {
+            if (output.includes("social-tunnel-ok")) {
               channel.close();
               answer(true);
             }
@@ -183,15 +195,26 @@ export async function runDoctor(
           ["sftp", (answer) => c.sftp((err, sftp) => (sftp?.end(), answer(!err)))],
           [
             "local forward",
-            (answer) => c.forwardOut("127.0.0.1", 0, "127.0.0.1", 22, (err, channel) => (channel?.close(), answer(!err))),
+            // Aimed at the server's own SSH port, which is known to accept connections. A server
+            // that permits the forward but cannot connect answers "connect failed": still allowed.
+            (answer) =>
+              c.forwardOut("127.0.0.1", 0, "127.0.0.1", config.server.port, (err, channel) => {
+                channel?.close();
+                answer(!err || (err as { reason?: unknown }).reason === CONNECT_FAILED);
+              }),
           ],
           [
             "remote forward on another port",
-            (answer) =>
-              c.forwardIn("127.0.0.1", other, (err) => {
-                if (!err) c.unforwardIn("127.0.0.1", other, () => {});
-                answer(!err);
-              }),
+            // Two ports: a refusal on one may only mean that port is taken on the server.
+            (answer) => {
+              const tryPort = (other: number, last: boolean) =>
+                c.forwardIn("127.0.0.1", other, (err) => {
+                  if (!err) c.unforwardIn("127.0.0.1", other, () => {});
+                  if (!err || last) return answer(!err);
+                  tryPort(other + 1, true);
+                });
+              tryPort(config.remotePort + 1, false);
+            },
           ],
         ];
         const granted: string[] = [];
@@ -199,7 +222,7 @@ export async function runDoctor(
         if (granted.length > 0) {
           return fail(
             `the server allowed the tunnel user: ${granted.join(", ")}`,
-            `Restrict the tunnel key in authorized_keys on the server: restrict,port-forwarding,permitlisten="127.0.0.1:${config.remotePort}",command="/bin/false".`,
+            `On the server, start the tunnel key's authorized_keys line with restrict,port-forwarding,permitlisten="127.0.0.1:${config.remotePort}",command="/usr/sbin/nologin" and add to sshd_config: Match User ${config.server.user} / AllowTcpForwarding remote / PermitOpen none / PermitTTY no / ForceCommand /usr/sbin/nologin. permitlisten limits only remote forwards; PermitOpen none is what closes local ones.`,
             EXIT.lockdown,
           );
         }

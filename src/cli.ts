@@ -10,7 +10,7 @@ import { runDoctor } from "./doctor";
 import { createLogger, sanitize } from "./log";
 import { createProxy, type Dialer, type Resolver } from "./proxy";
 import { pidAlive, readState, statePath } from "./state";
-import { evaluateStatus } from "./status";
+import { evaluateStatus, isLiveRun } from "./status";
 import { startTunnel } from "./tunnel";
 
 // Everything the CLI touches outside its own process. Tests replace entries; production uses REAL_IO.
@@ -66,7 +66,8 @@ function parseArgs(argv: string[]): Args | "help" | "version" | null {
     if (arg === "--json") json = true;
     else if (arg === "--config" || arg === "--domain") {
       const value = argv[++i];
-      if (value === undefined) return null;
+      // An empty value is what an unset shell variable leaves behind; never fall back to another config.
+      if (value === undefined || value === "") return null;
       if (arg === "--config") config = value;
       else domain = value;
     } else if (!verb && (VERBS as readonly string[]).includes(arg)) verb = arg as Verb;
@@ -119,7 +120,7 @@ export async function main(argv: string[], io: Io): Promise<number> {
     const config = loaded.config;
 
     if (args.verb === "status") {
-      const view = evaluateStatus(readState(statePath(configPath)), pidAlive, Date.now());
+      const view = evaluateStatus(readState(statePath(configPath)), pidAlive, Date.now(), DEFAULTS.staleMs, config);
       const { exit, ...fields } = view;
       const server = { host: config.server.host, port: config.server.port };
       if (args.json) {
@@ -147,9 +148,13 @@ export async function main(argv: string[], io: Io): Promise<number> {
 
     // A state that stopped being refreshed belongs to a dead run whose pid may have been reused.
     const prior = readState(statePath(configPath));
-    const fresh = prior !== null && Date.now() - Date.parse(prior.updatedAt) <= DEFAULTS.staleMs;
-    if (prior && fresh && prior.pid !== process.pid && prior.state !== "stopped" && pidAlive(prior.pid)) {
-      return fail(EXIT.usage, "already_running", `social-tunnel run is already running (pid ${prior.pid})`);
+    if (prior && prior.pid !== process.pid && isLiveRun(prior, pidAlive, Date.now())) {
+      // Also when that run serves another config in this directory: both would write one state.json.
+      return fail(
+        EXIT.usage,
+        "already_running",
+        `social-tunnel run (pid ${prior.pid}) already owns ${statePath(configPath)}; one run per config directory`,
+      );
     }
     const key = loadKey(config.keyPath, io, io.platform);
     if (!key.ok) return fail(EXIT.usage, key.code, key.message);
