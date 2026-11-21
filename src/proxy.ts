@@ -76,7 +76,9 @@ export function createProxy(options: ProxyOptions): { handle: (stream: Duplex) =
     let head = Buffer.alloc(0);
     let closed = false;
     let upstream: Duplex | undefined;
-    let holdsSlot = false;
+    // A channel holds a slot from its first byte, so slow heads count against the cap too.
+    let holdsSlot = open < relayCap;
+    if (holdsSlot) open++;
     let idleTimer: ReturnType<typeof setTimeout> | undefined;
 
     const release = () => {
@@ -104,6 +106,10 @@ export function createProxy(options: ProxyOptions): { handle: (stream: Duplex) =
       release();
       upstream?.destroy();
     });
+    if (!holdsSlot) {
+      clearTimeout(headTimer);
+      return refuse(503);
+    }
     stream.on("data", onData);
 
     function onData(chunk: Buffer) {
@@ -134,10 +140,6 @@ export function createProxy(options: ProxyOptions): { handle: (stream: Duplex) =
       const host = normalizeHost(rawHost);
       if (!host || !/^[1-9][0-9]{0,4}$/.test(port)) return refuse(400);
       if (port !== "443" || !isAllowed(host, options.domains)) return refuse(403, host);
-
-      if (open >= relayCap) return refuse(503, host);
-      open++;
-      holdsSlot = true;
 
       let remote: Duplex;
       try {

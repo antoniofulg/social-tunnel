@@ -209,3 +209,33 @@ test("[C63] the shipped defaults match the plan", () => {
   expect(DEFAULTS.heartbeatMs).toBe(30000);
   expect(DEFAULTS.staleMs).toBe(90000);
 });
+
+test("[C65] the proxy refuses a host that resolves only into a local interface prefix", async () => {
+  const answers = { "instagram.com": ["2a03:2880:1:2::99", "203.0.113.200"] };
+  const interfaces = () => ({ en0: [{ cidr: "2a03:2880:1:2:aaaa:bbbb:cccc:dddd/64" }, { cidr: "203.0.113.7/24" }] });
+
+  const home = harness({ interfaces }, answers);
+  expect(await home.status("instagram.com:443")).toBe("HTTP/1.1 403 Forbidden");
+  expect(home.lookups).toEqual(["instagram.com"]);
+  expect(home.dials).toEqual([]);
+
+  // The same public addresses are dialled from a machine that is not on those networks.
+  const elsewhere = harness({ interfaces: () => ({}) }, answers);
+  expect(await elsewhere.connect("instagram.com:443").head()).toBe(`${OK}\r\n\r\n`);
+  expect(elsewhere.dials.map((d) => [d.address, d.port])).toEqual([["2a03:2880:1:2::99", 443]]);
+});
+
+test("[C69] channels still sending their head count against the relay cap", async () => {
+  const h = harness();
+  const waiting = [];
+  for (let i = 0; i < 256; i++) waiting.push(h.open("CONNECT instagram.com:443 HTTP/1.1\r\n"));
+
+  expect(await h.status("instagram.com:443")).toBe("HTTP/1.1 503 Service Unavailable");
+  expect(h.lookups).toEqual([]);
+  expect(waiting.every((channel) => !channel.ended())).toBe(true);
+
+  waiting[0]!.client.destroy();
+  await sleep(20);
+  expect(await h.connect("instagram.com:443").head()).toBe(`${OK}\r\n\r\n`);
+  expect(await h.status("instagram.com:443")).toBe("HTTP/1.1 503 Service Unavailable");
+});
