@@ -23,7 +23,7 @@ Not scaffolded yet. When `package.json` lands, list here only the scripts whose 
 These are the product. Every change that touches the proxy, tunnel, server setup, PAC or key handling keeps each one and adds a regression test for it:
 
 1. **Allowlist only.** The home proxy forwards a request only when its host is on the allowlist, and refuses every other host with an error. It also refuses targets that resolve to loopback, private or link-local addresses, so an allowlisted name can never reach the home network.
-2. **Loopback only.** The home proxy listens on `127.0.0.1`; the tunnel is its only way in.
+2. **No local listener.** The home proxy runs in-process on the tunnel's forwarded channels and opens no listening socket; the tunnel is its only way in.
 3. **Fail closed.** The PAC routes chosen domains to the tunnel with no `DIRECT` fallback. Tunnel down means those domains fail.
 4. **Narrow server access.** The tunnel's SSH user has no shell and no TTY, and may only listen on one remote loopback port (`permitlisten="127.0.0.1:<port>"`, no gateway ports).
 5. **Secrets stay put.** The tool never asks for, stores or logs platform passwords, 2FA codes or session cookies; the user logs in in the browser. The SSH private key stays on the home machine with mode `0600`, and logs and `--json` output redact it.
