@@ -1,42 +1,52 @@
 # CLI core verification
 
-**Verdict**: FAIL
+**Verdict**: PASS
 **Profile**: standard
-**Diff range**: fd86af3..4c66501 (code verified at cffb102; 4c66501 adds only `docs/design/`, committed by another agent during this run)
-**Round**: 1 - full
+**Diff range**: fd86af3..271cedf
+**Round**: 2 - scoped
 **Verifier**: independent sub-agent (author != verifier)
 **Quarantined tests**: none
 
-Two Major findings block completion: the `lockdown` hop passes a server that grants a shell without a
-PTY or grants exec (F1), and the own-interface refusal has no proof at the proxy boundary - a mutant
-that disables it survives the whole suite (F2). 62/62 proofs are green and 61 checks hold as written.
+Round 1 (report 3a31e20, verified at cffb102) was FAIL on two Major findings. Both are closed, and no
+Critical or Major finding is open. This round is scoped to the fix diff `3a31e20..271cedf` and to every
+round 1 verdict that was not a pass. 161710a (README and `docs/design`) is outside the feature.
 
 ## Findings
 
-| # | Severity | Where | Failure scenario |
+Round 1 findings, rechecked at 271cedf:
+
+| # | Round 1 | Status | Evidence |
 | --- | --- | --- | --- |
-| F1 | Major (security, invariant 4, SEC-008, threat T5) | `src/doctor.ts:158` | The shell probe calls `c.shell(cb)` with ssh2's default PTY request. ssh2 (`node_modules/ssh2/lib/client.js:1273`) returns the PTY error and never sends the shell request. A server that refuses the PTY but grants the shell - what OpenSSH does for `restrict,port-forwarding,permitlisten=...` with no `command=` - gets `lockdown ok: true`, detail "the server refused a shell", exit 0. Reproduced in a scratch worktree against the test server with PTY refused and shell granted, and again with exec granted: both exit 0. Exec is never probed although threat-model control T5 (`docs/security/threat-model.md:132`) names "an exec or shell session". Builder deviation 4 understates this: it is not only an exec-only server. C53's table has no such server, so the check stays green. |
-| F2 | Major (proof gap, invariant 1, SEC-003) | `src/proxy.ts:146`, `tests/proxy-harness.ts:37` | Criterion 11 requires a `403` from the proxy for an address inside a local interface prefix. C13 proves only `isRefusedAddress`; every proxy test passes `interfaces: () => ({})`, and no test sends a CONNECT through the production assembly (`src/cli.ts:160`). Mutant `isRefusedAddress(a, interfaces)` -> `isRefusedAddress(a, {})` at `src/proxy.ts:147`: full suite 62 pass. The code is correct today; a regression that reopens the LAN (global IPv6 /64) would ship green. |
-| F3 | Medium | `src/cli.ts:149` | `run` refuses with `already_running` (exit 2) whenever `state.json` names any live pid, with no staleness check, while `status` reports the same file as `stopped`/`stale` (`src/status.ts:37`). After a SIGKILL or power loss and pid reuse, `run` cannot start until the user deletes `state.json`. Reproduced: state with pid 1 and an old `updatedAt` gives `status` exit 10 `stale` and `run` exit 2 `already_running`. Matches criterion 27 literally; the criterion and criterion 51 disagree. |
-| F4 | Minor | `src/tunnel.ts:201` | The project's destIP/destPort filter is unreachable: ssh2 rejects any forward not registered by `forwardIn` before emitting `tcp connection` (`node_modules/ssh2/lib/client.js:1979`). Replacing the condition with `false` leaves C35 green. The claimed outcome holds through the pinned dependency; the project's own guard has no test and would not be missed if ssh2 changed. Builder deviation 5 confirmed. |
-| F5 | Minor | `src/config.ts:72`, `:75`, `:76`, `:87`, `:69`; `src/cli.ts:69`, `:75` | No test asserts rejection of a bad `server.host`, `server.port`, `server.user`, `keyPath`, an unknown `server.*` key, `--config` with no value, or `--domain` on a verb other than `doctor`. |
-| F6 | Minor (precision gap in the plan) | `src/tunnel.ts:194`, `src/config.ts:136` | Reason `auth_failed` and codes `key_invalid`, `key_unreadable` are part of the `--json` contract but the plan names none of them. `auth_failed` is retried forever with backoff capped at 30 s, which can trip a server-side lockout. |
-| F7 | Minor | `src/proxy.ts:138` | The relay cap counts a channel only after its head parses, so channels still sending a head are unbounded (each limited to 8 KiB and 10 s). |
-| F8 | Process | `.specs/features/cli-core/proofs.md:3` | `proofs.md` records HEAD 79cb9a2; HEAD is 4c66501. The gate refuses until `check_proofs.py` runs again. I reran the suite at cffb102 (source identical to 79cb9a2): 62 pass, 0 fail; typecheck clean. |
+| F1 | Major - `lockdown` passed a PTY-less shell and exec | Closed by 1572b03 | `src/doctor.ts:177` requests the shell with no PTY and `:182` probes exec; a probe counts when the marker comes back (`:165`). C64; three faults killed |
+| F2 | Major - own-interface refusal unproven at the proxy | Closed by 93a83ac at the proxy boundary; one residual below (R1) | C65; the round 1 surviving mutant at `src/proxy.ts:149` is now killed |
+| F3 | Medium - `run` refused over a stale state file | Closed by 4b9fc5b | `src/cli.ts:150`; C66; fault killed |
+| F4 | Minor - forward filter untested | Closed by 4b9fc5b | `src/tunnel.ts:95`; C67; fault killed. The call site (`src/tunnel.ts:206`) stays unreachable through ssh2 |
+| F5 | Minor - config and flag rejections untested | Closed by 74c39b6 | C68; fault killed |
+| F6 | Minor - undeclared reasons and codes | Closed by 2356a63 | Surface row in `plan.md` names `auth_failed`, `key_invalid`, `key_unreadable` |
+| F7 | Minor - head-phase channels uncapped | Closed by 93a83ac | `src/proxy.ts:80`; C69; fault killed |
+| F8 | Process - `proofs.md` stale | Open, see Gate | `proofs.md` records 6465b40; HEAD is 271cedf, which differs only in `proofs.md` itself |
 
-## Builder deviations
+Open after this round (none blocks):
 
-| # | Deviation | Judgment |
-| --- | --- | --- |
-| 1 | State stays `blocked`/`port_blocked` during the 30 s retries | Accept. Frozen check C36 names "while retrying in `blocked`/`port_blocked`", and `status` keeps exit 11. Criteria 21 and 23 conflict; the plan should say which wins. |
-| 2 | Extra `auth_failed`, `key_invalid` | Accept as additive; recorded as F6. |
-| 3 | Non-canonical port 400, well-formed non-443 403 | Accept. Matches C10 and C21 and criteria 9 and 44 read together. |
-| 4 | Lockdown shell probe uses a TTY request | Finding F1 (Major). |
-| 5 | C35 filter shadowed by ssh2 | Confirmed; outcome holds, guard untested. F4 (Minor). |
-| 6 | C34 doctor paths in-process | Accept. They run through `main`, and the test also captures the real process streams (`tests/key-leak.test.ts:52`). A leak injected into a doctor hop detail was caught. |
-| 7 | `--execute` baseline ran after S1 code | Accept. Not reconstructible; the injected faults show the Risk tests can fail. |
+| # | Severity | Where | Scenario |
+| --- | --- | --- | --- |
+| R1 | Minor (proof gap) | `src/address-guard.ts:92` | Every test injects the interface list. Changing the production default from `os.networkInterfaces()` to an empty object leaves all 68 tests green. Read directly, the production assembly is right: `src/cli.ts:162` passes no `interfaces`, `src/proxy.ts:148` then passes `undefined`, and the default at `src/address-guard.ts:92` is evaluated on every call. |
+| R2 | Minor (security residual) | `src/doctor.ts:159` | The probe command needs POSIX arithmetic (`$((6*7))`). A tunnel user whose login shell is `tcsh` or `fish` gets a working shell, never prints the marker, and passes `lockdown`. A second probe with a plain marker would close it. |
+| R3 | Minor (process) | `.specs/features/cli-core/plan.md` `## Approval` | Criteria 59-61 were appended after round 1 and the approval receipt does not mention them. They tighten behaviour and remove nothing; the receipt should record that the user saw them. |
+
+## Builder choices judged
+
+| Choice | Judgment |
+| --- | --- |
+| A shell or exec counts as allowed only when the evaluated marker returns; a server that grants both requests and runs only its forced command passes | Accept. OpenSSH grants the session request and then runs `command=`, so counting the grant would fail the configuration the hop's own fix text recommends. The arithmetic keeps a forced command that echoes its input from counting. Criterion 59 records the rule. Residual R2. |
+| Past the cap a channel gets `503` before its head is parsed | Accept. Criterion 61 records it. A malformed or unlisted request past the cap now gets `503` instead of `400` or `403`; the body stays fixed and nothing is looked up or dialled (`tests/proxy.test.ts:234`). Slots free on refusal and on close (`src/proxy.ts:84`, `:103`). |
+| Round 1 deviations 1, 2, 3, 6, 7 | Carried from 3a31e20: accepted; 2 is now in the plan. |
 
 ## Checks
+
+C64-C69 verified at 271cedf. The other 62 rows are carried from 3a31e20: their tests are unchanged
+except the C53 name list, and the source changes under them were re-read and re-faulted where the fix
+touched them (C14, C19, C33, C35, C53).
 
 | Check | Test | Holds | Evidence |
 | --- | --- | --- | --- |
@@ -53,7 +63,7 @@ that disables it survives the whole suite (F2). 62/62 proofs are green and 61 ch
 | C10 | `tests/proxy.test.ts` `[C10]` | yes | `tests/proxy.test.ts:33` - 403; `:34`-`:35` no lookup, no dial |
 | C11 | `tests/proxy.test.ts` `[C11]` | yes | `tests/proxy.test.ts:42` - 403; `:43`-`:44` no lookup, no dial |
 | C12 | `tests/address-guard.test.ts` `[C12]` | yes | `tests/address-guard.test.ts:36` - `expect([first, isRefusedAddress(first, none)]).toEqual([first, true])`; `:38`-`:39` neighbours false; `:46` embedded forms |
-| C13 | `tests/address-guard.test.ts` `[C13]` | yes | `tests/address-guard.test.ts:57` - `expect(isRefusedAddress("2a03:2880:1:2::99", interfaces)).toBe(true)`. Holds for the guard, as the check words it; the proxy boundary is F2 |
+| C13 | `tests/address-guard.test.ts` `[C13]` | yes | `tests/address-guard.test.ts:57` - `expect(isRefusedAddress("2a03:2880:1:2::99", interfaces)).toBe(true)`; the proxy boundary is C65 |
 | C14 | `tests/proxy.test.ts` `[C14]` | yes | `tests/proxy.test.ts:50` - 403; `:52` `expect(h.dials).toEqual([])` |
 | C15 | `tests/proxy.test.ts` `[C15]` | yes | `tests/proxy.test.ts:59` - `expect(h.dials.map(...)).toEqual([[PUBLIC, 443]])`; `:58` one lookup |
 | C16 | `tests/proxy.test.ts` `[C16]` | yes | `tests/proxy.test.ts:65` - `toBe("HTTP/1.1 405 Method Not Allowed")`; `:66` ended |
@@ -78,7 +88,7 @@ that disables it survives the whole suite (F2). 62/62 proofs are green and 61 ch
 | C32 | `tests/run.test.ts` `[C32]` | yes | `tests/run.test.ts:42`-`:44` - code 0, `state: "stopped"`, forward then cancel requests |
 | C33 | `tests/run.test.ts` `[C33]` | yes | `tests/run.test.ts:68`-`:69` - code 2, `error: { code: "already_running" }` |
 | C34 | `tests/key-leak.test.ts` `[C34]` | yes | `tests/key-leak.test.ts:73`, `:80`, `:89`, `:96`, `:103` - `expect(leaked(keyPath, captured)).toEqual([])` on each of five paths |
-| C35 | `tests/tunnel.test.ts` `[C35]` | yes | `tests/tunnel.test.ts:197`-`:199` - both announcements `toBe(false)`, `expect(t.handled.length).toBe(0)`. The outcome is asserted and holds; ssh2 produces it, not `src/tunnel.ts:201` (F4) |
+| C35 | `tests/tunnel.test.ts` `[C35]` | yes | `tests/tunnel.test.ts:197`-`:199` - both announcements `toBe(false)`, `expect(t.handled.length).toBe(0)`. ssh2 produces the outcome; the project's own filter is now proven by C67 |
 | C36 | `tests/tunnel.test.ts` `[C36]` | yes | `tests/tunnel.test.ts:225` - `expect(seen.size).toBeGreaterThanOrEqual(4)` for `connected` and `blocked` |
 | C37 | `tests/tunnel.test.ts` `[C37]` | yes | `tests/tunnel.test.ts:240`-`:241` - line has no `host`, no `evil`; `:255` no control characters |
 | C61 | `tests/run.test.ts` `[C61]` | yes | `tests/run.test.ts:97`-`:98` - `expect(body).toEqual({ ok: true, command: "run", state: "stopped", reason: null })`; `:100` stderr lines parse |
@@ -98,104 +108,129 @@ that disables it survives the whole suite (F2). 62/62 proofs are green and 61 ch
 | C50 | `tests/doctor.test.ts` `[C50]` | yes | `tests/doctor.test.ts:175` - hop order with `domain`; `:181`, `:184` code 12, rest skipped |
 | C51 | `tests/doctor.test.ts` `[C51]` | yes | `tests/doctor.test.ts:191` - `expect(code).toBe(13)`; `:197` no auth request; `:202` one `new Client` |
 | C52 | `tests/doctor.test.ts` `[C52]` | yes | `tests/doctor.test.ts:216` - `expect(seen).toEqual([...nine pairs])` |
-| C53 | `tests/doctor.test.ts` `[C53]` | yes | `tests/doctor.test.ts:253`, `:256` - code 14 and exactly the allowed attempt named; `:250` pass on the fifth. Holds for the five servers the check lists; F1 is outside that table |
+| C53 | `tests/doctor.test.ts` `[C53]` | yes | `tests/doctor.test.ts:253`, `:256` - code 14 and exactly the allowed attempt named, now out of five names (`:230`); `:250` pass on the fifth |
 | C54 | `tests/doctor.test.ts` `[C54]` | yes | `tests/doctor.test.ts:272`, `:274` - key hop ok, detail matches `/dedicated key/` |
 | C55 | `tests/cli.test.ts` `[C55]` | yes | `tests/cli.test.ts:14`-`:15` - code 2, usage on stderr; `:20`, `:24` exit 0 |
 | C56 | `tests/cli.test.ts` `[C56]` | yes | `tests/cli.test.ts:35`, `:45` - under 5000 ms with stdin held open; `:53`-`:54` code 1, `error.code` `internal` |
+| C64 | `tests/doctor.test.ts` `[C64]` | yes | `tests/doctor.test.ts:298`, `:302` - `expect([allowed, code]).toEqual([allowed, 14])` and exactly `shell` or `exec` named; `:295`-`:296` the forced-command server passes |
+| C65 | `tests/proxy.test.ts` `[C65]` | yes | `tests/proxy.test.ts:218`, `:220` - `toBe("HTTP/1.1 403 Forbidden")`, `expect(home.dials).toEqual([])`; `:225` the same answer is dialled with no such interface |
+| C66 | `tests/run.test.ts` `[C66]` | yes | `tests/run.test.ts:124`, `:126` - 91 s old: code 13 after one server connection; `:131`-`:132` 60 s old: code 2 `already_running` |
+| C67 | `tests/tunnel.test.ts` `[C67]` | yes | `tests/tunnel.test.ts:259`-`:264` - `expect(isExpectedForward({ destIP: "0.0.0.0", destPort: 8888 }, 8888)).toBe(false)` and five more |
+| C68 | `tests/config.test.ts` `[C68]` | yes | `tests/config.test.ts:174` - `toMatchObject({ ok: false, command: verb, error: { code: "config_invalid", field } })` over ten edits; `:188`-`:189` usage, exit 2 for four misplaced flags |
+| C69 | `tests/proxy.test.ts` `[C69]` | yes | `tests/proxy.test.ts:233` - 257th channel `toBe("HTTP/1.1 503 Service Unavailable")` with 256 unfinished heads; `:239` 200 after one closes |
 
 ## Coverage
 
+Rows whose authority the fix touched were recomputed at 271cedf; the rest are carried from 3a31e20.
+
 | Set (size) | Recomputed from | Member -> proof | Unproven |
 | --- | --- | --- | --- |
-| door 1 exit codes (8) | `src/defaults.ts:18` | 0 C38 · 1 C56 · 2 C2 · 10 C39 · 11 C41 · 12 C50 · 13 C42 · 14 C53 | - |
-| door 2 envelope (3 verbs) | `src/cli.ts:96`, `:106`, `:126`, `:171` | status C43 · doctor C43 · run C43, C61 | - |
+| door 1 exit codes (8) | `src/defaults.ts:18` | 0 C38 · 1 C56 · 2 C2 · 10 C39 · 11 C41 · 12 C50 · 13 C42 · 14 C53, C64 | - |
+| door 2 envelope (3 verbs) | `src/cli.ts:96`, `:106`, `:126`, `:173` | status C43 · doctor C43 · run C43, C61 | - |
 | door 3 path sources (6) | `src/config.ts:22` | all six C1 | - |
-| door 3 schema validation (11 branches) | `src/config.ts:60`-`:106` | version, server, remotePort C2 · hostKey C60 · domains C3 · unknown top key C5 · key mode C6 | `server.host`, `server.port`, `server.user`, `keyPath`, unknown `server.*` key (F5) |
-| door 4 no local listener (3) | `src/` scan, `src/cli.ts:156` | C20 · C58 · C30 | - |
-| door 5 CONNECT-only 443 (2) | `src/proxy.ts:125`, `:136` | C16 · C10 | - |
+| door 3 schema validation (11 branches) | `src/config.ts:60`-`:106` | version, server, remotePort C2 · server.host, server.port, server.user, keyPath, unknown `server.*` key C68 · hostKey C60 · domains C3 · unknown top key C5 · key mode C6 | - |
+| door 4 no local listener (3) | `src/` scan, `src/cli.ts:158` | C20 · C58 · C30 | - |
+| door 5 CONNECT-only 443 (2) | `src/proxy.ts:131`, `:142` | C16 · C10 | - |
 | door 6 ssh2 under Bun (1) | `package.json` pin 1.17.0 | C25 | - |
 | door 7 state fields (9) | `src/state.ts:13` | all nine C31 | - |
 | door 8 host-key pin (3) | `src/tunnel.ts:72`, `src/config.ts:80` | run C26 · doctor C51 · format C60 | - |
-| run outcomes (3) | `src/cli.ts:150`, `:170` | 0 C32 · 2 C33 · 13 C26 | - |
+| run outcomes (3) | `src/cli.ts:151`, `:172` | 0 C32 · 2 C33, C66 · 13 C26 | - |
 | status outcomes (5) | `src/status.ts:33`-`:40` | 0 C38 · 10 C39 · 11 C41 · 13 C42 · 2 C2 | - |
-| doctor outcomes (7) | `src/doctor.ts` exits | 0 C52 · 2 C62 · 10 C52 · 11 C52 · 12 C50 · 13 C51 · 14 C53 | - |
-| CLI meta outcomes (2) | `src/cli.ts:81`-`:92` | C55 | - |
-| proxy outcomes (8) | `src/proxy.ts:23` | 200 C8 · 400 C17, C21 · 403 C9 · 405 C16 · 408 C17 · 502 C18 · 503 C19 · 504 C18 | - |
-| refused ranges (25) | plan criterion 11 against `src/address-guard.ts:53`-`:82` | 24 ranges C12 (`tests/address-guard.test.ts:9`-`:33`) · own interface C13 at the guard only | own-interface prefix refused by the proxy with 403 (F2) |
+| doctor outcomes (7) | `src/doctor.ts` exits | 0 C52 · 2 C62 · 10 C52 · 11 C52 · 12 C50 · 13 C51 · 14 C53, C64 | - |
+| CLI meta outcomes (2) | `src/cli.ts:69`, `:75`, `:81`-`:92` | unknown input C55, C68 · help and version C55 | - |
+| proxy outcomes (8) | `src/proxy.ts:23` | 200 C8 · 400 C17, C21 · 403 C9 · 405 C16 · 408 C17 · 502 C18 · 503 C19, C69 · 504 C18 | - |
+| refused ranges (25) | plan criterion 11 against `src/address-guard.ts:53`-`:82` | 24 ranges C12 · own interface C13 at the guard, C65 at the proxy | - |
 | T1 request corpus (12) | `docs/security/threat-model.md:92` | C8, C9, C11, C21, C22 as listed | - |
 | tunnel states (6) | `src/state.ts:25` | connecting, connected C25 · disconnected C28, C59 · reconnecting C28 · blocked C26, C27 · stopped C32 | - |
 | status mapping (9) | `src/status.ts:30`-`:40` | C38-C42, C44 | - |
-| doctor hops (8) | `src/doctor.ts:58`-`:219` | C62, C50, C54, C45, C51, C47, C48, C53, C49 | - |
-| lockdown attempts (4 in the plan) | `docs/security/threat-model.md:132` | shell with PTY, sftp, local forward, other port C53 | exec session; shell without a PTY (F1) |
+| doctor hops (8) | `src/doctor.ts:58`-`:243` | C62, C50, C54, C45, C51, C47, C48, C53, C49 | - |
+| lockdown attempts (6) | `docs/security/threat-model.md:132`, `src/doctor.ts:172`-`:196` | shell C53 · shell without a PTY C64 · exec C64 · sftp C53 · local forward C53 · other port C53 | - |
+| reason and error codes (11) | `plan.md` Surface row against `src/tunnel.ts:200`, `src/config.ts:136`, `src/cli.ts` | host_key_mismatch C26 · port_blocked C27 · connection_lost C28 · auth_failed C34 (`tests/key-leak.test.ts:78`) · stale C44 · config_invalid C2 · key_permissions C6 · key_invalid C34 (`tests/key-leak.test.ts:88`) · already_running C33 · internal C56 · key_unreadable read at `src/config.ts:150` | - |
 | key-leak paths (5) | `tests/key-leak.test.ts:68`-`:103` | all five C34 | - |
-| shutdown signals (2) | `src/cli.ts:195` | C32 | - |
+| shutdown signals (2) | `src/cli.ts:197` | C32 | - |
 | backoff steps (7) | `src/defaults.ts:12` | C29 | - |
-| startup assembly (2) | `src/cli.ts:179`-`:198`, `tests/tunnel.test.ts:26` | subprocess C26, C32, C58 · harness C25 | production resolver, dialer and interface list (`src/cli.ts:187`, `:160`) carry no CONNECT in any test (F2) |
+| startup assembly (2) | read directly: `src/cli.ts:180`-`:200`, `:162`; `tests/tunnel.test.ts:26` | subprocess C26, C32, C58 · harness C25 · production interface source read at `src/address-guard.ts:92` (R1) | - |
+
+`key_unreadable` has no test of its own; it is a fixed-text branch read at `src/config.ts:150` and `:163`.
 
 ## Test policy rows
 
 | Row | Files it classifies | Required proof | Expectation met |
 | --- | --- | --- | --- |
-| Decides, reached across a boundary | `src/proxy.ts`, `src/host.ts`, `src/address-guard.ts`, `src/status.ts`, `src/doctor.ts` | boundary and own layer | gap - own-interface refusal has an own-layer proof (C13) and none at the boundary (F2); the rest is met |
-| Decides, not reached across a boundary | `src/tunnel.ts` backoff, `src/config.ts` | own layer, one case per row | gap - five config validation branches have no case (F5); backoff and path resolution met |
-| Entry point that decides nothing | `src/cli.ts` | boundary: accepted input, each rejected input, each error path | gap - `--config` with no value and `--domain` on another verb untested (F5); the rest is met by C55, C56, C2 |
+| Decides, reached across a boundary | `src/proxy.ts`, `src/host.ts`, `src/address-guard.ts`, `src/status.ts`, `src/doctor.ts` | boundary and own layer | yes - own-interface refusal now has C13 at its layer and C65 at the boundary |
+| Decides, not reached across a boundary | `src/tunnel.ts` backoff and forward filter, `src/config.ts` | own layer, one case per row | yes - C29, C67, C1, C2, C3, C5, C60, C68 |
+| Entry point that decides nothing | `src/cli.ts` | boundary: accepted input, each rejected input, each error path | yes - C55, C56, C2, C68 |
 | Instrumentation | `src/log.ts` | none of its own | yes - covered by C37 and C61 |
 
 ## Faults injected
 
-Each fault was applied in a throwaway worktree at HEAD and the focused test file was run. The worktree is removed; the main tree's `git status --porcelain` matched the baseline.
+Round 2 faults were applied in a throwaway worktree at 271cedf; it is removed and the main tree's
+`git status --porcelain` matched the baseline. Rows marked "carried" were killed at cffb102 in round 1
+on code the fix did not touch.
 
 | Check | Mutation | Location | Disposition |
 | --- | --- | --- | --- |
-| C9 | `host.endsWith("." + d)` -> `host.endsWith(d)` | `src/host.ts:12` | killed |
-| C12 | `172.16.0.0/12` -> `/13` | `src/address-guard.ts:59` | killed |
-| C14 | fall back to `addresses[0]` when every address is refused | `src/proxy.ts:147` | killed |
-| C15 | dial the host name instead of the checked address | `src/proxy.ts:150` | killed |
-| C20 | `net.createServer().listen(0, "127.0.0.1")` in `run` | `src/cli.ts:155` | killed |
-| C58 | a listener built through computed property names, which the source scan does not see | `src/cli.ts:155` | killed |
-| C21 | hostname grammar accepts `_` | `src/host.ts:1` | killed |
-| C26 | `hostVerifier` returns `true` | `src/tunnel.ts:74` | killed |
-| C34 | log the key bytes on `run` | `src/cli.ts:155` | killed |
-| C34 | a key line added to the `ssh_auth` hop detail in `doctor` | `src/doctor.ts:130` | killed |
-| C51 | host key mismatch exits 10 instead of 13 | `src/doctor.ts:118` | killed |
-| C53 | sftp probe removed | `src/doctor.ts:159` | killed |
-| C35 | filter condition replaced with `false` | `src/tunnel.ts:201` | equivalent - ssh2@1.17.0 rejects unregistered forwards at `client.js:1979` before the event fires, so no input reaches this line with a mismatch (F4) |
-| C13 | `isRefusedAddress(a, interfaces)` -> `isRefusedAddress(a, {})` | `src/proxy.ts:147` | survived - full suite 62 pass (F2) |
+| C64 | shell probe requests a PTY again | `src/doctor.ts:177` | killed |
+| C64 | exec probe removed | `src/doctor.ts:182` | killed |
+| C64 | a granted channel counts without the marker | `src/doctor.ts:161` | killed |
+| C65 | `isRefusedAddress(a, interfaces)` -> `isRefusedAddress(a, {})` (the round 1 survivor) | `src/proxy.ts:149` | killed |
+| C14 | fall back to `addresses[0]` when every address is refused | `src/proxy.ts:149` | killed |
+| C53 | sftp probe removed | `src/doctor.ts:183` | killed |
+| C35 | filter call site replaced with `false` | `src/tunnel.ts:206` | equivalent - ssh2@1.17.0 rejects unregistered forwards at `client.js:1979` before the event fires, so no input reaches this line with a mismatch; the predicate itself is killed under C67 |
+| C67 | bind-address comparison removed | `src/tunnel.ts:95` | killed |
+| C66 | freshness condition removed from the guard | `src/cli.ts:151` | killed |
+| C33 | freshness always false | `src/cli.ts:150` | killed |
+| C69 | every channel takes a slot regardless of the cap | `src/proxy.ts:80` | killed |
+| C19 | `open < relayCap` -> `open <= relayCap` | `src/proxy.ts:80` | killed |
+| C68 | `server.port` validation removed | `src/config.ts:75` | killed |
+| C13 | production default `os.networkInterfaces()` -> empty object | `src/address-guard.ts:92` | accepted - outside the Risk checks; the default is confirmed by direct read and recorded as R1 |
+| C9 | carried: `host.endsWith("." + d)` -> `host.endsWith(d)` | `src/host.ts:12` | killed |
+| C12 | carried: `172.16.0.0/12` -> `/13` | `src/address-guard.ts:59` | killed |
+| C15 | carried: dial the host name instead of the checked address | `src/proxy.ts:152` | killed |
+| C20 | carried: plain listener added to `run` | `src/cli.ts:157` | killed |
+| C58 | carried: listener hidden from the source scan | `src/cli.ts:157` | killed |
+| C21 | carried: hostname grammar accepts `_` | `src/host.ts:1` | killed |
+| C26 | carried: `hostVerifier` returns `true` | `src/tunnel.ts:74` | killed |
+| C34 | carried: key bytes logged on `run`; key line in a doctor hop detail | `src/cli.ts:157`, `src/doctor.ts:130` | killed |
+| C51 | carried: host key mismatch exits 10 instead of 13 | `src/doctor.ts:118` | killed |
 
 ## Security
 
-- Skills applied: `security-review` on the full diff; WTK `security.md` section 5
+- Skills applied: `security-review` on the fix diff; WTK `security.md` section 5
 - Threat model: `docs/security/threat-model.md`
 
 | ID | Surface | Result | Evidence |
 | --- | --- | --- | --- |
-| SEC-001 | config | PASS | `tests/config.test.ts:84`, `:147` |
+| SEC-001 | config | PASS | `tests/config.test.ts:84`, `:147`, `:174` |
 | SEC-002 | proxy allowlist | PASS | `tests/proxy.test.ts:24`, `:33`, `:42` |
-| SEC-003 | address guard | FAIL | own-interface refusal unproven at the proxy, `src/proxy.ts:147` (F2); ranges PASS at `tests/address-guard.test.ts:36` |
-| SEC-004 | no listener | PASS | `tests/no-listener.test.ts:17`, `tests/run.test.ts:83` |
+| SEC-003 | address guard | PASS | `tests/address-guard.test.ts:36`, `tests/proxy.test.ts:218` |
+| SEC-004 | no listener | PASS | `tests/no-listener.test.ts:17`, `tests/run.test.ts:83`, `tests/tunnel.test.ts:261` |
 | SEC-005 | host-key pin | PASS | `tests/run.test.ts:30`, `tests/doctor.test.ts:197` |
 | SEC-006 | key leakage | PASS | `tests/config.test.ts:101`, `tests/key-leak.test.ts:73` |
 | SEC-007 | request head | PASS | `tests/proxy.test.ts:144`, `:163` |
-| SEC-008 | server lockdown | FAIL | `src/doctor.ts:158` (F1) |
-| SEC-009 | resource limits | PASS | `tests/proxy.test.ts:118`, `:198`; head-phase channels uncapped (F7, Minor) |
+| SEC-008 | server lockdown | PASS | `tests/doctor.test.ts:256`, `:302`; residual R2 |
+| SEC-009 | resource limits | PASS | `tests/proxy.test.ts:118`, `:198`, `:233` |
 
-Residual review found no injection path, no secret in output or state, no listener, and one pinned runtime dependency (`ssh2` 1.17.0 in `bun.lock`). Open Critical: 0. Open Major: 2 (F1, F2). Verdict: FAIL.
+The fix diff adds no listener, no new dependency and no output of key or server text outside the
+sanitised paths; the probe command is a fixed string. Open Critical: 0. Open Major: 0. Verdict: PASS.
 
 ## Reuse review
 
-First code in the repository, so nothing existing was bypassed. Inside the diff: the `doctor` egress hop repeats the proxy's resolve, guard and dial sequence (`src/doctor.ts:195`, `src/proxy.ts:144`), and two test files define the same locked-server helper (`tests/doctor.test.ts:19`, `tests/key-leak.test.ts:23`). Neither needs action now.
+Carried from 3a31e20. The fix round adds one shared test helper (`tests/helpers.ts:23` `keyPair`) used by
+both key generators, and exports the forward predicate instead of duplicating it.
 
 ## Swept
 
-Every `Swept` row that cites checks resolves to a test that exists and asserts the cited constraint. The `n/a` rows are approved policy.
+The new `Swept` entries (C64-C69) resolve to tests that exist and assert the cited constraint.
 
 ## Approval
 
-`plan.md` carries the `## Approval` receipt (user decision, 2026-11-21, revision fd86af3 plus the door 3 change). The later criteria revision is recorded as reported to the user for objection, not as a second approval.
+`plan.md` carries the `## Approval` receipt for the plan (2026-11-21, revision fd86af3 plus the door 3
+change). Criteria 59-61 are not in the receipt (R3).
 
 ## Gate
 
-`env -u CLAUDECODE taskpolicy -b nice -n 10 bun test` at cffb102 - 62 passed, 0 failed
+`env -u CLAUDECODE taskpolicy -b nice -n 10 bun test` at 271cedf - 68 passed, 0 failed
 `taskpolicy -b nice -n 10 bun run typecheck` - clean
 
 Lessons (step 7) are not distilled here: this run was limited to committing this report.
