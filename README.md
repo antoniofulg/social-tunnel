@@ -81,7 +81,7 @@ Create a user with no shell:
 
 ```sh
 useradd --create-home --shell /usr/sbin/nologin sotunnel
-install -d -m 700 -o sotunnel -g sotunnel ~sotunnel/.ssh
+install -d -m 755 -o root -g root ~sotunnel/.ssh
 ```
 
 Add the public key to `~sotunnel/.ssh/authorized_keys`, limited to one remote listen and nothing else:
@@ -90,7 +90,7 @@ Add the public key to `~sotunnel/.ssh/authorized_keys`, limited to one remote li
 restrict,port-forwarding,permitlisten="127.0.0.1:8888",command="/usr/sbin/nologin" ssh-ed25519 AAAA... social-tunnel
 ```
 
-Make the file root-owned so the tunnel user cannot change it (`chown root:root`, `chmod 644`), and allow `sshd` to read it.
+Keep the folder and the file root-owned (`chown root:root`, `chmod 644` on the file) so the tunnel user can never replace or edit its own key restrictions. `sshd` accepts root-owned key files.
 
 Append to `/etc/ssh/sshd_config`, then reload `sshd`:
 

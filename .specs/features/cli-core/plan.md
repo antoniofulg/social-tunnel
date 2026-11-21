@@ -211,7 +211,7 @@ The user or an agent learns which hop failed and what to do about it.
 | S1 | New runtime, `ssh2` dependency, config and state files | Pinned dependency in `bun.lock`; strict schema v1 with unknown keys rejected | SEC-001; criteria 2, 3, 5, 56 |
 | S2 | Forwarded channels from the server's loopback port into the home machine | Allowlist, port 443 only, IP literal and refused-range check incl. own interface prefixes, only the expected forward accepted, no local listener | SEC-002, SEC-003, SEC-004; criteria 7-12, 17, 48 |
 | S5 | SSH private key and server host key | Key file permission check, dedicated-key advice, no key material in output, one pinned connect path for `run` and `doctor` | SEC-005, SEC-006; criteria 6, 19, 28, 52, 54 |
-| S6 | Untrusted CONNECT request head and server-supplied text | 8 KiB / 10 s head bounds, strict hostname and port grammar, post-head bytes never parsed, sanitised logs, generic refusal bodies | SEC-007; criteria 13, 14, 44, 45, 46, 50 |
+| S6 | Untrusted CONNECT request head and server-supplied text | 8 KiB / 10 s head bounds, strict hostname and port grammar, post-head bytes never parsed, sanitised logs, generic refusal bodies | SEC-007, SEC-010; criteria 13, 14, 44, 45, 46, 50, 71 |
 | S9 | Server-side tunnel user restrictions (configured by hand in v0.1) | `doctor` lockdown hop proves shell, sftp, local forward and other ports are refused | SEC-008; criterion 53 |
 | S11 | Long-running process on the user's laptop | 256-relay cap, DNS/connect and idle timeouts, single-instance guard, stale-state detection | SEC-009; criteria 15, 16, 27, 47, 49, 51 |
 
