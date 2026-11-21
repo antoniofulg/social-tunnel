@@ -65,14 +65,14 @@ function withTimeout<T>(work: Promise<T>, ms: number, onLate?: (value: T) => voi
 // Returns the handler for one forwarded channel. It reads a single CONNECT head, decides, and
 // either relays to a checked public address or answers with a refusal and closes. The handler is
 // the only way in: nothing here opens a socket for others to connect to (plan door 4).
-export function createProxy(options: ProxyOptions): (stream: Duplex) => void {
+export function createProxy(options: ProxyOptions): { handle: (stream: Duplex) => void } {
   const headTimeoutMs = options.headTimeoutMs ?? DEFAULTS.headTimeoutMs;
   const connectTimeoutMs = options.connectTimeoutMs ?? DEFAULTS.connectTimeoutMs;
   const idleTimeoutMs = options.idleTimeoutMs ?? DEFAULTS.idleTimeoutMs;
   const relayCap = options.relayCap ?? DEFAULTS.relayCap;
   let open = 0;
 
-  return (stream) => {
+  const handle = (stream: Duplex) => {
     let head = Buffer.alloc(0);
     let closed = false;
     let upstream: Duplex | undefined;
@@ -172,4 +172,5 @@ export function createProxy(options: ProxyOptions): (stream: Duplex) => void {
       remote.pipe(stream);
     }
   };
+  return { handle };
 }

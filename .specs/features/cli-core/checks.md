@@ -105,6 +105,8 @@ Proof: run unit | (pass) [C63]
 
 ### S3 - `run` holds the tunnel open and reports every state change
 
+Complete: C25-C33, C35-C37, C59, C61 and C58 (S2) - proofs green; C34 covers two `doctor` paths and is marked with S5
+
 **C25** - Against an in-process SSH server, the tunnel authenticates with the key, requests `tcpip-forward` on `127.0.0.1:<remotePort>`, and `state.json` goes `connecting` -> `connected` (TUN-01, AC 18, 20)
 Proof: run unit | (pass) [C25]
 

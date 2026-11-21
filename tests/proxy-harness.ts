@@ -32,7 +32,7 @@ export function harness(options: Partial<ProxyOptions> = {}, answers: Record<str
   const lookups: string[] = [];
   const dials: { address: string; port: number; remote: Duplex; received: () => Buffer }[] = [];
   const logs: { status: number; host?: string }[] = [];
-  const handle = createProxy({
+  const { handle } = createProxy({
     domains: ["instagram.com"],
     interfaces: () => ({}),
     resolve: async (host) => {

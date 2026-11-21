@@ -1,13 +1,17 @@
 #!/usr/bin/env bun
+import { lookup } from "node:dns/promises";
 import { readFileSync, statSync } from "node:fs";
+import net from "node:net";
 import os from "node:os";
 import pkg from "../package.json" with { type: "json" };
 import { loadConfig, loadKey, resolveConfigPath } from "./config";
 import { EXIT } from "./defaults";
 import { runDoctor } from "./doctor";
-import { sanitize } from "./log";
+import { createLogger, sanitize } from "./log";
+import { createProxy, type Dialer, type Resolver } from "./proxy";
 import { pidAlive, readState, statePath } from "./state";
 import { evaluateStatus } from "./status";
+import { startTunnel } from "./tunnel";
 
 // Everything the CLI touches outside its own process. Tests replace entries; production uses REAL_IO.
 export interface Io {
@@ -18,6 +22,9 @@ export interface Io {
   stderr: (text: string) => void;
   readFile: (path: string) => Buffer;
   stat: (path: string) => { mode: number };
+  resolve: Resolver;
+  dial: Dialer;
+  onSignal: (stop: () => void) => void;
 }
 
 const USAGE = `usage: social-tunnel <command> [options]
@@ -136,9 +143,31 @@ export async function main(argv: string[], io: Io): Promise<number> {
       return exit;
     }
 
+    const prior = readState(statePath(configPath));
+    if (prior && prior.pid !== process.pid && prior.state !== "stopped" && pidAlive(prior.pid)) {
+      return fail(EXIT.usage, "already_running", `social-tunnel run is already running (pid ${prior.pid})`);
+    }
     const key = loadKey(config.keyPath, io, io.platform);
     if (!key.ok) return fail(EXIT.usage, key.code, key.message);
-    throw new Error("run is not implemented yet");
+
+    const log = createLogger(io.stderr, args.json);
+    const tunnel = startTunnel({
+      config,
+      key: key.key,
+      statePath: statePath(configPath),
+      handle: createProxy({
+        domains: config.domains,
+        resolve: io.resolve,
+        dial: io.dial,
+        log: (entry) => log("proxy request", entry),
+      }).handle,
+      log,
+    });
+    io.onSignal(() => void tunnel.stop());
+    const end = await tunnel.done;
+    const exit = end.reason === "host_key_mismatch" ? EXIT.hostKeyMismatch : EXIT.ok;
+    if (args.json) print({ ok: exit === EXIT.ok, command: "run", state: end.state, reason: end.reason });
+    return exit;
   } catch (err) {
     return fail(EXIT.internal, "internal", err instanceof Error ? err.message : "unexpected error");
   }
@@ -153,6 +182,17 @@ if (import.meta.main) {
     stderr: (text) => void process.stderr.write(text),
     readFile: (path) => readFileSync(path),
     stat: (path) => statSync(path),
+    resolve: async (host) => (await lookup(host, { all: true })).map((answer) => answer.address),
+    dial: (address, port) =>
+      new Promise((resolve, reject) => {
+        const socket = net.connect({ host: address, port });
+        socket.once("error", reject);
+        socket.once("connect", () => resolve(socket));
+      }),
+    onSignal: (stop) => {
+      process.on("SIGINT", stop);
+      process.on("SIGTERM", stop);
+    },
   });
   // Flush stdout before leaving: an agent reads the JSON object from a pipe.
   process.stdout.write("", () => process.exit(code));

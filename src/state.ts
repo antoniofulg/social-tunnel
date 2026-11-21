@@ -1,4 +1,4 @@
-import { readFileSync } from "node:fs";
+import { readFileSync, renameSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 
 export type TunnelState =
@@ -63,4 +63,12 @@ export function pidAlive(pid: number): boolean {
   } catch (err) {
     return (err as NodeJS.ErrnoException).code === "EPERM";
   }
+}
+
+// Readers never see a half-written file: the new content lands under a temp name, then replaces
+// the old file in one rename.
+export function writeState(path: string, state: State): void {
+  const temp = `${path}.${process.pid}.tmp`;
+  writeFileSync(temp, JSON.stringify(state) + "\n", { mode: 0o600 });
+  renameSync(temp, path);
 }

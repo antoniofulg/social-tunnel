@@ -58,6 +58,9 @@ export function testIo(overrides: Partial<Io> = {}) {
     stderr: (text) => void err.push(text),
     readFile: (path) => readFileSync(path),
     stat: (path) => statSync(path),
+    resolve: () => Promise.reject(new Error("no resolver in this test")),
+    dial: () => Promise.reject(new Error("no dialer in this test")),
+    onSignal: () => {},
     ...overrides,
   };
   return { io, out, err };
@@ -81,4 +84,31 @@ export async function until(condition: () => boolean, ms = 5000, what = "conditi
     if (Date.now() > deadline) throw new Error(`timed out waiting for ${what}`);
     await sleep(5);
   }
+}
+
+const CLI = join(import.meta.dir, "..", "src", "cli.ts");
+
+// Runs the real CLI as its own process. stdin is a pipe that is never written or closed, so a
+// command that waits for input would hang instead of passing.
+export function spawnCli(argv: string[], env: Record<string, string> = {}) {
+  const proc = Bun.spawn([process.execPath, CLI, ...argv], {
+    stdin: "pipe",
+    stdout: "pipe",
+    stderr: "pipe",
+    env: { PATH: process.env.PATH ?? "", HOME: "/nonexistent-home", ...env },
+  });
+  const stdout = new Response(proc.stdout).text();
+  const stderr = new Response(proc.stderr).text();
+  return {
+    proc,
+    pid: proc.pid,
+    kill: (signal: "SIGTERM" | "SIGINT" | "SIGKILL") => proc.kill(signal),
+    // Exit code and everything printed; kills the process if it outlives `ms`.
+    exit: async (ms = 15000) => {
+      const timer = setTimeout(() => proc.kill("SIGKILL"), ms);
+      const code = await proc.exited;
+      clearTimeout(timer);
+      return { code, stdout: await stdout, stderr: await stderr };
+    },
+  };
 }
