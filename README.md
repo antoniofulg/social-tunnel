@@ -27,7 +27,7 @@ The SSH client and the proxy are built in, so the home computer needs neither `s
 
 ## Safety rules
 
-These hold in code and are covered by tests:
+The home-side rules (allowlist, home network, no open port, pinned key, key handling, bounds) hold in code and are covered by tests. Two depend on the server, which you set up by hand until `setup` ships: failing closed needs the PAC from step 3, and narrow server access needs the account from step 2, which `doctor` checks.
 
 - **Allowlist only.** The proxy refuses every host not on the list (`403`), every port other than 443, every IP literal and every plain-HTTP request (`405`). Lookalike names such as `evilinstagram.com` do not match `instagram.com`.
 - **Never the home network.** If an allowlisted name resolves to a loopback, private, link-local, CGNAT, multicast or reserved address, or into a network the home computer is on, the proxy refuses it and connects nowhere. It connects to the exact address it checked, so a second DNS answer cannot redirect it.
@@ -99,6 +99,7 @@ Match User sotunnel
     AllowTcpForwarding remote
     PermitListen 127.0.0.1:8888
     PermitOpen none
+    AllowStreamLocalForwarding no
     GatewayPorts no
     PermitTTY no
     X11Forwarding no

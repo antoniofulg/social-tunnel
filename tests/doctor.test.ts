@@ -408,3 +408,9 @@ test("[C76] a permitted local forward that cannot connect, and a forward two por
   expect(second.hop("lockdown").detail).toContain("remote forward");
   expect(second.hop("lockdown").detail).not.toContain("local forward");
 });
+
+test("[C84] the lockdown fix also closes Unix-socket forwarding", async () => {
+  const { code, hop } = await doctor((await locked({ shell: true })).path, seams().io);
+  expect(code).toBe(14);
+  expect(hop("lockdown").fix).toContain("AllowStreamLocalForwarding no");
+});
