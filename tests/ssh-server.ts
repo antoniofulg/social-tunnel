@@ -2,7 +2,7 @@ import { createHash, timingSafeEqual } from "node:crypto";
 import { readFileSync, writeFileSync } from "node:fs";
 import net from "node:net";
 import { Server, utils, type Connection } from "ssh2";
-import { until, writeConfig } from "./helpers";
+import { keyPair, until, writeConfig } from "./helpers";
 
 export interface ServerOptions {
   publicKey: string;
@@ -43,7 +43,7 @@ export interface TestServer {
 
 // An in-process SSH server: test harness only. It never leaves 127.0.0.1.
 export async function startServer(options: ServerOptions): Promise<TestServer> {
-  const host = options.host ?? utils.generateKeyPairSync("ed25519");
+  const host = options.host ?? keyPair();
   const hostBlob = (utils.parseKey(host.public) as { getPublicSSH(): Buffer }).getPublicSSH();
   const allowed = utils.parseKey(options.publicKey) as {
     type: string;

@@ -18,9 +18,18 @@ export function tmp(): string {
   return dir;
 }
 
+// About 1 in 200 keys from ssh2's generator under Bun 1.4.4 cannot be parsed back by ssh2 itself
+// ("Malformed OpenSSH public key"), so the harness draws again until it gets a usable pair.
+export function keyPair(): { private: string; public: string } {
+  for (;;) {
+    const pair = utils.generateKeyPairSync("ed25519");
+    if (!(utils.parseKey(pair.private) instanceof Error) && !(utils.parseKey(pair.public) instanceof Error)) return pair;
+  }
+}
+
 // Keys are generated per run and live only in a temp dir.
 export function writeKey(dir: string, mode = 0o600, name = "tunnel_key"): { path: string; publicKey: string } {
-  const pair = utils.generateKeyPairSync("ed25519");
+  const pair = keyPair();
   const path = join(dir, name);
   writeFileSync(path, pair.private);
   chmodSync(path, mode);
