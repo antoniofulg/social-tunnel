@@ -1,8 +1,9 @@
-// C0, DEL and C1 controls, line separators, and the invisible format characters (zero-width,
-// bidi overrides and isolates, BOM) that can reorder or hide text on a terminal.
+// C0, DEL and C1 controls, line separators, and the invisible format characters (soft hyphen,
+// Arabic letter mark, zero-width, bidi overrides and isolates, word joiner and invisible
+// operators, BOM, tag characters) that can reorder or hide text on a terminal.
 const CONTROL = new RegExp(
-  "[\\x00-\\x1f\\x7f-\\x9f\\u200b-\\u200f\\u2028-\\u202e\\u2066-\\u2069\\ufeff]",
-  "g",
+  "[\\x00-\\x1f\\x7f-\\x9f\\u00ad\\u061c\\u200b-\\u200f\\u2028-\\u202e\\u2060-\\u2069\\ufeff\\u{e0000}-\\u{e007f}]",
+  "gu",
 );
 
 // Server- and file-supplied text reaches terminals and agents; strip control characters first.

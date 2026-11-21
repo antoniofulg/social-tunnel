@@ -335,3 +335,17 @@ test("[C78] sanitize strips control, bidi and zero-width characters", () => {
   }
   expect(sanitize("plain text, ünïcödé and 日本語 stay")).toBe("plain text, ünïcödé and 日本語 stay");
 });
+
+test("[C83] sanitize also strips the soft hyphen, Arabic letter mark, word joiner, invisible operators and tag characters", () => {
+  const hidden = [0xad, 0x61c, 0x2060, 0x2061, 0x2062, 0x2063, 0x2064, 0xe0000, 0xe0001, 0xe0041, 0xe007f];
+  for (const code of hidden) {
+    const mark = String.fromCodePoint(code);
+    expect([code, sanitize(`pay${mark}load`)]).toEqual([code, "payload"]);
+  }
+  // Neighbours and ordinary astral characters stay.
+  const kept = [0xac, 0xae, 0x61b, 0x61d, 0x205f, 0xe0080, 0x1f600];
+  for (const code of kept) {
+    const text = `pay${String.fromCodePoint(code)}load`;
+    expect([code, sanitize(text)]).toEqual([code, text]);
+  }
+});
