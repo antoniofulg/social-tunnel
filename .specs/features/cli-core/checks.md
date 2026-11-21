@@ -16,6 +16,8 @@ Seams: the proxy and tunnel take their resolver and dialer as parameters; produc
 
 ### S1 - Config loads or fails with a named field
 
+Complete: C1-C7, C60 - proofs green
+
 **C1** - Config path resolves `--config` > `$SOCIAL_TUNNEL_CONFIG` > platform dir: macOS `~/Library/Application Support`, Linux `$XDG_CONFIG_HOME` then `~/.config`, Windows `%APPDATA%`, each + `social-tunnel/config.json` (CFG-01, AC 1)
 Proof: run unit | (pass) [C1]
 

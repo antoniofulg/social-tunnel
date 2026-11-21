@@ -1,0 +1,154 @@
+import { expect, test } from "bun:test";
+import { chmodSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { join, relative, resolve } from "node:path";
+import { loadKey, parseConfig, resolveConfigPath } from "../src/config";
+import { baseConfig, cli, tmp, writeConfig, writeKey } from "./helpers";
+
+test("[C1] config path resolves flag, then env, then the platform config dir", () => {
+  const home = () => "/home/u";
+  const env = { SOCIAL_TUNNEL_CONFIG: "/env/config.json", XDG_CONFIG_HOME: "/xdg", APPDATA: "C:\\Roaming" };
+
+  expect(resolveConfigPath("flag/config.json", env, "linux", home)).toBe(resolve("flag/config.json"));
+  expect(resolveConfigPath(undefined, env, "linux", home)).toBe("/env/config.json");
+  expect(resolveConfigPath(undefined, {}, "darwin", () => "/Users/u")).toBe(
+    "/Users/u/Library/Application Support/social-tunnel/config.json",
+  );
+  expect(resolveConfigPath(undefined, { XDG_CONFIG_HOME: "/xdg" }, "linux", home)).toBe(
+    "/xdg/social-tunnel/config.json",
+  );
+  expect(resolveConfigPath(undefined, {}, "linux", home)).toBe("/home/u/.config/social-tunnel/config.json");
+  expect(resolveConfigPath(undefined, { APPDATA: "C:\\Users\\u\\AppData\\Roaming" }, "win32", home)).toBe(
+    "C:\\Users\\u\\AppData\\Roaming\\social-tunnel\\config.json",
+  );
+});
+
+test("[C2] status and run exit 2 with a config_invalid envelope for missing, non-JSON and schema-invalid config", async () => {
+  const dir = tmp();
+  const notJson = join(dir, "not-json.json");
+  writeFileSync(notJson, "{ nope");
+  const cases: [string, string][] = [
+    [join(dir, "missing.json"), "$"],
+    [notJson, "$"],
+    [writeConfig((c) => (c.version = 2)).path, "version"],
+    [writeConfig((c) => (c.server = "example.com")).path, "server"],
+    [writeConfig((c) => (c.remotePort = 70000)).path, "remotePort"],
+  ];
+  for (const verb of ["status", "run"]) {
+    for (const [path, field] of cases) {
+      const result = await cli([verb, "--json", "--config", path]);
+      expect(result.code).toBe(2);
+      const body = result.json();
+      expect(body).toEqual({
+        ok: false,
+        command: verb,
+        error: { code: "config_invalid", field, message: expect.any(String) },
+      });
+      expect(body.error.message.length).toBeGreaterThan(0);
+    }
+  }
+});
+
+test("[C3] domain entries that are not bare hostnames are rejected naming the entry", async () => {
+  const entries = [
+    "instagram",
+    "https://instagram.com",
+    "instagram.com:443",
+    "instagram.com/x",
+    "*.instagram.com",
+    "1.2.3.4",
+    "[::1]",
+    "::1",
+  ];
+  for (const entry of entries) {
+    const { path } = writeConfig((c) => (c.domains = ["facebook.com", entry]));
+    const result = await cli(["status", "--json", "--config", path]);
+    expect(result.code).toBe(2);
+    const { error } = result.json();
+    expect(error.code).toBe("config_invalid");
+    expect(error.field).toBe("domains[1]");
+    expect(error.message).toContain(entry);
+  }
+});
+
+test("[C4] Instagram.COM. is stored as instagram.com", () => {
+  const config = { ...baseConfig("/k"), domains: ["Instagram.COM."] };
+  const parsed = parseConfig(config, "/cfg", () => "/home/u");
+  expect(parsed.ok).toBe(true);
+  if (parsed.ok) expect(parsed.config.domains).toEqual(["instagram.com"]);
+});
+
+test("[C5] a config with an extra key password is rejected naming it", async () => {
+  const { path } = writeConfig((c) => (c.password = "hunter2-secret"));
+  const result = await cli(["status", "--json", "--config", path]);
+  expect(result.code).toBe(2);
+  expect(result.json().error).toMatchObject({ code: "config_invalid", field: "password" });
+  expect(result.stdout + result.stderr).not.toContain("hunter2-secret");
+});
+
+test("[C6] a key readable or writable by group or others fails with key_permissions before any read", async () => {
+  for (const mode of [0o644, 0o640, 0o604, 0o660]) {
+    const { path, keyPath } = writeConfig(() => {}, mode);
+    const keyReads: string[] = [];
+    const result = await cli(["run", "--json", "--config", path], {
+      readFile: (p) => {
+        if (p === keyPath) keyReads.push(p);
+        return readFileSync(p);
+      },
+    });
+    expect(result.code).toBe(2);
+    expect(result.json()).toMatchObject({ ok: false, command: "run", error: { code: "key_permissions" } });
+    expect(result.json().error.message).toContain(keyPath);
+    expect(keyReads).toEqual([]);
+  }
+
+  for (const mode of [0o600, 0o400]) {
+    const key = writeKey(tmp(), mode);
+    let reads = 0;
+    const loaded = loadKey(
+      key.path,
+      { stat: statSync, readFile: (p) => (reads++, readFileSync(p)) },
+      "linux",
+    );
+    expect(loaded.ok).toBe(true);
+    expect(reads).toBe(1);
+    chmodSync(key.path, 0o600);
+  }
+});
+
+test("[C7] status --json and doctor --json include the absolute configPath they used", async () => {
+  const { path } = writeConfig();
+  const rel = relative(process.cwd(), path);
+  expect(rel).not.toBe(path);
+
+  const status = await cli(["status", "--json", "--config", rel]);
+  expect(status.json().configPath).toBe(path);
+
+  const doctor = await cli(["doctor", "--json"], { env: { SOCIAL_TUNNEL_CONFIG: rel } });
+  expect(doctor.json().configPath).toBe(path);
+});
+
+test("[C60] server.hostKey must be SHA256: plus 43 unpadded base64 characters", async () => {
+  const body43 = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNO+/";
+  expect(body43.length).toBe(43);
+  const good = "SHA256:" + body43;
+  const rejected: (string | undefined)[] = [
+    undefined,
+    "MD5:ab:cd:ef:01:23:45:67:89:ab:cd:ef:01:23:45:67:89",
+    good + "=",
+    "SHA256:" + body43.slice(0, 42),
+  ];
+  for (const hostKey of rejected) {
+    const { path } = writeConfig((c) => {
+      if (hostKey === undefined) delete c.server.hostKey;
+      else c.server.hostKey = hostKey;
+    });
+    const result = await cli(["status", "--json", "--config", path]);
+    expect(result.code).toBe(2);
+    expect(result.json().error).toMatchObject({ code: "config_invalid", field: "server.hostKey" });
+  }
+
+  const { path } = writeConfig((c) => (c.server.hostKey = good));
+  const accepted = await cli(["status", "--json", "--config", path]);
+  expect(accepted.json().error).toBeUndefined();
+  expect(accepted.json().state).toBe("stopped");
+});
