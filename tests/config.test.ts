@@ -152,3 +152,41 @@ test("[C60] server.hostKey must be SHA256: plus 43 unpadded base64 characters", 
   expect(accepted.json().error).toBeUndefined();
   expect(accepted.json().state).toBe("stopped");
 });
+
+test("[C68] bad server fields, keyPath, unknown server keys and misplaced flags are rejected", async () => {
+  const fields: [string, (c: Record<string, any>) => void][] = [
+    ["server.host", (c) => (c.server.host = "bad host\u001b[31m")],
+    ["server.host", (c) => (c.server.host = "")],
+    ["server.port", (c) => (c.server.port = 0)],
+    ["server.port", (c) => (c.server.port = 65536)],
+    ["server.port", (c) => (c.server.port = "22")],
+    ["server.user", (c) => (c.server.user = "tunnel user")],
+    ["server.user", (c) => delete c.server.user],
+    ["keyPath", (c) => (c.keyPath = "")],
+    ["keyPath", (c) => (c.keyPath = 7)],
+    ["server.password", (c) => (c.server.password = "hunter2-secret")],
+  ];
+  for (const [field, edit] of fields) {
+    const { path } = writeConfig(edit);
+    for (const verb of ["status", "run"]) {
+      const result = await cli([verb, "--json", "--config", path]);
+      expect([field, result.code]).toEqual([field, 2]);
+      expect(result.json()).toMatchObject({ ok: false, command: verb, error: { code: "config_invalid", field } });
+      expect(result.stdout).not.toContain("hunter2-secret");
+    }
+  }
+
+  const { path } = writeConfig();
+  const misuse = [
+    ["status", "--config"],
+    ["status", "--domain", "instagram.com", "--config", path],
+    ["run", "--domain", "instagram.com", "--config", path],
+    ["doctor", "--config", path, "--domain"],
+  ];
+  for (const argv of misuse) {
+    const result = await cli(argv);
+    expect([argv, result.code]).toEqual([argv, 2]);
+    expect(result.stderr).toContain("usage: social-tunnel");
+    expect(result.stdout).toBe("");
+  }
+});
