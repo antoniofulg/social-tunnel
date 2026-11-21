@@ -102,6 +102,13 @@ test("[C18] DNS and connect failures get 502, and timeouts get 504", async () =>
   const refused = harness({ dial: () => Promise.reject(new Error("ECONNREFUSED")) });
   expect(await refused.status("instagram.com:443")).toBe("HTTP/1.1 502 Bad Gateway");
 
+  // What a real resolver does when a name does not exist: it rejects.
+  const noSuchName = harness({ resolve: () => Promise.reject(new Error("getaddrinfo ENOTFOUND instagram.com")) });
+  const answer = await noSuchName.connect("instagram.com:443").closed();
+  expect(answer.split("\r\n")[0]).toBe("HTTP/1.1 502 Bad Gateway");
+  expect(answer).not.toContain("ENOTFOUND");
+  expect(noSuchName.dials).toEqual([]);
+
   const slowLookup = harness({ connectTimeoutMs: 40, resolve: () => never });
   expect(await slowLookup.status("instagram.com:443")).toBe("HTTP/1.1 504 Gateway Timeout");
 
@@ -197,6 +204,21 @@ test("[C24] a relay idle past the idle timeout closes both sides", async () => {
   expect(channel.ended()).toBe(false);
   await until(() => channel.ended() && h.dials[0]!.remote.destroyed, 2000, "both sides to close");
   expect(Date.now() - started).toBeGreaterThanOrEqual(50);
+
+  // Traffic in either direction keeps a relay open well past the timeout; silence then closes it.
+  const idleTimeoutMs = 300;
+  const busy = harness({ idleTimeoutMs });
+  const live = busy.connect("instagram.com:443");
+  expect(await live.head()).toBe(`${OK}\r\n\r\n`);
+  const begun = Date.now();
+  for (let i = 0; Date.now() - begun < idleTimeoutMs * 3; i++) {
+    if (i % 2 === 0) live.client.write("a");
+    else busy.dials[0]!.remote.write("b");
+    await sleep(40);
+  }
+  expect(live.ended()).toBe(false);
+  expect(busy.dials[0]!.remote.destroyed).toBe(false);
+  await until(() => live.ended() && busy.dials[0]!.remote.destroyed, 5000, "the quiet relay to close");
 });
 
 test("[C63] the shipped defaults match the plan", () => {

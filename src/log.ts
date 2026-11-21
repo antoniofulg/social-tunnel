@@ -1,4 +1,9 @@
-const CONTROL = new RegExp("[\\x00-\\x1f\\x7f-\\x9f" + String.fromCharCode(0x2028, 0x2029) + "]", "g");
+// C0, DEL and C1 controls, line separators, and the invisible format characters (zero-width,
+// bidi overrides and isolates, BOM) that can reorder or hide text on a terminal.
+const CONTROL = new RegExp(
+  "[\\x00-\\x1f\\x7f-\\x9f\\u200b-\\u200f\\u2028-\\u202e\\u2066-\\u2069\\ufeff]",
+  "g",
+);
 
 // Server- and file-supplied text reaches terminals and agents; strip control characters first.
 export function sanitize(text: string): string {

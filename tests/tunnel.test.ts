@@ -1,12 +1,13 @@
 import { afterEach, expect, test } from "bun:test";
+import { createHash } from "node:crypto";
 import { readdirSync, readFileSync, statSync } from "node:fs";
 import net from "node:net";
 import type { Duplex } from "node:stream";
 import { loadConfig } from "../src/config";
-import { createLogger } from "../src/log";
+import { createLogger, sanitize } from "../src/log";
 import type { State } from "../src/state";
 import { isExpectedForward, retryDelay, startTunnel, type Tunnel, type TunnelOptions } from "../src/tunnel";
-import { sleep, until } from "./helpers";
+import { cli, sleep, until } from "./helpers";
 import { harness, OK } from "./proxy-harness";
 import { readJson, setup, startServer, type TestServer } from "./ssh-server";
 
@@ -262,4 +263,75 @@ test("[C67] the forward filter accepts only 127.0.0.1 on the configured remote p
   expect(isExpectedForward({ destIP: "localhost", destPort: 8888 }, 8888)).toBe(false);
   expect(isExpectedForward({ destIP: "::1", destPort: 8888 }, 8888)).toBe(false);
   expect(isExpectedForward({ destIP: "127.0.0.1", destPort: 0 }, 8888)).toBe(false);
+});
+
+test("[C70] a multi-megabyte response arrives byte-exact through the tunnel when upstream closes after sending", async () => {
+  const size = 8 * 1024 * 1024;
+  const body = Buffer.alloc(size);
+  for (let i = 0; i < size; i += 4) body.writeUInt32LE(i, i);
+  const expected = createHash("sha256").update(body).digest("hex");
+
+  // The origin sends everything and closes at once, faster than the SSH channel can carry it.
+  const origin = net.createServer((socket) => {
+    socket.on("error", () => {});
+    socket.end(body);
+  });
+  await new Promise<void>((resolve) => origin.listen(0, "127.0.0.1", resolve));
+  const originPort = (origin.address() as net.AddressInfo).port;
+
+  const env = await setup({ open: true });
+  const proxy = harness({
+    dial: () =>
+      new Promise((resolve, reject) => {
+        const socket = net.connect(originPort, "127.0.0.1");
+        socket.once("error", reject);
+        socket.once("connect", () => resolve(socket));
+      }),
+  });
+  const t = await tunnelTo(env, { handle: proxy.handle });
+  await until(() => t.names().includes("connected"));
+
+  try {
+    for (let run = 0; run < 6; run++) {
+      const received: Buffer[] = [];
+      let closed = false;
+      const socket = net.connect(env.remotePort, "127.0.0.1");
+      socket.on("data", (chunk) => received.push(chunk));
+      socket.on("close", () => (closed = true));
+      socket.write("CONNECT instagram.com:443 HTTP/1.1\r\n\r\n");
+      await until(() => closed, 20000, "the relay to close");
+
+      const all = Buffer.concat(received);
+      const head = `${OK}\r\n\r\n`;
+      expect(all.subarray(0, head.length).toString()).toBe(head);
+      expect([run, all.length - head.length]).toEqual([run, size]);
+      expect(createHash("sha256").update(all.subarray(head.length)).digest("hex")).toBe(expected);
+    }
+  } finally {
+    origin.close();
+  }
+}, 120_000);
+
+test("[C71] a refused key gives disconnected/auth_failed with retryAt, and status exits 10 with that reason", async () => {
+  const env = await setup({ authorize: false });
+  const t = await tunnelTo(env, { schedule: () => () => {} });
+  await until(() => t.names().length === 2);
+
+  expect(t.names()).toEqual(["connecting", "disconnected/auth_failed"]);
+  expect(env.ssh.auth).toContain("publickey");
+  const state = readJson(env.statePath);
+  expect(Date.parse(state.retryAt) - Date.parse(state.since)).toBe(10);
+
+  const status = await cli(["status", "--json", "--config", env.path]);
+  expect(status.code).toBe(10);
+  expect(status.json()).toMatchObject({ ok: false, state: "disconnected", reason: "auth_failed", retryAt: state.retryAt });
+});
+
+test("[C78] sanitize strips control, bidi and zero-width characters", () => {
+  const hidden = [0x1b, 0x07, 0x7f, 0x9b, 0x200b, 0x200e, 0x200f, 0x202a, 0x202e, 0x2028, 0x2029, 0x2066, 0x2069, 0xfeff];
+  for (const code of hidden) {
+    const mark = String.fromCharCode(code);
+    expect([code, sanitize(`pay${mark}load`)]).toEqual([code, "payload"]);
+  }
+  expect(sanitize("plain text, ünïcödé and 日本語 stay")).toBe("plain text, ünïcödé and 日本語 stay");
 });

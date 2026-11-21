@@ -75,11 +75,9 @@ export function createProxy(options: ProxyOptions): { handle: (stream: Duplex) =
   const handle = (stream: Duplex) => {
     let head = Buffer.alloc(0);
     let closed = false;
-    let upstream: Duplex | undefined;
     // A channel holds a slot from its first byte, so slow heads count against the cap too.
     let holdsSlot = open < relayCap;
     if (holdsSlot) open++;
-    let idleTimer: ReturnType<typeof setTimeout> | undefined;
 
     const release = () => {
       if (holdsSlot) {
@@ -102,9 +100,7 @@ export function createProxy(options: ProxyOptions): { handle: (stream: Duplex) =
     stream.once("close", () => {
       closed = true;
       clearTimeout(headTimer);
-      clearTimeout(idleTimer);
       release();
-      upstream?.destroy();
     });
     if (!holdsSlot) {
       clearTimeout(headTimer);
@@ -144,6 +140,7 @@ export function createProxy(options: ProxyOptions): { handle: (stream: Duplex) =
       let remote: Duplex;
       try {
         const addresses = await withTimeout(options.resolve(host), connectTimeoutMs);
+        if (closed) return;
         if (addresses.length === 0) return refuse(502, host);
         const interfaces = options.interfaces?.();
         const address = addresses.find((a) => !isRefusedAddress(a, interfaces));
@@ -154,17 +151,28 @@ export function createProxy(options: ProxyOptions): { handle: (stream: Duplex) =
         return refuse(err === TIMEOUT ? 504 : 502, host);
       }
       if (closed) return remote.destroy();
-      upstream = remote;
       options.log?.({ status: 200, host });
 
-      const close = () => {
+      const idleTimer = setTimeout(() => {
         stream.destroy();
         remote.destroy();
+      }, idleTimeoutMs);
+      const touch = () => idleTimer.refresh();
+      // When one side is gone the other is ended, not destroyed: bytes already accepted for it may
+      // still be queued (an SSH channel waits for window) and are delivered first. From then on
+      // nothing refreshes the idle timer, so it bounds the flush.
+      const flush = (to: Duplex) => {
+        stream.off("data", touch);
+        remote.off("data", touch);
+        if (to.destroyed) return clearTimeout(idleTimer);
+        to.once("close", () => clearTimeout(idleTimer));
+        if (to.writableFinished) return void to.destroy();
+        to.once("finish", () => to.destroy());
+        to.end();
       };
-      idleTimer = setTimeout(close, idleTimeoutMs);
-      const touch = () => idleTimer!.refresh();
       remote.on("error", () => {});
-      remote.once("close", close);
+      remote.once("close", () => flush(stream));
+      stream.once("close", () => flush(remote));
       stream.on("data", touch);
       remote.on("data", touch);
 
