@@ -184,7 +184,7 @@ The user or an agent learns which hop failed and what to do about it.
 | CFG-01 | S1 | 1, 2, 3, 4, 5, 6, 55, 56 | Done |
 | PRX-01 | S2 | 7-17, 44, 45, 46, 47, 58 | Done |
 | TUN-01 | S3 | 18-28, 48, 49, 50, 57 | Pending |
-| STA-01 | S4 | 29-34, 51 | Pending |
+| STA-01 | S4 | 29-34, 51 | Done |
 | DOC-01 | S5 | 35-41, 52, 53, 54 | Pending |
 | CLI-01 | S6 | 42, 43 | Pending |
 

@@ -154,6 +154,8 @@ Proof: run unit | (pass) [C61]
 
 ### S4 - `status` answers in one call
 
+Complete: C38-C44 - proofs green
+
 **C38** - Live pid + `connected` exits 0 with `state`, `since`, `server.host`, `remotePort`, `domains` count (STA-01, AC 29)
 Proof: run unit | (pass) [C38]
 
