@@ -101,10 +101,11 @@ The proxy handler, given a forwarded stream, relays only allowlisted `host:443` 
 15. IF the DNS lookup returns no address or the outbound connection fails THEN the system SHALL reply `502 Bad Gateway`, and IF the DNS lookup or connection does not complete within 10 s THEN `504 Gateway Timeout`, and close
 16. IF 256 relays are already open THEN the system SHALL reply `503 Service Unavailable` to the next CONNECT and close it
 17. The system SHALL open no listening socket on the home machine
-44. IF the CONNECT host is not an IP literal (criterion 10 decides those, including bracketed IPv6) and is not dot-separated labels of letters, digits and hyphens (1-63 characters each, 253 total) or the port is not exactly the digits `443` THEN the system SHALL reply `400 Bad Request` and close
+44. IF the CONNECT host, after criterion 7's lower-casing and trailing-dot removal, is not an IP literal (criterion 10 decides those, including bracketed IPv6) and is not dot-separated labels of letters, digits and hyphens (1-63 characters each, 253 total) or the port is not exactly the digits `443` THEN the system SHALL reply `400 Bad Request` and close
 45. WHEN the request head completes THEN the system SHALL relay any bytes after it upstream without parsing them as a request
 46. The system SHALL send refusal responses with a fixed body that names no resolved address
 47. IF a relay carries no bytes in either direction for 300 s THEN the system SHALL close both sides
+58. The system SHALL ship these defaults: request-head timeout 10 s, DNS and connect timeout 10 s, relay idle timeout 300 s, relay cap 256, keepalive 15 s with 3 misses, state heartbeat 30 s, stale threshold 90 s
 
 **Independent test:** feed the handler in-memory duplex streams with allowed, refused, IP-literal, private-resolving, malformed and oversized requests; assert status lines and that refused cases made no lookup or connection.
 
@@ -127,7 +128,7 @@ The home machine keeps a reverse tunnel to the server and records connected, los
 25. WHEN the state changes THEN the system SHALL replace `state.json` atomically with `{version, pid, state, reason, since, retryAt, server, remotePort, updatedAt}`
 26. WHEN `run` receives SIGINT or SIGTERM THEN the system SHALL cancel the forward, close the connection, write state `stopped` and exit 0
 27. IF `state.json` names a live pid other than its own with a state other than `stopped` THEN `run` SHALL exit 2 with error code `already_running`
-57. WHEN `run --json` exits THEN it SHALL print one JSON object `{ok, command: "run", state, reason}` on stdout, and its log lines SHALL go to stderr only
+57. WHEN `run --json` exits after its config and key loaded THEN it SHALL print one JSON object `{ok, command: "run", state, reason}` on stdout, and its log lines SHALL go to stderr only
 28. The system SHALL write no private key material and no passphrase to stdout, stderr, `state.json` or `--json` output
 
 **Independent test:** start `run` against an in-process `ssh2` test server; kill the server, watch `state.json` go `connected` -> `disconnected` -> `reconnecting` -> `connected`; present a wrong host key and see exit 13.
@@ -142,7 +143,7 @@ An agent or the tray learns the tunnel state and acts on the exit code.
 30. IF `state.json` is absent, holds state `stopped`, or names a dead pid with any state other than `blocked`/`host_key_mismatch` THEN `status` SHALL report state `stopped` and exit 10
 31. WHILE the state is `connecting`, `disconnected` or `reconnecting` `status` SHALL exit 10 and include `reason` and `retryAt`
 32. WHILE the state is `blocked` with reason `port_blocked` `status` SHALL exit 11
-33. WHILE `state.json` holds `blocked` with reason `host_key_mismatch`, whether or not its pid is alive, `status` SHALL exit 13
+33. WHILE `state.json` holds `blocked` with reason `host_key_mismatch`, whether or not its pid is alive or its `updatedAt` is stale, `status` SHALL exit 13
 51. IF `state.json` names a live pid and its `updatedAt` is older than 90 s THEN `status` SHALL report state `stopped` with reason `stale` and exit 10
 34. WHEN any command gets `--json` THEN the system SHALL write exactly one JSON object and a newline to stdout and nothing else
 
@@ -181,7 +182,7 @@ The user or an agent learns which hop failed and what to do about it.
 | ID | Slice | Criteria | Status |
 | --- | --- | --- | --- |
 | CFG-01 | S1 | 1, 2, 3, 4, 5, 6, 55, 56 | Pending |
-| PRX-01 | S2 | 7-17, 44, 45, 46, 47 | Pending |
+| PRX-01 | S2 | 7-17, 44, 45, 46, 47, 58 | Pending |
 | TUN-01 | S3 | 18-28, 48, 49, 50, 57 | Pending |
 | STA-01 | S4 | 29-34, 51 | Pending |
 | DOC-01 | S5 | 35-41, 52, 53, 54 | Pending |
@@ -259,7 +260,7 @@ The user or an agent learns which hop failed and what to do about it.
 
 - [README.md](../../../README.md) - v0.1 CLI plan, safety rules, `--json` and exit-code contract
 - [AGENTS.md](../../../AGENTS.md) - safety invariants this feature must keep
-- [Threat model](../../../docs/security/threat-model.md) - provisional v0.1 model; controls T1-T8 land in criteria 11, 44-54
+- [Threat model](../../../docs/security/threat-model.md) - provisional v0.1 model; controls T1-T8 land in criteria 11, 44-57
 - Coordinator dispatch, 2026-11-21 - scope: config, allowlist proxy, `ssh2` reverse tunnel, `status`/`doctor` with `--json` and stable exit codes
 
 ## Approval

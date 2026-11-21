@@ -6,7 +6,7 @@ Build: `taskpolicy -b nice -n 10 bun run typecheck`
 Run unit: `env -u CLAUDECODE taskpolicy -b nice -n 10 bun test`
 Plan: `.specs/features/cli-core/plan.md`
 
-62 checks in 6 slices · 8 one-way doors · 2 open, of which 0 block
+63 checks in 6 slices · 8 one-way doors · 2 open, of which 0 block
 
 Test names start with the check id in brackets, so `bun test` prints `(pass) [C<n>] ...`. Each id has exactly one test. `CLAUDECODE` is unset because Bun hides per-test pass lines when it is set.
 
@@ -81,7 +81,7 @@ Proof: run unit | (pass) [C19]
 **C20** - No file under `src/` calls `listen(`, `createServer(`, `Bun.listen(` or `Bun.serve(`, or constructs `net.Server` (PRX-01, AC 17)
 Proof: run unit | (pass) [C20]
 
-**C58** - While `social-tunnel run` is connected as a subprocess, `lsof -a -p <pid> -iTCP -sTCP:LISTEN` and `-iUDP` list nothing (PRX-01, AC 17)
+**C58** - While `social-tunnel run` is connected as a subprocess, `lsof -a -p <pid> -iTCP -sTCP:LISTEN` prints no socket (its exit 1 with empty output counts as none; the test fails if `lsof` is absent) (PRX-01, AC 17)
 Proof: run unit | (pass) [C58]
 
 **C21** - Hosts `insta_gram.com`, `user@instagram.com`, `insta%67ram.com`, a 64-character label and a 254-character name, and ports `+443`, `0443`, `443abc`, `443 `, each get `400` (PRX-01, AC 44)
@@ -95,6 +95,9 @@ Proof: run unit | (pass) [C23]
 
 **C24** - A relay idle past the idle timeout closes both sides (PRX-01, AC 47)
 Proof: run unit | (pass) [C24]
+
+**C63** - The exported defaults equal head timeout 10000 ms, DNS/connect timeout 10000 ms, idle 300000 ms, relay cap 256, keepalive 15000 ms × 3, heartbeat 30000 ms, stale 90000 ms (PRX-01, AC 58)
+Proof: run unit | (pass) [C63]
 
 ### S3 - `run` holds the tunnel open and reports every state change
 
@@ -206,7 +209,7 @@ Proof: run unit | (pass) [C54]
 **C55** - `social-tunnel frobnicate` and `status --bogus` print usage on stderr and exit 2; `--help` and `--version` exit 0 (CLI-01, AC 42)
 Proof: run unit | (pass) [C55]
 
-**C56** - With stdin held open and never written, `status`, `doctor` and `run` with an invalid config each exit within 5 s; an unexpected exception exits 1 with `error.code` `internal` (CLI-01, AC 43; door 1)
+**C56** - With stdin held open and never written, `status` and `run` with an invalid config and `doctor` with a valid config against the in-process server each exit within 5 s; an unexpected exception exits 1 with `error.code` `internal` (CLI-01, AC 43; door 1)
 Proof: run unit | (pass) [C56]
 
 ## Coverage
@@ -253,7 +256,7 @@ Proof: run unit | (pass) [C56]
 | SEC-006 | Private key leaks through output, logs or state | No key line in any captured output | C6, C34 |
 | SEC-007 | Malformed or smuggled CONNECT head | `400`/`405`/`408`, trailing bytes never parsed | C16, C17, C21, C22, C23, C37 |
 | SEC-008 | Tunnel user can open a shell, sftp or other forwards | `lockdown` hop fails, exit 14 | C53 |
-| SEC-009 | Connection flood or slow client exhausts the home machine | `503` past 256 relays, timeouts close stalled sockets | C17, C18, C19, C24 |
+| SEC-009 | Connection flood or slow client exhausts the home machine | `503` past 256 relays, timeouts close stalled sockets | C17, C18, C19, C24, C63 |
 
 ## Test policy
 
@@ -287,4 +290,4 @@ Cost: about 62 tests in 9 files, all `bun test`; SSH tests use an in-process `ss
 - state transitions: C25, C26, C27, C28, C32
 - observability: C37, C43, C61 - state and hop results are the observable surface; no metrics in v0.1
 - deploy compatibility: n/a - first release; schema `version: 1` in config and state allows later migration
-- performance budget: C19, C24 - relay cap and idle timeout bound memory and sockets; no throughput target in v0.1
+- performance budget: C19, C24, C63 - relay cap and idle timeout bound memory and sockets; no throughput target in v0.1
