@@ -49,6 +49,7 @@ None - no stored-data shape change beyond two new local JSON files, whose litera
 | `social-tunnel doctor` | `--config <path>`, `--json`, `--domain <host>` | `{ok, command, configPath, hops: [{hop, ok, skipped, detail, fix}]}` | exit 0 all pass, 2 config/key, 10 unreachable/auth/egress, 11 forward refused, 12 domain refused, 13 host key mismatch, 14 lockdown failed |
 | any verb, `--help`, `--version` | unknown verb or flag | usage on stderr | exit 2 for unknown input, 0 for help/version |
 | proxy over a forwarded channel | `CONNECT host:443 HTTP/1.1` | relayed bytes | `200 Connection Established`, `400`, `403`, `405`, `408`, `502`, `503`, `504` |
+| `--json` reason and error codes | - | `state.json` / `status` `reason`: `host_key_mismatch`, `port_blocked`, `connection_lost`, `auth_failed` (server refused the key; retried with backoff), `stale`; `error.code`: `config_invalid`, `key_permissions`, `key_unreadable` (key file missing or unreadable), `key_invalid` (not an unencrypted SSH private key), `already_running`, `internal` | `key_*` and `config_invalid` exit 2; `auth_failed` leaves `run` retrying and `status` at exit 10 |
 
 ## Landing
 
@@ -106,6 +107,7 @@ The proxy handler, given a forwarded stream, relays only allowlisted `host:443` 
 46. The system SHALL send refusal responses with a fixed body that names no resolved address
 47. IF a relay carries no bytes in either direction for 300 s THEN the system SHALL close both sides
 58. The system SHALL ship these defaults: request-head timeout 10 s, DNS and connect timeout 10 s, relay idle timeout 300 s, relay cap 256, keepalive 15 s with 3 misses, state heartbeat 30 s, stale threshold 90 s
+61. The relay cap of criterion 16 SHALL count a channel from the moment it opens, so a channel still sending its request head holds a slot and the next channel past 256 gets `503 Service Unavailable` (added after verification round 1; clarifies 16)
 
 **Independent test:** feed the handler in-memory duplex streams with allowed, refused, IP-literal, private-resolving, malformed and oversized requests; assert status lines and that refused cases made no lookup or connection.
 
@@ -129,6 +131,7 @@ The home machine keeps a reverse tunnel to the server and records connected, los
 26. WHEN `run` receives SIGINT or SIGTERM THEN the system SHALL cancel the forward, close the connection, write state `stopped` and exit 0
 27. IF `state.json` names a live pid other than its own with a state other than `stopped` THEN `run` SHALL exit 2 with error code `already_running`
 57. WHEN `run --json` exits after its config and key loaded THEN it SHALL print one JSON object `{ok, command: "run", state, reason}` on stdout, and its log lines SHALL go to stderr only
+60. IF the `state.json` of criterion 27 has an `updatedAt` older than the 90 s of criterion 51 THEN `run` SHALL treat it as not running and start, because the pid may have been reused after a crash (added after verification round 1; clarifies 27)
 28. The system SHALL write no private key material and no passphrase to stdout, stderr, `state.json` or `--json` output
 
 **Independent test:** start `run` against an in-process `ssh2` test server; kill the server, watch `state.json` go `connected` -> `disconnected` -> `reconnecting` -> `connected`; present a wrong host key and see exit 13.
@@ -165,6 +168,7 @@ The user or an agent learns which hop failed and what to do about it.
 52. WHEN the `ssh_auth` hop connects THEN the system SHALL verify the host key exactly as criterion 19 does, through the same connect path as `run`
 53. WHEN the `lockdown` hop runs THEN the system SHALL, as the tunnel user, try a shell session, an `sftp` subsystem, a local forward to `127.0.0.1:22` and a remote forward on `127.0.0.1:<remotePort + 1>`, and fail naming each attempt the server allowed
 54. WHEN `keyPath` names a file matching `~/.ssh/id_*` THEN the `key` hop SHALL pass with a detail advising a dedicated tunnel key
+59. WHEN the `lockdown` hop runs THEN the system SHALL also request a shell without a PTY and an `exec`, each carrying a probe command, and fail naming either when the server runs the command; a granted request whose forced command runs instead does not count as allowed (added after verification round 1; extends 53)
 
 **Independent test:** run `doctor --json` against the in-process test server with a good setup, a wrong host key, a refused forward and an unlisted `--domain`; assert hop list and exit code.
 
@@ -182,10 +186,10 @@ The user or an agent learns which hop failed and what to do about it.
 | ID | Slice | Criteria | Status |
 | --- | --- | --- | --- |
 | CFG-01 | S1 | 1, 2, 3, 4, 5, 6, 55, 56 | Done |
-| PRX-01 | S2 | 7-17, 44, 45, 46, 47, 58 | Done |
-| TUN-01 | S3 | 18-28, 48, 49, 50, 57 | Done |
+| PRX-01 | S2 | 7-17, 44, 45, 46, 47, 58, 61 | Done |
+| TUN-01 | S3 | 18-28, 48, 49, 50, 57, 60 | Done |
 | STA-01 | S4 | 29-34, 51 | Done |
-| DOC-01 | S5 | 35-41, 52, 53, 54 | Done |
+| DOC-01 | S5 | 35-41, 52, 53, 54, 59 | Done |
 | CLI-01 | S6 | 42, 43 | Done |
 
 ## Security Surfaces
