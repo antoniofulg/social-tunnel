@@ -6,7 +6,7 @@ Build: `taskpolicy -b nice -n 10 bun run typecheck`
 Run unit: `env -u CLAUDECODE taskpolicy -b nice -n 10 bun test`
 Plan: `.specs/features/cli-core/plan.md`
 
-77 checks in 6 slices (ids C1-C78; C57 unused; C64-C69 added after verification round 1, C70-C78 after deep review round 1) · 8 one-way doors · 2 open, of which 0 block
+83 checks in 6 slices (ids C1-C84; C57 unused; C64-C69 added after verification round 1, C70-C78 after deep review round 1, C79-C84 after round 2) · 8 one-way doors · 2 open, of which 0 block
 
 Test names start with the check id in brackets, so `bun test` prints `(pass) [C<n>] ...`. Each id has exactly one test. `CLAUDECODE` is unset because Bun hides per-test pass lines when it is set.
 
@@ -50,7 +50,7 @@ Proof: run unit | (pass) [C72]
 
 ### S2 - Only allowlisted HTTPS hosts leave through the home IP
 
-Complete: C8-C24, C63, C65, C69, C70 - proofs green; C58 needs the S3 `run` and is marked there
+Complete: C8-C24, C63, C65, C69, C70, C79-C82 - proofs green; C58 needs the S3 `run` and is marked there
 
 **C8** - With `instagram.com` allowlisted, `CONNECT instagram.com:443`, `www.instagram.com:443`, `WWW.Instagram.COM:443` and `instagram.com.:443` each get `HTTP/1.1 200 Connection Established` and bytes flow both ways (PRX-01, AC 7)
 Proof: run unit | (pass) [C8]
@@ -118,9 +118,21 @@ Proof: run unit | (pass) [C69]
 **C70** - An 8 MiB response whose origin closes right after sending arrives byte-exact (same length and SHA-256) at a client of the forwarded port, through the in-process tunnel, in each of 6 consecutive relays (PRX-01, AC 7, 66)
 Proof: run unit | (pass) [C70]
 
+**C79** - With 200 KiB already handed to an upstream that takes one chunk every 2 ms, the client closing first still leaves the upstream with all 204800 bytes and a finished write side before it is closed (PRX-01, AC 66)
+Proof: run unit | (pass) [C79]
+
+**C80** - With the client gone and an upstream that never completes a write but keeps sending, the upstream is not closed at a third of the idle timeout and is closed within three idle timeouts (PRX-01, AC 47, 66)
+Proof: run unit | (pass) [C80]
+
+**C81** - A channel that closes while its DNS lookup is pending causes zero connections when the lookup then answers; the same lookup answered on an open channel connects once (PRX-01, AC 8-12)
+Proof: run unit | (pass) [C81]
+
+**C82** - A relay carrying bytes only client-to-upstream, and separately only upstream-to-client, stays open for three idle timeouts and closes once quiet (PRX-01, AC 47)
+Proof: run unit | (pass) [C82]
+
 ### S3 - `run` holds the tunnel open and reports every state change
 
-Complete: C25-C33, C35-C37, C59, C61, C66, C67, C71, C78 and C58 (S2) - proofs green; C34 covers two `doctor` paths and is marked with S5
+Complete: C25-C33, C35-C37, C59, C61, C66, C67, C71, C78, C83 and C58 (S2) - proofs green; C34 covers two `doctor` paths and is marked with S5
 
 **C25** - Against an in-process SSH server, the tunnel authenticates with the key, requests `tcpip-forward` on `127.0.0.1:<remotePort>`, and `state.json` goes `connecting` -> `connected` (TUN-01, AC 18, 20)
 Proof: run unit | (pass) [C25]
@@ -179,6 +191,9 @@ Proof: run unit | (pass) [C71]
 **C78** - `sanitize` removes ESC, BEL, DEL, U+009B, U+200B, U+200E, U+200F, U+202A, U+202E, U+2028, U+2029, U+2066, U+2069 and U+FEFF, and leaves accented and CJK text unchanged (TUN-01, AC 50, 70)
 Proof: run unit | (pass) [C78]
 
+**C83** - `sanitize` removes U+00AD, U+061C, U+2060-U+2064, U+E0000, U+E0001, U+E0041 and U+E007F, and keeps U+00AC, U+00AE, U+061B, U+061D, U+205F, U+E0080 and U+1F600 (TUN-01, AC 71)
+Proof: run unit | (pass) [C83]
+
 ### S4 - `status` answers in one call
 
 Complete: C38-C44, C73 - proofs green
@@ -209,7 +224,7 @@ Proof: run unit | (pass) [C73]
 
 ### S5 - `doctor` names the broken hop and its fix
 
-Complete: C45-C54, C62, C64, C74-C76 and C34 (S3) - proofs green
+Complete: C45-C54, C62, C64, C74-C76, C84 and C34 (S3) - proofs green
 
 **C45** - Hops run in order `config, key, server_reachable, ssh_auth, forward, lockdown, egress`; after a `server_reachable` failure the later hops have `ok: false`, `skipped: true` and an empty `fix` (DOC-01, AC 35, 36)
 Proof: run unit | (pass) [C45]
@@ -266,6 +281,9 @@ Proof: run unit | (pass) [C55]
 **C56** - With stdin held open and never written, `status` and `run` with an invalid config and `doctor` with a valid config against the in-process server each exit within 5 s; an unexpected exception exits 1 with `error.code` `internal` (CLI-01, AC 43; door 1)
 Proof: run unit | (pass) [C56]
 
+**C84** - The `lockdown` hop's fix contains `AllowStreamLocalForwarding no` (DOC-01, AC 72)
+Proof: run unit | (pass) [C84]
+
 **C77** - `status` without `--json` prints `state`, `since`, `retry at`, `server`, `remote port` and `domains` lines with an escape character in `reason` removed and exits 10 for `disconnected`; `doctor` without `--json` prints `ok`, `FAIL` with its `fix`, and `skip` lines and exits 2 for a 0644 key (STA-01, DOC-01, AC 29, 36)
 Proof: run unit | (pass) [C77]
 
@@ -312,9 +330,10 @@ Proof: run unit | (pass) [C77]
 | SEC-004 | Something on the home machine or LAN reaches the proxy without the tunnel | No listening socket exists | C20, C58, C35, C67 |
 | SEC-005 | Server presents a different host key (MITM) | No auth sent, exit 13 on `run` and `doctor` | C26, C51 |
 | SEC-006 | Private key leaks through output, logs or state | No key line in any captured output | C6, C34 |
-| SEC-007 | Malformed or smuggled CONNECT head | `400`/`405`/`408`, trailing bytes never parsed | C16, C17, C21, C22, C23, C37, C74, C78 |
-| SEC-008 | Tunnel user can open a shell, sftp or other forwards | `lockdown` hop fails, exit 14 | C53, C64, C75, C76 |
-| SEC-009 | Connection flood or slow client exhausts the home machine | `503` past 256 relays, timeouts close stalled sockets | C17, C18, C19, C24, C63, C69 |
+| SEC-007 | Malformed or smuggled CONNECT head | `400`/`405`/`408`, trailing bytes never parsed | C16, C17, C21, C22, C23, C37 |
+| SEC-008 | Tunnel user can open a shell, sftp or other forwards | `lockdown` hop fails, exit 14 | C53, C64, C75, C76, C84 |
+| SEC-009 | Connection flood or slow client exhausts the home machine | `503` past 256 relays, timeouts close stalled sockets | C17, C18, C19, C24, C63, C69, C80, C82 |
+| SEC-010 | Server-, request- or config-supplied text carries terminal control characters or shell syntax into output a person or agent acts on | Characters stripped; printed commands quoted | C37, C74, C78, C83 |
 
 ## Test policy
 
@@ -334,12 +353,12 @@ Evidence:
 - `src/tunnel.ts` (planned): 6 states, 7 backoff steps -> decides
 - closest analogue in the repo: none - first code in the repository
 
-Cost: about 77 tests in 10 files, all `bun test`; SSH tests use an in-process `ssh2` server, network tests use injected resolvers and dialers, so the suite needs no internet and no sshd.
+Cost: about 83 tests in 10 files, all `bun test`; SSH tests use an in-process `ssh2` server, network tests use injected resolvers and dialers, so the suite needs no internet and no sshd.
 
 ## Swept
 
 - validation: C2, C3, C4, C5, C21, C60, C68, C72
-- failure modes: C18, C27, C28, C59, C70, C71
+- failure modes: C18, C27, C28, C59, C70, C71, C79, C80, C81
 - idempotency: n/a - no request is retried by this tool; a reconnect re-requests the forward, covered by C28
 - authorization: C9, C10, C11, C14, C35, C53, C64, C65, C67, C75, C76
 - concurrency: C19, C33, C66, C69

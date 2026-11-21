@@ -138,6 +138,7 @@ The home machine keeps a reverse tunnel to the server and records connected, los
 60. IF the `state.json` of criterion 27 has an `updatedAt` older than the 90 s of criterion 51 THEN `run` SHALL treat it as not running and start, because the pid may have been reused after a crash (added after verification round 1; clarifies 27)
 62. IF the server refuses the key THEN the system SHALL write state `disconnected` with reason `auth_failed` and the next `retryAt`, and retry with the delays of criterion 23 (added after deep review round 1; records behaviour shipped in S3)
 70. The control characters of criterion 50 SHALL include zero-width and bidirectional format characters (U+200B-U+200F, U+2028-U+202E, U+2066-U+2069, U+FEFF) (added after deep review round 1)
+71. The characters of criterion 70 SHALL also include U+00AD, U+061C, U+2060-U+2069 and the tag characters U+E0000-U+E007F (added after deep review round 2)
 28. The system SHALL write no private key material and no passphrase to stdout, stderr, `state.json` or `--json` output
 
 **Independent test:** start `run` against an in-process `ssh2` test server; kill the server, watch `state.json` go `connected` -> `disconnected` -> `reconnecting` -> `connected`; present a wrong host key and see exit 13.
@@ -179,6 +180,7 @@ The user or an agent learns which hop failed and what to do about it.
 64. The probe command of criterion 59 SHALL be one that sh, bash, zsh, fish and tcsh all evaluate, and whose evaluated output does not occur in the command text (added after deep review round 1)
 65. The local-forward attempt of criterion 53 SHALL target the server's own SSH port (`server.port`) and count a "connect failed" answer as allowed, and the remote-forward attempt SHALL try `<remotePort + 2>` when `<remotePort + 1>` is refused, because a refusal on one port can mean the port is taken (added after deep review round 1; refines 53)
 67. Every `fix` that is a runnable command SHALL quote paths for a POSIX shell, the `config` hop's fix for a missing or non-JSON file SHALL say to create it, and the `lockdown` fix SHALL name a restriction for each access it probes, including `PermitOpen none` for local forwards (added after deep review round 1)
+72. The `lockdown` fix of criterion 67 SHALL also name `AllowStreamLocalForwarding no` (added after deep review round 2)
 
 **Independent test:** run `doctor --json` against the in-process test server with a good setup, a wrong host key, a refused forward and an unlisted `--domain`; assert hop list and exit code.
 
@@ -197,9 +199,9 @@ The user or an agent learns which hop failed and what to do about it.
 | --- | --- | --- | --- |
 | CFG-01 | S1 | 1, 2, 3, 4, 5, 6, 55, 56, 68, 69 | Done |
 | PRX-01 | S2 | 7-17, 44, 45, 46, 47, 58, 61, 66 | Done |
-| TUN-01 | S3 | 18-28, 48, 49, 50, 57, 60, 62, 70 | Done |
+| TUN-01 | S3 | 18-28, 48, 49, 50, 57, 60, 62, 70, 71 | Done |
 | STA-01 | S4 | 29-34, 51, 63 | Done |
-| DOC-01 | S5 | 35-41, 52, 53, 54, 59, 64, 65, 67 | Done |
+| DOC-01 | S5 | 35-41, 52, 53, 54, 59, 64, 65, 67, 72 | Done |
 | CLI-01 | S6 | 42, 43 | Done |
 
 ## Security Surfaces
@@ -287,3 +289,4 @@ The user or an agent learns which hop failed and what to do about it.
 - Revision after criteria review (2026-11-21): settled contradictions and ambiguities the reviewer found (criteria 2, 6, 7, 11, 15, 30, 33, 35, 36, 40, 44, 51 clarified; 56 and 57 added; `skipped` added to the doctor hop shape). No capability added or removed; reported to the user for objection
 - Revision after verification round 1 (2026-11-21): criteria 59 (lockdown also probes a shell without a PTY and `exec`, counting only an evaluated marker), 60 (a stale `state.json` does not block `run`) and 61 (a channel holds a relay slot from open) appended to close verifier findings F1, F3 and F7; reported to the user in the coordinating chat. No capability added or removed
 - Revision after deep review round 1 (2026-11-21): criteria 62-70 and one Surface row appended for the defects in `.wtk-deep-review/cli-core/review.md`. Approver: none recorded. This revision and the two above were directed by the coordinating agent and reported to the user; the user's recorded approval covers only the revision named under "Reviewed revision"
+- Revision after deep review round 2 (2026-11-21): criteria 71 and 72 appended. Approver: none recorded; directed by the coordinating agent
