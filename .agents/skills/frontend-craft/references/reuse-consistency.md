@@ -1,0 +1,266 @@
+# Reuse and consistency
+
+Read before implementing a page or component, or when checking consistency
+across equivalent interfaces.
+
+## Select a precedent by responsibility
+
+Start with current user requirements and governing project contracts, then the
+matching page family and domain flow. Inspect at least the nearest actual use
+and its implementation; expand to other consumers when ownership or variation
+is unclear. A marketing hero is not a dashboard-header precedent.
+
+Check local reuse policy, if present, instead of creating a competing policy.
+Find semantic equivalents through domain terms, labels, importers, and handlers.
+Compare inputs, outputs, behavior, state ownership and runtime boundaries before
+declaring an implementation interchangeable.
+
+Choose the first suitable option:
+
+1. Reuse the existing domain component and its intended variant.
+2. Compose the existing shell, primitives and shared patterns as established.
+3. Extend the owning component for a genuine missing requirement; inspect its
+   consumers and preserve their contracts.
+4. Create a new owner when existing ones cannot meet the requirement. Explain
+   the mismatch and the scope of the new responsibility.
+
+Match the project's construction order when it has one. Do not introduce a
+generic primitive to bypass a richer domain component, or extract a universal
+abstraction merely because two pages look similar.
+
+Do not hand-roll a solved problem: focus-trapped dialogs, menus and popovers,
+toasts, command palettes, animated numbers and long-list virtualization carry
+accessibility and edge-case work that an installed, maintained library already
+does. Check the installed dependencies and existing owners first and recommend
+one option, not a menu; flag a competing library already installed instead of
+adding a third. Choose by accessibility handled, maintenance, bundle cost and
+fit with the project's styling, and say when a need falls outside what the
+known libraries cover.
+
+### Same setting, same control
+
+Search for every place that edits the same setting, not only the same page
+family: onboarding, admin create/edit, settings and bulk editors are siblings
+for that field. Reuse one shared control for the setting everywhere it is
+edited; preset chips in one place and a bare number input in another is a
+defect. Why: users learn a setting once, and two controls drift in validation,
+units and allowed values.
+
+A shared preset control always offers the domain's "no limit" or empty choice
+when the setting allows one, and shows a current value that falls outside the
+presets (45 min among 30/60/90) as selected instead of hiding it.
+
+Check: search the codebase for the setting's field name, schema key and label.
+Every editor uses the same control, and an off-preset stored value renders as
+selected.
+
+## Keep shared decisions in their owner
+
+Recurring appearance follows the same ownership rule as behavior: consume the
+shared component or style recipe and its tokens rather than copying its utility
+bundle into each page. Use its supported variants for intentional differences.
+Apply the [ownership contract](shared-ui-patterns.md#ownership-contract) when
+introducing a pattern or resolving an override. For a requested application-wide
+reuse audit or consolidation, use that reference's full workflow; ordinary page
+work stays within its relevant family and affected consumers.
+For a requested visual change across consumers, follow
+[change a shared style](shared-ui-patterns.md#change-a-shared-style) to select
+the owner at the intended scope and check its variants and propagation.
+
+Interactive elements look interactive: each has hover, active and
+`focus-visible` states. Build them from the design system's button, link or
+control with its variant and size. A raw `<button>` or `<a>` with a custom class
+usually lacks those states, and restyling classes on the shared Button bypass
+its states the same way; add or reuse a variant or size instead. Why: a control
+without hover and focus feedback reads as static text, and keyboard users lose
+their place. Check: search the changed scope for raw interactive elements and
+class overrides on the shared control; hover, press and tab to each one.
+
+## Compare the whole pattern
+
+| Surface | Compare with the matching family |
+| --- | --- |
+| Page shell | Content bounds, gutters, navigation, scrolling and responsive structure |
+| Header | Heading semantics, font/token source, size/weight, spacing, breadcrumbs and actions |
+| Supporting text | Whether subtitle/eyebrow/help exists, its purpose, placement and terminology |
+| Controls | Domain component, variants, selection/display behavior, validation and feedback |
+| Collections | Density, formatting, filters, sorting, selection, pagination and empty states; use the [collection contract](components.md#collections-sorting-and-selection) for query and selection scope |
+| State feedback | Loading, pending, success, failure, recovery, permission and disabled behavior |
+
+Inspect wrappers, class/style overrides and caller props, even when every page
+imports the same component. Prefer correcting the owner when the defect is
+systemic; avoid a leaf override that disguises an owner-level mismatch.
+
+Descriptions are content decisions. Add one when the requirement or established
+family calls for explanatory content, not as a decorative completion of a header.
+Use the same name for the same action throughout a flow; distinguish actions
+with different consequences even when their buttons share styling.
+
+For the requested journey, trace handoffs and supported return/resume paths over
+time. Compare equivalent actions by object/scope, commitment point, resulting
+state and recovery, not appearance alone. Keep status, offer and
+[limit meanings](interaction-accessibility.md#limits-and-unavailable-states)
+consistent with their owners. Explain legitimate changes of authority, policy or
+outcome on return rather than retaining stale promises. Exercise transitions via
+the existing [navigation/draft contract](interaction-accessibility.md#navigation-and-draft-resilience).
+Preserve meaningful family variants; this scoped comparison does not require a
+whole-product audit or new synchronization/persistence infrastructure.
+
+## Compare variants when direction is open
+
+When the user has not decided how a component should work, build a small set of
+genuinely different variants rather than one guess. Diverge on a named axis:
+layout, density, interaction model or motion. Two variants that differ only in
+color or copy are one variant. Each variant works fully with realistic content;
+a mock-up with placeholder text hides the differences that matter.
+
+View one variant at a time, at full size, inside the real page or a scratch
+surface that reproduces its context; side-by-side thumbnails distort density and
+hide interaction. Switch between them instantly (number or arrow keys outside
+text fields, a URL parameter that survives reload) so the comparison stays in
+working memory. For each, state when it wins and what it costs: a short table,
+not a verdict. After the user picks, a second round can diverge around that
+choice. Promote the chosen variant into the real owner and delete the others and
+the switcher; the scratch surface follows the
+[harness lifecycle](review.md#stress-a-real-component). Page-level compositions
+follow [compare compositions](commercial-visuals.md#compare-compositions-when-direction-is-open).
+
+## Prototype with production components
+
+When the project has a component library, a concept or prototype renders the
+real views, not look-alike markup. Why: a prototype made of its own markup
+drifts from the product, so approval says little about what will ship. Use the
+preview tool the project already has (Storybook, an installed prototype
+gallery, or a route or page of the app itself); this skill ships none. With
+none, use the temporary harness rules in
+[stress a real component](review.md#stress-a-real-component), which also cover
+read-only reviews and servers.
+
+**Pick a kind.** A *component prototype* uses only library and view
+components, with no raw markup; layout a view lacks belongs in the view or in a
+primitive. An *exploratory draft* may use free markup with tokens, for
+direction before a view exists. When a draft is approved, build the real view,
+rewrite it as a component prototype under the same name so comments and links
+survive, keep equivalent states, say which state the real view cannot express,
+and delete the draft.
+
+**Render a pure view.** A view takes data and callbacks as props. When the one
+you need is bound to queries, stores, preload or OS menus, first split a pure
+view out of the container without changing behavior, and keep the container as
+the production entry. Import leaf components directly, since a barrel can
+re-export hooks that reach the network.
+
+**Fixtures and isolation.**
+- Typed fixtures live with the owning module and are shared with its stories,
+  never copied. Builders default to inert handlers; stories can pass logging
+  ones.
+- A prototype makes no network or API calls. A guard that rejects such imports
+  is fixed in the code, never loosened.
+- The production build must never include prototype code. Check the build
+  fails or omits it, and keep imports of it out of application source.
+
+**Declare states.** A prototype lists the states it shows (populated, empty,
+loading, error, permission denied, long content), and each is reachable. The
+declared list feeds the [stress test](review.md#stress-a-real-component) and
+the [binding comparison](review.md#compare-a-render-with-a-binding-design),
+which judges only drawn states. A state the production view cannot express is
+noted, not faked. A prototype of an implemented surface follows
+[redesign parity](review.md#prove-redesign-parity).
+
+**Journeys.** To show a flow, link states with edges. Name each edge by the
+exact text of the real button or link that causes it, so a reviewer can find it
+in the product. Each state is reachable from the start, and a state with no
+exit is marked as an end. Report states no journey reaches as a gap, not a
+failure.
+
+**Feedback and approval.** Give meaningful regions and controls stable ids so
+comments name them precisely and survive edits; refine the same files in place.
+People approve a direction; an agent applies comments and never approves.
+Reviewed in a browser, each state also opens top-level; see
+[review states top-level](#review-states-top-level).
+
+**Honest content.** Label illustrative data as illustrative. Never invent
+sources, endorsements, metrics or backend guarantees, and use the correct asset
+for a named real person, product or brand, or label a placeholder.
+
+Check: every prototype state is declared and renders from a shared fixture, a
+component prototype contains no raw markup, nothing in the production build
+imports it, and a preview of each state was inspected, or the report says it
+could not be.
+
+### Review states top-level
+
+A gallery that frames each state in an iframe applies real media queries at
+preset widths, but element-level annotation tools (browser annotators, DevTools
+pickers, Orca's Annotate) cannot reach elements inside a frame, so feedback falls
+back to screenshots. Build the following by default when people review a
+prototype in a browser.
+
+- **A stable top-level URL per state.** Keep the selection in the URL
+  (prototype, state, theme, input density, story step). The same parameters plus
+  a frame flag render one state alone with the real components and shell. The
+  gallery keeps its iframe for side-by-side size comparison and links to that
+  URL; both URLs carry the story step.
+- **One small review overlay, top-level only.** When the state is the top window
+  (`window.self === window.top`), add a collapsible pill that covers no primary
+  action: position (n/N) and title, and previous/next through the story steps
+  when following a story, otherwise through the screen's states. ←/→ do the
+  same outside text fields. Expanded, it shows the step's story and what to
+  evaluate, a state picker (which leaves the story), and theme and touch/mouse
+  toggles. Hide it inside the gallery frame.
+- **Be honest about viewport.** Without an iframe the width is the window's, and
+  it cannot be emulated. Show the current width, the layout it maps to and the
+  preset widths, and tell the reviewer to resize the pane.
+- **A guided story for flows.** Chapters of steps, each pointing at an existing
+  state with its story text and what to evaluate, walk the reviewer end to end.
+  Drop and report a step whose state no longer resolves.
+
+**Apply batched annotations.** The reviewer annotates many elements and sends
+them at once. Read the batch from the tool (Orca:
+`orca tab annotations --page <id> --json`, with the id from
+`orca tab list --json`) or from a pasted feedback list giving selector, intent,
+text and note per item. Answer every item as applied, question or declined with
+a reason, make the changes in the owning files, then reopen each affected state
+top-level in a browser and inspect it. The agent cannot operate the reviewer's
+annotation UI itself: claim that annotation reaches the elements only once the
+reviewer confirms it or their notes come back, and otherwise report it as
+unverified.
+
+Check: every state opens top-level at a stable URL with no frame around it, the
+overlay is absent inside the gallery and states the width it cannot emulate,
+arrow keys move between steps or states, and every annotation has an answer.
+
+## Exceptions and evolution
+
+For conversion, activation, monetization or retention work, apply the objective
+and precedence in [commercial strategy](commercial-strategy.md). A diagnosed
+decision barrier can justify changing composition or flow within the authorized
+scope. Explain the commercial hypothesis and validation; preserve compatible
+owners rather than reproducing a weak pattern merely for visual consistency.
+
+Consistency permits purposeful variants: dense operational lists, explanatory
+onboarding, or destructive confirmation can have different needs. Name the
+trigger and owner of the difference. Distinguish a required correction from an
+optional extraction or aesthetic preference.
+
+An existing accessibility or behavior defect is not a standard to reproduce.
+Use a compliant existing alternative or a scoped owner correction, and explain
+the necessary difference. Preserve unrelated appearances and workflows.
+
+Explicit redesign changes the visual authority for its approved scope. Retain
+compatible domain behavior and composition; do not let the old map silently
+override the new direction. Before redesigning or replacing an existing form or flow, prove
+[redesign parity](review.md#prove-redesign-parity). Refresh affected map
+entries after implementation.
+
+## Prove the result
+
+Compare source composition and render relevant sibling pages under corresponding
+states, viewport, theme, and realistic content. Inspect both the changed use and
+representative consumers of changed shared owners. State the selection and gaps;
+a snapshot of one page proves nothing about unvisited siblings.
+
+For a finding, cite both locations, the common responsibility, the concrete
+difference, its user/maintenance consequence, and the smallest owner-level fix.
+If rendering is unavailable, report source facts and precise visual checks still
+needed. Reuse the project's existing captures/checks when their inputs remain valid.

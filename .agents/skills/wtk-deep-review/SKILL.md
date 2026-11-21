@@ -1,0 +1,166 @@
+---
+name: wtk-deep-review
+description: "Review diffs, worktrees, or PRs in depth, including spec conformance and requested finding publication. Use for deep review; not fixes, spec edits, or quick feedback."
+argument-hint: "[--pr <reference> | --base <ref> | --staged | --worktree] [--head <ref>] [--files p1,p2] [--spec <path>] [--max-cohort-files N] [--publish] [--full] [--out <dir>]"
+metadata:
+  version: '6.4.0'
+---
+
+# Deep Review
+
+Review with bounded, assertive posture: funnel the diff, discover root/nested project instructions and relevant local skills, plan defect cohorts, fan out reviewers, then merge with complete hunk/rule accounting. For small selections, prefer one defect cohort when current limits permit; extra cohorts need an engine limit or a named independent high-risk boundary recorded before dispatch. Defects require causal evidence and control the verdict; advisories require a concrete improvement and always remain visible.
+
+Steps 1–4 drive an idempotent artifact pipeline under `<out>`: every stage gate is a bundled-script exit 0, valid agent outputs are never re-run, and an interrupted round resumes by re-running the same commands.
+
+`<skill-dir>` below means the directory containing this SKILL.md; run every bundled command from the repo root.
+
+## Inputs (all optional)
+
+| Flag | Meaning | Default |
+| --- | --- | --- |
+| `--pr <reference>` | Resolve PR intent and local base/head refs through the project's selected integration before building the manifest | — |
+| `--base <ref>` / `--head <ref>` / `--staged` | Local diff scope; PR reviews pass resolved refs as base/head | merge-base with the origin default branch; head `HEAD` |
+| `--worktree` | Review uncommitted + untracked work against the base ref (always a full round) | — |
+| `--files <p1,p2>` | Restrict review to these paths | full diff |
+| `--concurrency <n>` | Override repository reviewer concurrency (`1`–`6`) while building the manifest | `.wtk-deep-review.yaml` or `3` |
+| `--spec <path>` | Spec file or directory; its contract-bearing artifacts are available as reviewer context | — |
+| `--max-cohort-files <n>` | Maximum files assigned to one cohort; the ~6,000 changed-line cap still applies | `100` |
+| `--publish` | Post walkthrough + review to the PR | off — local report only |
+| `--full` | Ignore prior state; review the whole diff again | incremental when state exists |
+| `--out <dir>` | Artifact directory | `.wtk-deep-review/<target>/` |
+| `--metrics` | Observe compatible provider usage when an adapter is configured | unavailable without a compatible adapter |
+| `--metrics-db <path>` | Provider telemetry source supplied by an adapter | none |
+| `--metrics-ledger <path>` | Content-safe observational metrics path | `<out>/runs/review-metrics.json` |
+| `--metrics-reviewer-prefix <path>` | Explicit provider reviewer path for the adapter | none |
+
+## Repo config — `.wtk-deep-review.yaml`
+
+Optional repo-root file for review configuration. Top-level keys, all optional:
+
+| Key | Meaning |
+| --- | --- |
+| `concurrency` | Maximum simultaneous reviewer jobs, an integer from `1` through `6`; defaults to `3` and is pinned in `manifest.json` |
+| `path_filters` | Globs over repo-relative paths: `!pat` excludes; bare patterns, when present, restrict review to their matches and beat any exclude; built-in excludes (locks, vendor, generated, snapshots) append unless negated with `!!pat`, for example `!!**/generated/**` |
+| `path_instructions` | `path` glob + verbatim `instructions` entries — the highest-precedence rubric source (Step 2) |
+| `request_changes_workflow` | publish-mode review-event gate |
+
+The manifest builder resolves `path_filters` into manifest.json; the knowledge stage ingests `path_instructions` together with project instructions and skills.
+
+## Hard rules
+
+- Source is read-only and **frozen**: the manifest pins `worktree_snapshot`, and run_jobs.py / render_review.py refuse a drifted checkout. Writes go only to `<out>`, `.wtk-deep-review/` state, and — with `--publish` — the target PR.
+- Cohort planning follows orchestration.md: prefer one defect cohort for small selections when current limits permit; disclose any extra-cohort count and reason before dispatch. Every selected file (or sliced hunk) lands in exactly one cohort, and large selections are never silently truncated.
+- Every defect starts with `Premise → Path → Verdict`; every advisory starts with `Premise → Improvement → Fix`. Investigated rejections remain visible in the suppression ledger.
+- Every selected hunk line receives defect-lane coverage. Every bound rule receives an explicit compliant/violated/not-applicable assessment.
+- Run the repo's linters first and record every overlapping candidate as `linter-overlap` rather than reporting it again.
+- Cite rubric rules verbatim with their source path; severity comes from the taxonomy, never inflated.
+- Publishing needs `--publish` or the user's explicit go-ahead in this session; otherwise the review stays local.
+- Every review ends with a **SHIP / FIX_BEFORE_SHIP / REWORK** verdict derived by render_review.py and stated only after that script exits 0.
+- `FIX_BEFORE_SHIP` is actionable, not a prompt for approval: in an approved loop, follow `../wtk/references/review-rounds.md`: fix every defect from its Repair plan, run the scoped gate, then the remediation check below, until no Critical/Major is open or `stall_attempts` halts.
+- Optional metrics snapshot provider totals and cumulative checkpoints without changing dispatch,
+  retries, outputs, or exits. The main thread records serialized cumulative checkpoints without
+  per-job token attribution; totals finalize only after the full scope completes. Hosts without a
+  compatible adapter record adapter metrics as `unavailable`. When the project's `AGENTS.md` opts
+  into execution metrics, follow [execution metrics](../wtk/references/execution-metrics.md) for
+  local session and worker receipt checks before reporting tokens unavailable. Keep the review
+  running normally.
+- Before reviewer dispatch, follow [agent selection](../wtk/references/agent-selection.md) for the
+  selected `deep_review` role: `verifier`, or `verifier-risk` for risk cohorts. Model and effort
+  come from the role's agent file. Dispatch in the current checkout.
+- Reviewer concurrency is resolved before dispatch: `--concurrency N` overrides `.wtk-deep-review.yaml`, which overrides the default `3`; valid values are `1` through `6`. The resolved value is frozen in `manifest.json`.
+
+## Procedure
+
+**Step 1: Funnel — build the manifest**
+
+1. For a PR request, use the project's selected integration to read its intent and resolve its base/head commits locally. Then run the bundled manifest builder (reads the repo, writes only under `--out`):
+
+   ```bash
+   python3 <skill-dir>/scripts/build_manifest.py --out <out> \
+     [--base REF --head REF | --staged | --worktree] [--files p1,p2] [--full] [--concurrency N]
+   ```
+
+   It resolves repo path filters, detects generated / trivial / renamed files, scopes to the incremental delta when prior state exists, and pins the source-freeze snapshot.
+2. Read the printed summary. The manifest uses the merge-base of the local base/head, so base-only changes stay outside the review. If commits or history are missing, use the project's authorized retrieval procedure before retrying.
+3. Follow the manifest funnel: generated artifacts, review reports, and format-only documentation do not become product-review targets solely because they changed. A requested instruction or documentation contract remains selected and carries bounded rule/conformance context into Step 2.
+
+*Done when:* `<out>/manifest.json` exists, every changed file is accounted for as selected, ignored(reason), or skipped(reason), and every selected file carries its hunk list (the units of judgment and the publish anchors).
+
+**Step 2: Knowledge + plan — project rules, cohorts, walkthrough**
+
+1. STOP. Read `<skill-dir>/references/context-pack.md` and `<skill-dir>/references/taxonomy.md` in full before extracting rules or defining reviewer lanes. Follow context-pack.md's metadata-first source screen before opening candidate bodies. Run the bootstrap helper (reads the repo, writes only under `<out>`):
+
+   ```bash
+   python3 <skill-dir>/scripts/build_knowledge.py --out <out>
+   ```
+
+   Apply the metadata-first screen: classify each source as applicable or unrelated before opening its body; read every applicable source body in full, inspect ambiguous sources instead of skipping them, and give unrelated sources a concrete not-applicable reason. Read route-required and task/path-applicable references of applicable project skills in full; screen ambiguous direct references and record exclusions. Write `<out>/rules.json` with every source marked applied or not-applicable, then extract verdict-bearing rules verbatim with scope globs. Assemble `<out>/context-pack.md` and run/fold the detected linter lanes.
+2. Read `<skill-dir>/references/orchestration.md` (cohort rules, sweep triggers) and `<skill-dir>/references/output-contracts.md` (walkthrough anatomy, effort scale) in full. Write `<out>/plan.json` using orchestration.md's bounded cohort policy and existing per-cohort caps. Add only opt-in sweeps whose triggers clearly fire, and record any extra-cohort count/reason in `<out>/walkthrough.md` before dispatch.
+3. Run the bootstrap plan gate (reads repo artifacts, writes only under `<out>`):
+
+   ```bash
+   python3 <skill-dir>/scripts/build_jobs.py --out <out> \
+     [--max-cohort-files N]
+   ```
+
+   It rejects incomplete source accounting and over-split plans, proves defect ownership, injects bound rules into every cohort and sweep, and materializes `<out>/jobs.json`. Test-adequacy and spec-parity proof remain Technical Verifier responsibilities.
+
+*Done when:* build_jobs.py exits 0, every discovered source has an audited decision in rules.json, context-pack.md lists applied source/rule and linter outcomes without copying the full registry, and walkthrough.md satisfies its contract.
+
+**Step 3: Fan-out — parallel review**
+
+Execute `<out>/jobs.json` through the project-selected host dispatch or external command, following the engine contract loaded in Step 2. For an external command, read `<skill-dir>/references/subagent-runtimes.md` in full before execution. Completion is engine-independent — re-dispatch whatever is listed as pending/invalid until exit 0:
+
+```bash
+python3 <skill-dir>/scripts/run_jobs.py --out <out> --validate-only
+```
+
+*Done when:* run_jobs.py `--validate-only` exits 0 — every cohort and sweep output matches the schema and completely accounts for assigned hunks and rules. Execute materialized jobs with the bounded concurrency pinned in the manifest, keeping retries inside their worker slot; refill slots after completion, stop refilling after a provider block, and preserve manifest-order status.
+
+**Step 4: Merge + report**
+
+Run the bootstrap merger, mutating state/report renderer, and bootstrap HTML hydrator:
+
+```bash
+python3 <skill-dir>/scripts/merge_findings.py --out <out>
+python3 <skill-dir>/scripts/render_review.py --out <out> [--rework "<structural rationale>"]
+python3 <skill-dir>/scripts/render_html.py --out <out>
+```
+
+merge_findings.py emits `<out>/findings.json` plus `<out>/review-stats.json`, deduplicates both result classes, reconciles rounds, and fails unless every selected hunk line has defect coverage. render_review.py derives the verdict from defects only. render_html.py shows defects, advisories, suppressions, and coverage separately in `<out>/review.html`.
+
+Use the project's selected reporting interface when one is adopted; report defects first and every advisory afterward. The user-facing summary states the verdict, defect/advisory counts, every Critical/Major defect, coverage status, and artifact paths.
+
+*Done when:* render_review.py and render_html.py exit 0 and the final message states the verdict, every Critical and Major defect, and the review.html path.
+
+**Step 5: Publish (only with `--publish`)**
+
+1. Read `<skill-dir>/references/publishing.md` in full. Use the project's authorized integration to upsert the walkthrough, publish every anchorable in-diff defect and advisory inline, keep unanchorable/outside-diff results in the body, and update resolved prior-round comments.
+
+*Done when:* the PR shows the updated walkthrough and the new review, and both URLs are cited in the final message.
+
+**Step 6: Learnings**
+
+1. state.json was already written at Step 4. When the user — or a PR reply — rebuts or dismisses a result, read `<skill-dir>/references/state-and-learnings.md` in full, distill the correction into `.wtk-deep-review/learnings.md`, and mark that fingerprint `dismissed` in the state ledger.
+
+*Done when:* every user correction from the session is captured as a learning or explicitly declined.
+
+## Incremental rounds
+
+With prior state (or fingerprints recovered from the PR thread), Step 1 scopes to commits since the last reviewed head and archives the prior round's artifacts under `<out>/rounds/`. Step 2 emits one defect-lane remediation job whose prompt requires one evidence-bearing `prior_findings` disposition per open prior fingerprint; absence never resolves it. Unresolved prior results re-surface once under Duplicates; dismissed fingerprints stay suppressed; resolved ones receive a resolution update in publish mode. `--full` reviews the whole diff again. Each round's Step 4 regenerates `<out>/review.html`, so a browser tab left open on it tracks the rounds by itself.
+
+## Error handling
+
+- A selected PR integration is unavailable or unauthorized → retain the local report and name the missing access or capability; do not silently change the integration.
+- A selected execution engine cannot run the selected role → stop the affected dispatch and name the missing role.
+- External command failure (model not available, missing/invalid output file, non-zero exit) → apply the failure handling loaded in Step 3.
+- Empty selection after the funnel → report "nothing reviewable" with the manifest counts; write no findings.
+- A linter lane unavailable → proceed and state in review.md that overlap suppression did not run for that lane.
+- A bootstrap gate failing (build_manifest.py, build_knowledge.py, build_jobs.py, merge_findings.py) → stop and surface stderr. Missing knowledge accounting or incomplete defect coverage is a review failure, not a warning.
+- run_jobs.py exit 2 (blocked) → a provider limit interrupted the fan-out; valid outputs are preserved and `<out>/run-blocker.json` lists the pending jobs — resume by re-running the same command once the limit clears. The default pattern, `usageLimitExceeded`, is one host's signal; providers that signal limits differently need their own `--block-on` patterns.
+- run_jobs.py exit 3 or a render_review freeze failure → the checkout drifted mid-round; findings would anchor to stale lines. Restart from Step 1 — the round increments and prior artifacts are archived.
+- Publication limits → use the selected integration's documented batching limits without dropping results.
+
+## Bundled implementation
+
+`assets/PROMPT.md`, `assets/findings.schema.json`, and `assets/REVIEW_UI.html` are author-tooling sources consumed by the bundled scripts; agents use their rendered prompt/schema/report artifacts rather than loading these assets directly. `<skill-dir>/scripts/_common.py` is a read-only library imported by the CLIs and is never invoked directly.

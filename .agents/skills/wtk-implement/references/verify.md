@@ -1,0 +1,302 @@
+# Verify
+
+**Goal:** an independent answer to "is every check actually proven?", written as evidence
+rather than as an opinion.
+
+This is the only mechanism standing between "done" and a self-report, so it is never
+prompted, never optional, and never skipped because the author feels confident.
+
+## Author is not verifier
+
+The agent that wrote the code is the author. The Verifier is a **fresh sub-agent** with no
+inherited context, mental model or assumptions - an author re-checking their own work
+reapplies the thinking that produced the gap. It receives the original request, authoritative
+project routing, the checklist, every source the checklist marks binding, the feature's diff range
+and this file. It runs read-only and fixes nothing.
+
+**Dispatched by whoever holds the whole feature, never by a builder.** A fresh context is not
+independence on its own: the parent writes the brief, so a Verifier spawned by the agent that
+just closed the last batch inherits that agent's *scope* even though it inherits none of its
+tokens. It gets pointed at the last batch, and a pass over four checks reads exactly like a pass
+over forty. The range is `<feature base>..HEAD` and the set is every check in the checklist,
+whoever wrote them.
+
+Dispatch the selected `verification` stage through
+[agent selection](../../wtk/references/agent-selection.md), with this skill's verification procedure
+and the original request, project routing and complete approved artifacts/range in the current
+checkout. Agent selection handles unsupported host settings; native role files are not required.
+Use [live recovery](../../wtk/references/context-handoff.md#record-dispatch-and-reconcile-ownership)
+to record pending intent before send and actual host identity/status after send; reconcile host
+status/reports before waiting or replacing work.
+
+The verdict goes back to the orchestrator and the user, never to a builder. A FAIL returned to
+the author is the author deciding what to do about the author's work, and the round that follows
+happens inside the session the separation existed to break.
+
+For code changes under every profile, apply [reuse review](../../wtk-reuse-review/SKILL.md)
+within this verification pass and include its findings and coverage limits in the existing report.
+
+Under every profile, apply the shared [verify core](../../wtk/references/verify-core.md): approval (the owning task's
+receipt), evidence or zero, visual evidence, the swept re-read and fault injection. The steps below
+link each where it runs.
+
+Under every profile, apply [independent requirement and counterexample verification](../../wtk/references/project-requirements.md#verify-independently).
+Derive concerns and sources from the original request, actual change and authoritative routing;
+the planner's list is not the discovery boundary. Record omitted requirements and unproven outcomes
+in this verification report even when listed proofs pass. This precedes the `ui`-specific comparison.
+
+**Read the profile first** - the project declares it in `AGENTS.md`, and `standard` is the default.
+Step 1 runs under `ui`; the `Coverage` join, the `Test policy` verdicts and fault injection run
+under `standard` and `ui`; everything else runs always. The report names the profile, so a step
+that did not run is distinguishable from a step that was forgotten.
+
+A step whose input is absent is a line, not an investigation: no binding source, no set row, no
+`Test policy` section - say so and move to the next.
+
+## 1. Check the checklist against its binding sources (`ui`)
+
+Every other step measures the code against the checklist, so a checklist that is wrong validates
+cleanly and each later step confirms it. No amount of rigour further down catches this, because
+both ends of every later comparison were derived from the same mistaken artifact.
+
+Open every source the checklist marks **binding** - the design, a contract, a spec - and compare
+it against the checks and the `Landing` rows. A URL sitting in `Sources` is not the same as having
+opened it, and the gap between those two is where this fails.
+
+**This is a narrow comparison, not a review of the product.** You are looking for a check that
+contradicts a binding source on something that source decides concretely: a state the design draws
+as a band on an existing screen that a check turned into a screen of its own, a label the design
+fixes that a check spells differently, a status a contract names that a check maps elsewhere. You
+are never asking whether the work is worth doing, whether the design is good, or whether a
+decision the user already made was right. A contradiction is a finding; a preference is not.
+
+A check that contradicts a binding source is a finding even with a green proof, and it outranks a
+failing one: a red test says the code disagrees with the checklist, this says the checklist
+disagrees with the decision, and the build ships the second faithfully. Where a source will not
+open, say what you tried and what came back, then record every check resting on it as unverified
+against its source.
+
+**A check nobody wrote contradicts nothing, so comparing cannot find it.** This step catches a
+check that disagrees with the design and is blind to the element the design draws that no check
+mentions - blind in the direction that matters, because absence is the ordinary failure and it
+leaves no trace to notice. So enumerate instead of comparing: per screen, list what the design decides - which controls and
+indicators are present, which are absent, their order, their count, what they read, and **how they
+are arranged**: how many regions the screen has and what sits inside what - and confirm each is
+covered under [visual acceptance evidence](../../wtk/references/test-contract.md#visual-acceptance-evidence): arrangement, order, count and copy by a PASS
+paired capture; behaviour, contracted copy and the screen's one structural guard by a check. A
+decided element neither covers is a coverage gap. An element the code renders that the design does
+not draw is the same finding facing the other way.
+
+**Arrangement is the one this step keeps missing.** A screen can pass every label, count and
+order check and still be a different composition - a ring where the design draws a bar, a block
+beside the band it belongs inside, one column where there are two. Compare the captures for
+composition, not only for labels; a screen whose captures are missing or show another composition
+fails even when every check is green. Apply the binding-source contract and individual token adaptations in
+[UI/UX](../../wtk/references/ui-ux.md#verifying-the-built-screen), then the core's
+[visual evidence](../../wtk/references/verify-core.md#visual-evidence-ui).
+
+Compare the contracted visual properties as well as function and state. Record one finding per
+affected screen/property with source and capture pointers; minor raster rendering differences use
+the recorded tolerances.
+
+**An exemption that does not enumerate is a gap, not a limitation.** A checklist may put spacing,
+colour and type weight out of reach, named against the screen they belong to. It may not write
+"visual fidelity is unproven" and stop - that sentence also covers everything a selector *could*
+have reached, and it arrives at you looking like a limitation properly declared, which is how a
+real gap gets waved through by the one step that exists to catch it. Treat a blanket clause as a
+finding, then enumerate what it was covering.
+
+## 2. Account for every proof
+
+Apply `.agents/skills/wtk/references/validation.md`: independently inspect each proof's recorded
+result and input baseline, then run proofs with missing or invalidated evidence. A fresh Verifier
+still covers every check; it does not rerun unaffected tests solely because the actor or HEAD changed.
+For reused evidence, identify the original command/log, baseline and why its relevant inputs remain
+equivalent. Batch the selected fresh proofs below.
+
+**Batch selected proofs by runner target, not one invocation per proof.** Runners take
+many files and many name patterns in a single call - `bin/rails test a_test.rb b_test.rb -n
+"/one|two/"`, `pytest f.py g.py -k "one or two"`, `jest --testPathPattern` with one
+`--testNamePattern` alternation. Elsewhere: `dotnet test --filter "Name~One|Name~Two"`,
+`mvn -Dtest="ATest#one+two"` or Gradle `--tests`, `ctest -R "one|two"`. Batching per *file* is the mistake that looks like batching:
+forty checks across twelve files is twelve process starts, and the process start is the cost.
+
+The guarantee is unchanged as long as each named test appears in the output individually as
+having run and passed. What is forbidden is substituting a *verdict* for a result: "the suite is
+green" settles no single check. Fall back to one invocation per proof only where the runner
+cannot report per test, or to re-run something that failed.
+
+Then confirm each named test **exists and ran**. A filter matching nothing exits zero on
+several runners - `passWithNoTests` and its equivalents - which would be a green check with no
+test behind it. Show the hit; a name that appears nowhere in the tree is a finding, not a
+detail.
+
+Existing tests may prove a corrected behavior without being edited themselves. Confirm their
+assertions cover the affected invariant. An earlier result remains valid only after checking its
+causal inputs; neither an unchanged test file nor a new commit alone settles validity.
+
+## 3. Check the assertion, not its presence
+
+For each check, confirm the assertion targets the **checklist-defined** value, not merely
+that an assertion exists. Cite `file:line` and reproduce the assertion expression.
+
+Inspect the assertion and the relevant setup, fixtures and dependencies needed to establish its
+expected value and causal coverage. Trace indirect expected values within that scope; missing
+context is an evidence gap, not automatic proof that a test is wrong. Avoid unrelated fixture or
+repository exploration.
+
+Cite the one or two assertions that **settle** the claim, not every assertion in the test.
+Setup lines earn a citation only when the claim itself names the precondition.
+
+Apply [evidence or zero](../../wtk/references/verify-core.md#evidence-or-zero) to every check.
+
+Judge the checklist's own choices too (`standard`, `ui`). **Recompute the `Coverage` join rather than reading it** -
+a join you only read is the author's self-report with a table around it. For each row, take the
+members from the code itself, not from the row, and confirm each one has a proof that asserts it;
+then sweep the artifact for sets it never gave a row at all - every enumeration named in
+`Landing`, in the test-policy evidence or inside a claim. A member with no proof is a **coverage
+gap**, and a member named in the artifact's own prose with no proof anywhere is a worse one,
+because the author saw it and the table hid it.
+
+**Take the members from whatever holds authority over that set, which is not always the code.** A
+provider's statuses come from the provider and a framework's routes from the framework - there the
+code is the right place to look, because the code is where the set is discovered. But a set the
+code is meant to *satisfy* has its authority outside it: the screens a design draws, the fields a
+contract declares. Recomputing those from the code asks the author's own output whether the
+author's own output is complete, and it answers yes every time. Open the artifact and count there.
+
+For a startup-configuration row, read each assembly directly - open the file that constructs it
+and show the line. A suite that boots its own assembly structurally cannot fail on another one,
+so a green proof here is evidence about the test's assembly and nothing else.
+
+Two more, mechanically: a claim about nine cases proven on two is a coverage gap; and a claim
+naming an outcome, interface or response shape whose proofs all sit below that boundary is a
+**level gap**, no matter how many assertions it carries.
+
+Judge the *level* against the artifact's own `## Test policy` rows whenever it carries them
+(`standard`, `ui`).
+Those rows are the bar the author built under, and that section exists precisely because the
+repo's conventions were found not to answer - deferring to the conventions instead measures the
+build against the weaker ruler, which is the deference test-policy.md warns about.
+
+Give each row a verdict, the way each check gets one: for every file the row classifies, is the
+required proof there, and does it assert what the coverage expectation demands? A row nobody met
+is a finding even when every check is green, because the rows priced work the checks do not name.
+
+Only where the artifact carries no such section does the project's own convention decide -
+`AGENTS.md`, contributing docs, the shape of the existing tests. Either way, a suite thinner than
+the standard in force is a finding; one that merely differs from your taste is not.
+
+Where the checklist left a value imprecise, record a **precision gap** rather than passing a
+vague assertion - that is a finding about the checklist, and the most useful thing this step
+produces.
+
+Apply the [swept re-read](../../wtk/references/verify-core.md#swept-re-read).
+
+## 4. Inject faults (`standard`, `ui`)
+
+Run [fault injection](../../wtk/references/verify-core.md#fault-injection-standard-ui) in a scratch worktree.
+
+## 5. Report
+
+Write `.checks/<feature>.verified.md`. Lead with the verdict.
+
+```markdown
+# <Feature> Verification
+
+**Verdict**: PASS
+**Profile**: standard
+**Diff range**: <base>..<head>
+**Round**: 1 - full
+**Verifier**: independent sub-agent (author != verifier)
+**Quarantined tests**: none (or each test with its owner, cap and expiry)
+
+## Binding sources
+
+| Source | Opened | Contradiction | Uncovered |
+|---|---|---|---|
+| design `03` overview | yes - artifact URL | none | progress bar, radio indicator; breadcrumb rendered but not drawn |
+| design `05` assembling | yes | is a band on `03`; C20 renders it as its own screen | - |
+| contract `billing.yaml` | yes | none | - |
+
+## Visual fidelity
+
+| Source/revision | Source scale | Implementation revision | Screen/state | Viewport/scroll | Environment | Reference capture | Full-page capture | Viewport capture | Comparison | Result |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| frozen source revision / UI contract row | 1x | tested revision | screen and selected state | 390x844; scroll: 0,0 | runtime: Chromium 130 on Linux; scale: 1; fixtures: seeded; fonts/assets: loaded; theme: light | reference.png | full.png | viewport.png | independently inspected requirements, differences and interactions; explicit input-equivalence reason if reused | PASS |
+
+## Checks
+
+| Check | Claim | Proof run | Evidence | Result |
+|---|---|---|---|---|
+| C1 | suspends, never cancels | `pytest ...::test_failed_charge_suspends` exit 0 | `test_dunning.py:118` - `assert sub.status == "suspended"` | PASS |
+| C3 | retry changes nothing | `bun test -- -t "retry is idempotent"` exit 0 | `webhook.spec.ts:41` - `expect(rows).toHaveLength(1)` | PASS |
+
+## Test policy rows
+
+| Row | Files it classifies | Required proof | Expectation met |
+|---|---|---|---|
+| Decides, reached across a boundary | `subscription.py` | boundary C1 · own layer C2 | `suspended` yes · `paused` no - C2 never asserts the emit |
+
+## Faults injected
+
+| Mutation | Location | Disposition |
+|---|---|---|
+| returned status `suspended` -> `cancelled` | `subscription.py:88` | killed |
+| removed the `subscription.suspended` emit | `subscription.py:104` | survived - fix required |
+
+## Mutation run
+
+| Command | Scope | Killed | Survived |
+|---|---|---|---|
+| the project's declared mutation command | files or line ranges of `<base>..<head>` | 41 | 1 |
+
+## Gate
+
+<command> - <N> passed, 0 failed
+```
+
+Then return a compact verdict in chat: PASS or FAIL, checks proven out of total, fault
+result, and a ranked gap list.
+
+A FAIL, an unresolved surviving mutant, an unmet test-policy row, a check contradicting a binding
+source, an element or an **arrangement** a binding source decides that neither a check nor a PASS
+paired capture covers, a blanket exemption
+in place of an enumerated one, a binding source recorded as opened that nobody actually saw, or
+any check without a located `file:line` all mean the work is not done.
+
+**A composition finding fails at the same weight as a wrong label**, and it has to be said
+because it does not feel that way: a substring missing from a CTA reads as a defect, while "01 is
+a different composition" reads as feedback. The second one is the larger failure and the one that
+survives to production, so it carries a FAIL and it survives to the last round rather than
+softening into a note somewhere around round two. Route gaps back as fixes and re-verify, bounded to **three** rounds before
+escalating to the user.
+
+## Re-verifying after a fix
+
+A later round is scoped by two things: **the fix's diff, and every verdict that was not PASS.**
+Anything else carries forward. Re-running a whole review to reconfirm what a fix could not have
+touched is the cost the three-round bound multiplies by three.
+
+Rerun only evidence invalidated by the fix's causal delta. Reuse other proofs after independently
+checking their tested code, transitive dependencies, fixtures, configuration and relevant runtime.
+A failed full run is retained as such; focused retests can prove its corrections without claiming
+that a new full run passed. Full-gate escalation follows `.agents/skills/wtk/references/validation.md`.
+
+Everything carried forward identifies its source: mark sections `verified at <sha>` or
+`carried from <sha>` with the input-equivalence reason and retain `Round: 2 - scoped` in the header.
+
+Then scope by the diff, not by the fix's intent - a fix to a shared helper, a fixture or a
+config has a wider blast radius than its description:
+
+- **Faults**: re-inject on the surfaces the fix touched, and on any the fix created. A fix that
+  *adds* an assertion is the common case, and its new surface has never been made to fail once.
+- **`Coverage`**: recompute the rows whose authority the fix touched. A fix that adds a branch
+  adds a member, which is exactly what may not pass unnoticed.
+- **Citations**: refresh the files the fix touched; line numbers move.
+- **`Test policy` rows**: re-judge the rows that were unmet, plus any row classifying a touched
+  file.
+- **Step 1**: only where the fix touched the interface, and only for those screens. A design
+  does not change between rounds, and rule 4 keeps the checks fixed - so a contradiction found
+  in round 1 is still a contradiction. The exception is a check the user renegotiated: that one
+  goes back through step 1.

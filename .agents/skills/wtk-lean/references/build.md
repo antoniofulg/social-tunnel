@@ -1,0 +1,179 @@
+# Build
+
+**Goal:** satisfy the checks. How is yours.
+
+No task list, no phase plan, no per-task review tables, no `Files to touch` declaration before
+each edit. The checks are the bar; the route is your call. If you find yourself writing a plan
+for the model to obey, you are rebuilding the thing this skill removed.
+
+## Before the first line of code
+
+Apply [project requirements](../../wtk/references/project-requirements.md#build-and-recover): read
+inherited applicable guidance, confirm the criteria-review disposition, and preserve blocking gaps
+before dependent edits. This applies under every profile, including checks-only features.
+Run `validate_checks.py <feature> --execute` before the first change: it runs the `Build:` line once,
+and a red baseline stops the build for the user. The same run refuses a feature whose
+[approval receipt](../../wtk/references/construction-constraints.md#native-feature-approval) has no
+`Decision`, so a resumed builder with none stops and asks.
+Record new user decisions in their receiving turn via
+[live recovery](../../wtk/references/context-handoff.md); a batch checkpoint is too late.
+
+For a selected image or design, load [UI/UX](../../wtk/references/ui-ux.md) before coding;
+freeze its contract and complete the builder capture/compare/fix loop before handoff.
+
+One builder takes every slice in order. Do not estimate size or ask about a transfer up front;
+[Running out of context](#running-out-of-context) covers an actual limit. Never split a slice.
+
+## What is fixed and what is not
+
+Fixed: the checks, the `Test policy` rows, and the proofs each check names. Lowering either is
+renegotiation with the user, visible in the diff.
+
+Yours, within explicit [construction constraints](../../wtk/references/construction-constraints.md):
+order, decomposition, how many commits, where files go, naming, error shapes and helper extraction.
+Check that reference before dependent work when reuse, order or approval is prescribed.
+
+The plan's shape sections have a rule each, and the split matters because it is what keeps one
+file both approved and current.
+
+Additive: `Landing`, `Relations`, `Surface`. A door you discover while building gets a row - never
+a deletion, and never a rewrite of a row the user approved. `Relations` and `Surface` grow the
+same way, because both were reviewed: an entity or a route appearing mid-build is new information,
+one that quietly changes shape is a renegotiation.
+
+**Kept true: `Flow` and `Impact`.** They are a map, not an obligation, so changing them is not
+renegotiation - but a map that no longer matches the road is worse than none, because the next
+reader trusts it. Take a different path and the hop changes, in the commit that takes it. The rule
+is the same as `Landing`'s and for the same reason: written afterwards it describes what you
+happened to do, which is the failure mode of every architecture document that ever went stale.
+
+A hop you *add* is worth a second look before you write it. Reaching a fifth module in a feature
+scoped to two is not a `Flow` edit, it is evidence the boundary was wrong - say so rather than
+quietly extending the path.
+
+## Tests come from the checks
+
+Write the test from the check's claim and its concrete value. Never write a test by reading the
+implementation and asserting what it currently does: that produces a test that passes under the
+bug it was supposed to catch.
+
+**Hard constraints, no exceptions:**
+
+- Do not weaken an assertion to make it pass.
+- Never weaken or skip a test (the framework's skip / disable / pending mechanism included), or
+  delete one, to make a red gate pass. Removing a redundant test is a separate, reviewed change
+  under the [test-pruning procedure](../../wtk/references/test-contract.md#pruning).
+- Do not modify a check's test afterwards to make the implementation pass.
+
+A red proof is a stop, not a note. If a check turns out to be wrong or impossible, stop and
+renegotiate with the user. The same holds for a `Landing` row the user approved that the build
+proves unbuildable - they approved that shape specifically.
+
+A guard clause, a log line, a clear error message at an edge the checks did not name: that is the
+work, not scope creep. An extra test must name a regression no existing proof catches, under the
+[test contract](../../wtk/references/test-contract.md#never-add-a-test-just-to-raise-coverage).
+
+## Landing rows go in before the code
+
+A door found mid-build did not exist when the design was confirmed, so it lands the same way that
+file's rows did. Decide it yourself - stopping to ask on every one defeats the point of getting out
+of your way. Then record it in `plan.md`: append the row with its literal shape and the
+alternative you rejected **before the code that closes it is written**, and in that code's commit.
+
+The timing is the mechanism. An alternative is only knowable while you are still choosing between
+them; written at the end it becomes a justification of what you already wrote, which is the stale
+design document `Landing` exists to avoid. Stating what the other option would have done is also
+the one thing that can expose a bad decision with nobody else in the loop.
+
+A new door that contradicts nothing already approved never stops the build.
+
+## Commit
+
+One coherent piece per commit. Follow the project's own commit convention and its `commit validator`
+[setting](../../wtk/references/project-settings.md) when it has one. Otherwise use [Conventional Commits 1.0.0](https://www.conventionalcommits.org/en/v1.0.0/):
+`<type>(<scope>): <description>` with the [default types](../../wtk/references/git.md#types).
+Imperative mood, lowercase, no trailing period. A `!` marker needs no `BREAKING CHANGE:` footer.
+
+Without a project validator, validate before committing:
+
+```bash
+python3 <skill-dir>/scripts/check_commit.py --message "feat(billing): suspend on failed charge"
+```
+
+A passing message also prints one `OWED` line per feature with checks and no `verification.md`:
+`check_proofs.py`, the fresh Verifier and, when a criterion cites a capture, the screens judge. The
+builder runs `check_proofs.py` (see [Then stop](#then-stop)); the coordinator dispatches the rest.
+Optional git-level guard, independent of any agent:
+
+```bash
+hook="$(git rev-parse --git-path hooks)/commit-msg"
+ln -sf "$(pwd)/<skill-dir>/scripts/check_commit.py" "$hook" && chmod +x "$hook"
+```
+
+Skip the hook if the project manages hooks its own way. When a slice's proofs are all green, mark
+its checks complete in `checks.md` and commit that with the slice. The slice is the
+checkpoint: marking check by check adds bookkeeping the build does not need, and a resume reads
+the marks plus the diff to see which slices landed. A check whose proof spans several slices stays
+unmarked until the last one lands.
+
+## How to write the code
+
+Behavioural bias, not a checklist:
+
+**Simplicity.** No features beyond what was asked. No abstraction for single-use code. No
+"flexibility" nobody requested. No error handling for impossible scenarios. Two hundred lines
+that could be fifty: rewrite them.
+
+**Surgical changes.** Do not improve adjacent code, comments or formatting. Do not refactor what
+is not broken. Match existing style even where you would do it differently. Remove only the
+imports and variables your own change orphaned; pre-existing dead code gets mentioned, not
+deleted.
+
+**Push back.** Multiple interpretations exist: present them, do not pick silently. A simpler
+approach exists: say so. The user's approach looks wrong: disagree honestly.
+
+After each change, ask whether a senior engineer would call it overcomplicated. If yes, simplify
+before proceeding.
+
+## Scope guardrail
+
+You will notice things that could be improved. Do not act on them. A bug gets surfaced to the
+user; an improvement gets noted in chat or as a follow-up. The heuristic: is this in a check? If
+no, do not touch it.
+
+**Blast radius.** An approved spec authorizes local edits and local commits. `git push`,
+force-push, deploy, production DB changes and any other remote or destructive operation need an
+explicit go-ahead for that action, even mid-build.
+
+## Running out of context
+
+Two ways through it, and they are not equivalent. Automatic compaction summarises the
+*conversation* and chooses for you what to drop. A handoff to a fresh builder carries the
+*artifact*, at a boundary you chose. This skill is built for the second - that is why `Landing`
+rows are appended before the code that closes them rather than at the end.
+
+**Handing off.** When a builder actually hits its context limit, ask the user: hand off at the next
+whole-slice boundary, or continue with accepted compaction. The coordinator uses the host's
+supported handoff mechanism with the [stage selection](../../wtk/references/agent-selection.md) in
+the current checkout. Transfer only on green, with every proof in the batch passing. The next builder reads
+`checks.md` and the **diff of what already landed** - never a narrative summary. The diff is the
+state, and it carries the hundred reversible choices that sit below the `Landing` bar: naming,
+error shape, where the helper went. Those are exactly what drifts between builders and exactly
+what no document records.
+
+Then append the three `## Handoff` lines - boundary, links to decisions already recorded in their
+receiving turns, and abandoned approaches. Live dispatch state and recovery follow the shared
+context handoff procedure; the next builder reads the artifact rather than a prompt-only briefing.
+
+If the user chose to continue, compaction is the accepted path. **After
+compaction or on resume,** use [context recovery](../../wtk/references/context-handoff.md) before
+continuing. Keep the batch handoff boundary above; recovery alone does not require a new agent.
+
+## Then stop
+
+When the last check of **your batch** is committed, run `check_proofs.py <feature>` on the clean
+tree: it runs every proof once at `HEAD` and writes `proofs.md`, the record the Verifier reads
+instead of rerunning proofs. A red row is yours to fix before anything else. Then report and stop:
+checks closed, commit hashes, the `proofs.md` result, deviations. Do not dispatch the Verifier;
+the coordinator owns it under [core contract 4](../SKILL.md#core-contract), and
+[verify.md](verify.md) says why.

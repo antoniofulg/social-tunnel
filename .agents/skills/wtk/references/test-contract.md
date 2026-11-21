@@ -1,0 +1,199 @@
+# Test Contract
+
+**Read when:** writing, planning, or reviewing tests, handling an unstable test, or deriving feature
+checks.
+
+**Why this exists:** "All branches covered" cannot be audited. Named cases with claims and proofs can.
+A test that mirrors the implementation, or exists only to raise coverage, proves nothing.
+
+## The artifact
+
+Every integrated Lean feature has `.specs/features/<feature>/checks.md`. The native
+[Lean checks reference](../../wtk-lean/references/checks.md) is the only schema and
+authoring source for that artifact: read it for `Profile`, check and proof syntax, `Coverage`,
+`Test policy`, `Swept`, and `Handoff`. This guideline supplies local test-case policy below; it does
+not define a second checks schema.
+
+The native profile owns mutation depth: `standard` and `ui` inject faults only for the checks the
+`Risk:` line names and for `unsure` rows; `light` injects none. [Mutation](#mutation) sets their
+scope and survivor policy.
+
+## Rules
+
+1. **Derive, do not invent.** Every case maps to a spec acceptance criterion. Use components, error
+   paths, boundaries, and journeys to find coverage gaps; if one reveals behavior absent from the
+   spec, clarify the acceptance criterion before adding a case. Never create a case solely because a
+   component or boundary exists. Security cases also follow `security.md` when its
+   condition fires.
+2. **Every claim names an exact input, condition, concrete value, and expected result.** "Test the
+   happy path" is not a claim. "Creating an order with an unknown region is rejected as
+   invalid and stores nothing" is, whether the interface is a `POST` route, a CLI verb exiting
+   non-zero, or an event that lands on the dead-letter topic. Name one or more exact tests or commands whose exit codes settle it; repeat `Proof:` when
+   a proof cannot settle the whole claim.
+3. **Coverage is explicit.** Every enumerated set gets a `Coverage` row with each member as its own
+   token beside the check or proof that asserts it. Shared or table-driven proofs may be reused when
+   each named claim or member is independently asserted; reuse never replaces the explicit join.
+4. **Audit before the build is approved.** Every claim and coverage member maps to at least one check
+   with named proof(s); no claim or member is left orphaned.
+5. **Tests ship with the slice that closes the behaviour.** Never a test-only slice.
+6. **A case is not done because a test exists.** It is done when the test asserts the contracted
+   expected result. A test that exists without asserting the contracted behaviour is a hollow case and
+   fails review.
+
+## Choosing the layer
+
+**Each failure has a canonical owner at the cheapest discriminating layer.**
+
+| Layer | Use for | Cost |
+| --- | --- | --- |
+| Unit | Pure rules, validation, transformation, every error path | Cheapest |
+| Component | UI states in a simulated DOM with the server stubbed: enabled/disabled, empty/loading/error, validation messages, a click changing state, dialogs, ARIA, conditional rendering by role or plan | Cheap |
+| Integration | Crossing a boundary: repository, handler, queue; rules, atomicity, permissions, tenancy, rows written or refused | Moderate |
+| End-to-end | Only what needs the real browser and stack: real layout (viewport, overflow, scroll, geometry), hydration, focus across navigation, drag and drop, service workers, cross-tab, OAuth redirects, real network failure, and one main journey per feature | Most expensive, deliberately scarce |
+
+**Lowest layer that proves it.** Do not write an end-to-end test for a behaviour a unit, component
+or integration test can prove. A UI-state assertion defaults to a component test. Data effects
+(rows written, refused or unchanged) and input/error matrices belong to their lower-layer owner and
+are never replayed through the browser. A second layer earns a test only for a distinct failure it
+alone shows, such as persistence, serialization or authorization wiring. Per feature, end-to-end
+holds one main journey, the `@smoke` cohort and the claims with a browser-only reason from the
+table; Plan and Checks state that reason for every end-to-end proof. A project without a
+component-test harness records that gap in Plan instead of falling back to end-to-end.
+
+Before replacing or removing an existing end-to-end test on this ground, prove the coverage: map
+every assertion in it to a unit, component or integration test asserting the same outcome through
+the same contract, and confirm with a scoped [mutation](#mutation) run, or manual faults, that the
+lower tests kill the mutants the end-to-end test killed. An assertion with no lower-layer proof
+keeps the end-to-end test, or gets its lower test first. Never remove the only proof of
+cross-component wiring.
+
+Use the real collaborator when it is fast and deterministic in the test, such as an in-process
+value, a local database or a filesystem in a temporary directory. Fake one only when it is slow,
+nondeterministic, costs money or has external side effects, and fake it at a port the code owns, not
+inside a library. A fake proves nothing about the real collaborator. Between separately deployed
+services, a consumer-driven contract test pins what the consumer reads, and the provider's suite
+replays it.
+
+Permanent e2e tests carry a feature and a journey marker in the runner's own mechanism (a tag,
+category, trait or label, such as `@feature:<slug>` and `@journey:<slug>`), unique data with
+guaranteed cleanup, and residue-zero assertions. The feature marker is the selector the consuming
+project's scoped e2e gate uses to run only that feature's scenarios. [Test tiers](validation.md#test-tiers)
+own which cohort runs when.
+
+## Never add a test just to raise coverage
+
+Before adding a test, search existing unit, integration, and end-to-end suites. Name the invariant,
+its canonical suite and layer, and the concrete regression that existing proofs cannot catch.
+Record that justification in the existing check, task notes, or PR. Extend the owner; reuse its
+proof when no new failure is distinguished. Reviewers reject additions without this justification.
+
+When consolidating cases, follow [pruning](#pruning). Similar test names or shared setup alone do
+not establish equivalent coverage.
+
+A test earns its place by catching a behaviour failure: a state change, data outcome, navigation,
+access rule or keyboard/focus result. Forbidden by default — allowed only when that artifact is the
+product contract and no stronger gate already owns it:
+
+- Tests asserting prose, copy, labels, headings, button text or documentation content
+- Snapshot tests standing in for behavioural assertions
+- Tests over generated files, config shape, CSS values, colours or class names
+- A second suite duplicating an existing one because the existing one was hard to find
+
+A mixed test keeps its behaviour assertions and drops the copy or style ones.
+
+For instruction products, assert routing, metadata, resolvable references and safety boundaries;
+do not freeze line wrapping, incidental wording or historical release prose. Compare release
+identities to the authoritative manifest. Review semantic instruction changes directly: a matching
+string alone does not prove agent behavior.
+
+## Mutation
+
+[Fault injection](verify-core.md#fault-injection-standard-ui) owns the isolated procedure.
+
+- **Declared tool.** When the project declares a mutation command, run it scoped to the changed
+  decision code only: the files or line ranges of the diff against the base, in incremental mode
+  when the tool supports it. Examples only: StrykerJS or Stryker.NET (`--since`), PIT for Java
+  (`scmMutationCoverage`, `targetClasses`), Mull or dextool for C++, mutmut for Python,
+  cargo-mutants for Rust.
+- **No declared tool.** Inject manual faults as that procedure states.
+- **Survivors.** There is no global score target, and this pack sets no number. Every survivor on
+  a changed decision line of a `Risk:` check is a finding: kill it with a test, or record it as
+  equivalent or arid with a one-line reason. Outside the `Risk:` checks a survivor is recorded
+  `accepted - <reason>` and earns no new test, because a test for every survivor grows a suite the
+  project is trying to shrink. A project may declare its own break threshold, scoped to changed files.
+- **Pruning and test review.** The `Risk:` scope and `accepted` belong to Lean verification only.
+  [Pruning](#pruning) and `wtk-test-review` keep a mutation or manual-fault run over their whole
+  scope mandatory, and a removal never rests on an `accepted` survivor.
+
+## Pruning
+
+Removing a redundant test is its own reviewed change, never part of a fix or a red gate.
+
+1. Scope one module, feature or page.
+2. List its tests per layer and map each to the claim or invariant it proves.
+3. Find candidates:
+   - (a) a higher-layer test whose assertions the lower-layer owner all covers, proven under the
+     [lowest-layer rule](#choosing-the-layer); never a `@smoke` cohort member or the sole proof of
+     a journey or of wiring;
+   - (b) a test that kills no mutant, or only mutants another test also kills, found by a
+     [mutation](#mutation) tool run over the scope that reports every killing test (no bail).
+     Propose at most one removal per equal-kill set, keeping its lowest-layer member. Without a
+     mutation tool, class (b) is not proposed;
+   - (c) a test over a forbidden subject: copy, snapshots, config or CSS, or whose only effect is
+     producing artifacts no assertion or gate reads;
+   - (d) a duplicate suite.
+4. Map every candidate assertion, in every parameterised case, to the kept proof's own assertion.
+5. Delete in its own `test(...)` commit, never inside a fix. In that commit, update every quarantine
+   list, CI timing file, triage count and doc that names the removed test.
+6. Re-run mutation over the scope, or without a tool the manual faults the removed test used to
+   kill. The kill set must not shrink; a new survivor reverts that deletion.
+7. A fresh Verifier checks the mapping.
+8. Never prune a member of the permanent security smoke suite; any other SEC proof needs a named
+   lower-layer replacement.
+
+## Unstable tests
+
+A test is unstable when the same revision, with no change, both passes and fails: a pass on retry,
+a CI flaky warning, or mixed results across reruns. Confirm it by rerunning that unchanged revision;
+a test that fails every run is a real failure, fixed as one. Find offenders from CI annotations or
+reruns across recent runs, and fix the most frequent first.
+
+1. Make one attempt at the root cause: wait on a condition, isolate data per test, split a long
+   serial test, finish animations before sampling. A cause in the product is a bug: file it and keep
+   the test.
+2. If that attempt finds no cause, delete the test. Before deleting a behaviour test, find its proof
+   at a cheaper layer; if none exists, write that unit or integration replacement first. Delete as
+   [pruning](#pruning) step 5 states.
+3. The outcome is a fixed test or a deleted one; retry loops are not an outcome. A project with a
+   declared `quarantine` [setting](project-settings.md) may hold the test within its cap and expiry;
+   at expiry, step 2 applies.
+
+## Test execution cost
+
+- Test harness orchestration with small isolated fixtures. Target injected failures to their fixture;
+  leave full application builds and catalogs to their canonical gates unless the test proves a
+  distinct product integration. Keep scratch outputs and caches separate from the checkout's.
+- Combine assertions sharing the same scenario when their failure conditions remain distinguishable.
+  Reuse immutable fixture preparation; keep mutable state and cleanup isolated per case. Each test
+  owns its browser context and data and scopes fixture queries to its own tenant, so a retry is safe.
+- A single test over about 60 s, or a serial group, needs a stated reason; otherwise split it so it shards.
+- When changing CI lanes or selectors, verify that their union covers the required cases without
+  duplicate execution in the same runtime. A full suite already includes its smoke subset. Distinct
+  runtime matrices and bounded reliability probes need an explicit purpose for repetition. One
+  viewport proves a behaviour; a second needs a layout-specific claim with different assertions.
+- Measure affected-suite time before and after adding expensive setup or recurring execution; record
+  timings and why a cheaper proof is insufficient beside the coverage justification.
+
+## Visual acceptance evidence
+
+**Paired captures prove what a screen looks like; e2e proves what it does.** Arrangement, order,
+count and copy are proven by the paired visual captures the Verifier compares, and a mismatch blocks
+completion. Give each screen exactly one structural e2e assertion as a guard. Otherwise e2e asserts
+behaviour, and copy only when copy is the contract.
+
+When a visual acceptance criterion names an approved reference, attach paired-capture evidence to the
+owning check or slice and point to its feature `uiux.md` row when present. Follow the method in
+`ui-ux.md#verifying-the-built-screen`, which owns how captures are produced, and record its output
+fields. A manual paired comparison is evidence, not an automated test, and never replaces behavioral
+cases. A gate test never writes a screenshot or artifact it does not assert on. Add automated
+screenshot regression only when an actual visual invariant has an owning canonical suite.

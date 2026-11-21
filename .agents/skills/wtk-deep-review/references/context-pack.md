@@ -1,0 +1,91 @@
+# Context Pack
+
+How to assemble `<out>/context-pack.md` — the shared context every reviewer and sweep receives. **Keep it lean: target ≤ ~10 KB.** Every agent in the fan-out reads it in full, so each extra kilobyte is paid once per agent; reviewers dig into the code themselves (rg, git, file reads), so the pack carries only what they cannot cheaply rediscover — intent, review law, and what the linters already caught.
+
+## 1. Repository knowledge — metadata first
+
+Use manifest dispositions as the first selection gate. Generated artifacts, review reports, and format-only documentation do not become product-review targets solely because they changed. When a requested instruction or documentation change is part of the product contract, keep it selected and carry bounded rules and conformance context through this pack.
+
+Run the read-only discovery/bootstrap helper after the manifest:
+
+```bash
+python3 <skill-dir>/scripts/build_knowledge.py --out <out>
+```
+
+It discovers every repository-local root/nested `AGENTS.md` and `CLAUDE.md`, repo review config/learnings, project `SKILL.md` under conventional local skill roots, and direct markdown references of candidate skills. Nested instructions apply to selected paths in their directory subtree; all ancestors remain applicable and deeper sources have higher precedence.
+
+After the helper finishes, inspect `knowledge.json` metadata before opening any source body: use each row's `kind`, `scope`, `applies_to`, `candidate`, and `candidate_reason` (plus `references` on skill rows) to screen applicability. Mark a clearly unrelated candidate `not-applicable` from metadata without opening its body; inspect an ambiguous candidate body before deciding. Then read every applicable source in full, including:
+
+- root and nested `AGENTS.md` or `CLAUDE.md` sources whose scope contains a selected path;
+- skills explicitly invoked or dispatched by the user or instructions, skills owning selected paths, and skills whose metadata matches signals relevant to selected paths or the request;
+- every required reference named by an applicable source or selected by an applicable skill's routing in full; screen other direct references for task/path applicability, inspect ambiguous ones, and record exclusions.
+
+Do not skip an ambiguous source: inspect its body in full and decide from evidence. Classify an unrelated source as `not-applicable` with a concrete reason naming its scope or missing relevance; never use a bare "not needed" or "no explicit dispatch" reason. `knowledge.json` records why every source is or is not a candidate. `rules.template.json` starts each candidate as `pending`. Copy the template to `rules.json` and change every pending row to:
+
+- `applied` — the source was read and governs at least one selected path; or
+- `not-applicable` — include a concrete reason why it does not govern this change.
+
+Keep one source row per `knowledge.json` source, with no pending rows, and keep the existing rules schema: each extracted rule cites an applied source and a scope matching a selected path. `build_jobs.py` rejects missing sources, pending statuses, empty reasons, rule sources not marked applied, and rule scopes that match no selected path.
+
+## 2. Rubric — extract the review law
+
+Extract verdict-bearing rules in precedence order (higher wins on conflict):
+
+1. Path instructions from repo review config.
+2. Nested `AGENTS.md` / `CLAUDE.md`, deepest applicable directory first.
+3. Root `AGENTS.md` / `CLAUDE.md`.
+4. Explicitly dispatched or change-relevant project skills and their required references.
+5. `.wtk-deep-review/learnings.md` entries whose scope matches selected files.
+
+Extract only rules that can bind a review result (error handling, testing shape, layering, security, naming, documentation, design tokens, framework patterns). Operational commands can leave an applied source with zero rules when the accounting reason says it was read but contains no review law. Register each rule once and keep its text verbatim:
+
+```json
+{ "sources": [
+    { "source": "AGENTS.md", "kind": "instruction", "status": "applied",
+      "reason": "root rules govern every selected path" }
+  ],
+  "rules": [
+    { "id": "R07", "scope": ["<test-file-glob>"], "source": "AGENTS.md",
+      "guideline": "<verbatim rule text from the source>" }
+  ]
+}
+```
+
+`scope` is the path-instruction glob, the instruction file's directory subtree, the selected skill's routed paths, or the learning's scope. To preserve the fan-out budget, the pack lists applied sources/rule counts plus one aggregate not-applicable count; complete per-source decisions stay in rules.json. `build_jobs.py` injects bound rules into defect cohorts and sweeps, and each output accounts for every assigned rule.
+
+## 3. Linter lanes — run first, suppress overlaps
+
+Detect what the repo already enforces and run it scoped to selected files; findings a lane reports are suppressed from the review (taxonomy rule 1).
+
+Resolve each lane from the project's documented commands, package scripts, configured tools and CI.
+Prefer the owning project command over a raw tool invocation and scope it to selected files where
+supported. A language manifest or configuration filename alone does not select a linter or justify
+an unconfigured command.
+
+Record per lane: `ran` (attach findings on selected files, trimmed) or `unavailable` (tool missing/failed — overlap suppression is off for that lane and review.md must say so). Never install tools to fill a lane.
+
+## 4. PR intent
+
+For a PR, read its title, description, linked issues and base/head through the project's selected integration. Locally: `git log --oneline <base>..<head>` plus the user's stated intent. Reviewers judge the diff against *stated intent* — a change that does more than its description says is itself a finding.
+
+## 5. Spec contract (`--spec`)
+
+Resolve the conformance baseline: a file path is itself the artifact; a directory contributes the contract-bearing documents the spec names as canonical. List every resolved artifact as `path → one-line role` for Technical Verifier context. Deep Review does not dispatch a separate spec-parity proof job; do NOT extract rubric rules from these artifacts: §1 sources are review law, the spec is the contract under test.
+
+## 6. context-pack.md layout
+
+```markdown
+# Context Pack — <target>
+
+## Intent
+<title/description/commits digest>
+
+## Rubric
+<applied source: path → rule count; N other sources classified not-applicable in rules.json; canonical forms: knowledge.json + rules.json>
+
+## Linters
+<lane → ran(findings digest) | unavailable(reason)>
+
+## Spec contract
+<only with --spec: one `- `path`` line per artifact>
+```

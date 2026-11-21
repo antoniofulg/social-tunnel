@@ -1,0 +1,1025 @@
+# Sources and adaptation notes
+
+Frontend Craft is authored by Antonio Fulgêncio, 2026. Its pre-existing technical
+guidance retains [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/);
+the commercial additions described below carry separate source terms. Its
+installed license notice is [LICENSE](LICENSE). These notes travel with the skill.
+
+## Adapted material
+
+[Workflow Toolkit](https://github.com/antoniofulg/my-workflow), Antonio Fulgêncio,
+CC BY 4.0. Reference revision: `e2f705d6d4d72f86de45f0a3fc3fa43f22fef7c8`.
+
+Relevant sources: `wtk-reuse-review/SKILL.md` and WTK references `code-reuse.md`,
+`ui-ux.md`, `frontend.md`, and `context-budget.md`, under `.agents/skills/`.
+Adaptations here concentrate semantic owner discovery, surface mapping, consumer
+comparison, source-versus-rendered evidence, and conditional reference loading
+into a standalone frontend skill. Backend review, release procedures and
+WTK-specific artifact requirements are omitted. No endorsement is implied.
+
+When a consuming project already uses WTK, its governing workflow/reuse policy
+remains authoritative; this package contributes task-specific application rather
+than installing a second project policy.
+
+## Design references, independently expressed
+
+These repositories informed the selection of problems and evaluation criteria.
+Their skill prose, examples, executable code, templates and datasets are not
+bundled here. Installed project copies may differ from their recorded upstream.
+
+| Source | Recorded reference | Contribution |
+| --- | --- | --- |
+| [Jakub Krehel's skills](https://github.com/jakubkrehel/skills) | `267330e1adfc66a718fb65fa6918c1f06d0a689e` | Interface inspection, domain review, explanation evidence, and relevant component stress axes |
+| [Anthropic skills](https://github.com/anthropics/skills) | `8a1541c4a3ffa5a20a5a91de0dcf3f0bab1d1ef4` | Purposeful content structure and consistent interface vocabulary |
+| [Felipe Basurto's unslop-ui](https://github.com/felipebasurto/unslop-ui/blob/cd891160453f26aaacc569bad96a8d10d595076d/skills/unslop-ui/SKILL.md) (MIT) | `cd89116` | Distinguishing decorative copy from state, editing strings at their owner, and simplifying chart labels without losing comparison context |
+| [Emil Kowalski's skills](https://github.com/emilkowalski/skills) (MIT) | Initial: `e8a175de22ae1e49370fc144c1f3bb9aeedf988d`; 0.18.0 review: `5206a95`; 0.19.0 review: `715c180` | Motion purpose, frequency and interruption as design questions; [0.18.0 motion and mobile web additions](#motion-coordination-performance-and-mobile-web); [0.19.0 worst-case data, motion craft and variant comparison](#worst-case-data-motion-craft-and-variant-comparison) |
+| [Tech Leads Club agent skills](https://github.com/tech-leads-club/agent-skills) (`tlc-spec-lean` and `tlc-spec-driven`, CC BY 4.0) | `e74dc8a` | [0.20.0 binding-design comparison](#binding-design-comparison) |
+| [Compozy](https://github.com/compozy/compozy) (MIT) | `b153f4a` | [0.21.0 prototype doctrine](#prototype-doctrine) |
+| [Pedro Nauck's skills](https://github.com/pedronauck/skills) (`skills/mine/ui-craft`, MIT) | `682e738` | [0.22.0 AI interfaces and dark theme](#ai-interfaces-and-dark-theme); [0.23.0 helper scripts](#bundled-helper-scripts) |
+| [Corey Haines' marketingskills](https://github.com/coreyhaines31/marketingskills) (`skills/copywriting`, MIT; 0.25.0 also `skills/product-marketing`; 0.26.0 also `skills/cold-email`, `skills/prospecting` and `skills/sales-enablement`) | `1f83744` | [0.24.0 shared marketing-copy guidance](#shared-marketing-copy-guidance); [0.25.0 shared offer brief](#shared-offer-brief); [0.26.0 outbound, business case and win-loss](#outbound-business-case-and-win-loss) |
+| [mbfinotti sales-skills](https://github.com/mbfinotti/sales-skills) (`sales-icp-definition`, `deal-value-calc`, MIT; 0.26.0 also `sales-outreach-personalization`, `deal-red-flags` and `sales-account-tiering`) | `b2ed362` | [0.25.0 shared offer brief](#shared-offer-brief); [0.26.0 outbound, business case and win-loss](#outbound-business-case-and-win-loss) |
+| [Anthropic knowledge-work-plugins](https://github.com/anthropics/knowledge-work-plugins) (`sales/skills/create-an-asset`, Apache-2.0) | `877a617` | [0.25.0 shared offer brief](#shared-offer-brief) |
+| [social-media-skills](https://github.com/social-media-skills/skills) (`social-selling-and-dm`, MIT) | `f28cef2` | [0.26.0 outbound, business case and win-loss](#outbound-business-case-and-win-loss) |
+| [UI/UX Pro Max](https://github.com/nextlevelbuilder/ui-ux-pro-max-skill) | `v2.15.0` | Targeted interaction, chart and accessibility reference categories |
+| [Taste Skill](https://github.com/Leonxlnx/taste-skill) | Initial: `ce26fc25c0e5e8cab638f883de62d9a86ee5e45b`; v2.0.0 review: `2b44c81bbe36ac8a8a6bdd1c9ff593f28b8728f4` | Context-sensitive public-page composition; subject-specific identity, media workflow and rendered critique |
+| [Vercel agent skills](https://github.com/vercel-labs/agent-skills) | Local `react-composition-patterns` skill, metadata version `1.0.0` | Component composition and state-owner questions |
+| [Autonnel skills](https://github.com/autonnel/autonnel-skills) | Local `landing-page-conversion-audit`; revision not recorded | Evidence limits and visitor decision-path review |
+
+Fixed aesthetic formulas, unsupported conversion estimates, promotional tool
+requirements and restricted transition recipes were not incorporated.
+
+## Technical reference additions in 0.2.0
+
+Technical examples are independently authored. Links beside the relevant rules
+point to React's context/ref documentation, MDN's CSS/HTML/ARIA references, WAI's
+status-message/alert/complex-image guidance, and Motion's transition/drag reference.
+These primary sources were consulted on 2026-10-08; exact APIs and browser support
+must still match the consuming project's installed versions and targets.
+
+The chart guide is a compact question-driven aid, with Data to Viz as an optional
+specialist reference. It does not bundle a third-party chart catalog. Motion
+timings, spring settings, corner geometry and color examples are contextual
+starting points rather than universal requirements or upstream design tokens.
+
+## Agent-usable design systems
+
+[Rico's article, “Build the design system and skills your agent can follow”](https://x.com/_heyrico/status/2116953958279479760),
+read on 2026-11-01, informed the distinction between primitive values, semantic
+roles, selectable components, recurring domain blocks and rules with reasons.
+The [design-system workflow](references/design-systems.md) is independently
+expressed technical guidance integrated with this package's existing ownership,
+mapping and verification contracts. No article prose, token values, component
+catalog or code examples are bundled. Its sample aesthetic, library choices and
+blanket rules are not defaults here. The article is practitioner experience,
+not evidence of measured agent reliability or a universal design-system method.
+
+## Shared UI patterns in 0.8.0
+
+The [shared UI patterns guide](references/shared-ui-patterns.md) and its routing
+are independently authored technical guidance for auditing, consolidating and
+maintaining shared components, styles and tokens. They retain the technical
+guidance's CC BY 4.0 terms. Tailwind's official documentation on
+[reuse](https://tailwindcss.com/docs/styling-with-utility-classes#managing-duplication),
+[theme variables](https://tailwindcss.com/docs/theme),
+[custom styles](https://tailwindcss.com/docs/adding-custom-styles) and
+[directives](https://tailwindcss.com/docs/functions-and-directives) was consulted
+on 2026-10-17 through Context7 and the official site. The guide keeps those
+mechanisms conditional on the installed version and project conventions; it
+does not bundle a framework manual or impose a new design system.
+
+## Style coverage in 0.8.1
+
+The style-family matrix, state/environment accounting, ownership scopes and
+targeted style-update workflow extend the independently authored technical
+guidance under CC BY 4.0. They add coverage and change-management rules rather
+than new framework APIs, a visual prescription or copied upstream material.
+The existing conditional Tailwind guidance and its primary-source links remain
+applicable to matching installed versions.
+
+## Loading states and technical discovery
+
+The loading sections in [performance](references/performance.md),
+[components](references/components.md) and
+[interaction and accessibility](references/interaction-accessibility.md), and
+the [technical SEO guide](references/technical-seo.md), are independently authored
+technical guidance under CC BY 4.0. Their routing does not change the existing
+commercial-source terms or project publication, authorization and release owners.
+
+Lessons supplied by the maintainer were checked against the `my-court` project's
+`docs/product/STYLE-CONTRACT.md`, `docs/design/loading-states/README.md` and
+`index.html`, both `2026-10-20-loading-value-masks` reports, the product's
+`SEARCH-DISCOVERY.md`, four `2026-10-20-search-discovery` reports, and relevant
+`.adaptive-guidelines/ledger.md` entries. These are provenance identifiers, not
+installed dependencies; project artifacts, fixtures and code are not bundled.
+The project's paint delay, control dimensions, route scheme and cache policy
+remain local choices. Reported tile, price and reservation-alternative geometry
+mismatches remain open examples until verified; earlier bounded passes do not
+establish that those fixes occurred.
+
+Primary documentation linked beside the SEO rules was consulted on 2026-10-20:
+Google documentation on JavaScript, mobile rendering, crawlable links,
+pagination, faceted navigation, HTTP statuses/redirects, page experience,
+canonicals, sitemaps, robots directives, localized URLs, structured data,
+AI features and crawler verification; OpenAI's
+crawler documentation; and the HTML Standard's script-content restrictions.
+The optional `llms.txt` link describes a proposal, not a search-engine guarantee.
+[WAI-ARIA busy semantics](https://www.w3.org/TR/wai-aria-1.2/#aria-busy) and the
+existing WAI status-message guidance support the loading semantics. No framework
+API recipe was added; version-specific implementation still requires current
+official documentation, using Context7 first for library documentation.
+These sources support technical guidance, not measured ranking, commercial or
+agent-reliability improvements.
+
+The performance reference's Core Web Vitals targets and metric-specific diagnosis
+use Google's web.dev [Web Vitals overview](https://web.dev/articles/vitals) and
+its optimization guides for [LCP](https://web.dev/articles/optimize-lcp),
+[INP](https://web.dev/articles/optimize-inp) and
+[CLS](https://web.dev/articles/optimize-cls), consulted on 2026-10-20. This
+extends the existing technical evidence owner, without installing telemetry,
+prescribing a framework technique or claiming a site's field metrics were tested.
+
+## Async recovery, collections, navigation and localized data
+
+The additional sections in [components](references/components.md),
+[interaction and accessibility](references/interaction-accessibility.md) and
+[performance](references/performance.md) are independently authored technical
+guidance under CC BY 4.0. Existing project state, authorization, persistence,
+translation, scheduling and navigation owners remain authoritative. Sorting,
+selection and draft-retention policies are product contracts, not universal
+accessibility requirements.
+
+Primary sources consulted on 2026-10-20 are linked beside their rules: RFC 9110
+on mutation retry semantics; MDN Fetch, History and beforeunload documentation,
+queried through Context7; Google's web.dev bfcache restoration guidance; WAI's
+table/grid patterns, sortable-table example, header and virtualized-position
+guidance; W3C locale inference and composite-message guidance; and Unicode
+number/currency and plural data. W3C's time-zone document is a draft note used
+as guidance, not a normative scheduling requirement. Its examples do not replace
+the consuming project's date or daylight-saving disambiguation contract.
+
+Concurrency guards, operation-scoped rollback, explicit selection scope and
+restoration checks are engineering applications of those contracts; the sources
+do not prescribe one frontend architecture. APG examples require validation in
+the actual browser/assistive-technology environment. These additions do not add
+libraries, persistent drafts, retry infrastructure or telemetry as installation
+side effects, and source review does not prove runtime behavior.
+
+The 0.9.0 browser exercises further distinguished logical duplicate writes from
+repeated transport deliveries and exposed author CSS overriding a conditional
+field's `hidden` state. MDN's hidden-attribute documentation was queried through
+Context7 before adding that visibility caveat. These are bounded synthetic-fixture
+observations, with their limits recorded in the release verification artifact.
+
+## Contract and evidence additions in 0.3.0
+
+The public-redesign checklist, onboarding/authentication criteria, performance
+workflow and gesture/audit additions are independently expressed. Primary sources
+linked beside the guidance are WCAG 2.2 and its WAI Understanding documents, MDN
+Pointer Events, web.dev Web Vitals and Chrome DevTools performance documentation,
+consulted on 2026-10-08. WCAG conformance criteria and ergonomic suggestions are
+identified separately; local measurements do not establish field results.
+
+An installed `transitions-dev` catalog was inspected on 2026-10-08: 32 recipes,
+copyright 2026 Jakub Antalik / Transitions.dev; source revision not recorded.
+Its [license terms](https://transitions.dev/terms.html) permit use and modification
+in products but restrict republishing the collection or a substantial portion as
+a competing library, template pack or component kit. This package adds optional
+routing only; it includes no catalog prose, recipe code or shared CSS. Consult
+the installed copy's license and recipe contract for actual product use.
+
+## Commercial guidance in 0.4.0
+
+The commercial additions adapt ideas and their application from
+[Revenue-Centric Design](https://github.com/heliocosta-dev/revenue-centric-design),
+curated by heliocosta-dev from Richard ([@richardrx](https://x.com/richardrx)).
+Recorded upstream revision: `1942760c2242f609bf63ce2c97204f5a1791bd68`, inspected
+2026-10-13. Richard is the source of the underlying design ideas and the coined
+term Revenue-Centric Design; no endorsement of Frontend Craft is implied.
+
+The full [upstream license](licenses/revenue-centric-design.txt) is preserved.
+It requires attribution and excludes gambling, betting, casino and the other
+real-money gaming/loot-box uses specified there. These additions are distributed
+subject to those terms, not relicensed as unrestricted CC BY 4.0 material.
+
+Covered references: [commercial strategy](references/commercial-strategy.md),
+[activation](references/activation.md), [monetization](references/monetization.md),
+[retention](references/retention.md) and [experimentation](references/experimentation.md).
+The commercial-purpose, routing, precedence and reporting additions in SKILL.md,
+the landing-page decision-stage section and commercial review routing, the
+commercial finding format in review.md, and commercial cross-references in
+reuse-consistency.md and interaction-accessibility.md are part of this adaptation.
+The corresponding README explanations and commercial evaluation scenarios are
+also covered. Earlier technical guidance keeps its existing license.
+
+Upstream themes consulted: conversion-and-landing-pages, onboarding-and-activation,
+pricing-and-monetization, churn-and-retention, behavioral-science-toolkit and
+metrics-and-experimentation. Adaptation changes: integrate commercial diagnosis
+with existing component ownership and verification; express tactics as contextual
+hypotheses; retain complete-funnel measurement; replace absolute plan-count and
+page formulas with decision criteria; require truthful progress, disclosed terms
+and a usable cancellation path. Upstream statistics, case-study narratives,
+screenshots and asset collections are not reproduced as evidence for this skill.
+
+## Commercial expansion in 0.5.0
+
+[Commercial visuals](references/commercial-visuals.md),
+[checkout](references/checkout.md), [dashboards](references/dashboards.md),
+[behavioral design](references/behavioral-design.md),
+[product strategy](references/product-strategy.md),
+[pricing economics](references/pricing-economics.md),
+[positioning and distribution](references/positioning-distribution.md), and the
+expanded activation, monetization, retention, commercial strategy and
+experimentation references extend the adaptation above under the same preserved
+source-available terms. Their routing, README explanations and evaluation material
+share this scope. Version 0.4.1 was not released; the visual work is part of 0.5.0.
+The source is Richard (@richardrx), curated in Revenue-Centric Design at the
+recorded revision. All twelve upstream thematic references inform this expansion,
+including product-strategy-and-features, positioning-icp-and-gtm,
+ai-era-differentiation, dashboards-and-data-viz, checkout-and-forms and
+revenue-centric-design in addition to the themes listed above.
+
+The adaptation expresses mechanisms as decisions with context and evidence:
+attention hierarchy, offer economics, first and repeated value, feature adoption,
+distribution and differentiation. Fixed thresholds, mandatory plan counts,
+unverified causal claims and manufactured exit barriers are replaced with scoped
+hypotheses and stated tradeoffs. No upstream case-study statistics, screenshots
+or assets are reproduced as proof of expected product results.
+
+## Standalone strategy and sales in 0.6.0
+
+Version 0.6.0 makes the commercial scope independent of frontend implementation.
+The entrypoint, commercial strategy, positioning/distribution, monetization,
+experimentation and commercial review routing now support product/business
+decisions without requiring a page, repository or UI change. The existing twelve
+source themes remain the commercial foundation at the recorded upstream revision;
+the 0.5.0 coverage audit is a historical record, not a new 0.6.0 behavioral result.
+
+[Growth and sales](references/growth-sales.md) connects those themes to a broad
+commercial diagnosis and exhaustive strategic-audit routing. Offer composition,
+assisted-sales stages, discovery, demos, objections, proposals and usable action
+deliverables are Frontend Craft's additional application guidance, not newly
+attributed Richard quotations or upstream case results. This integrated commercial
+reference and the changed commercial routing/documentation are distributed under
+the same preserved source-available terms. No source screenshots, study statistics
+or updater pipeline were added, and the upstream license remains unchanged.
+
+## Public-page identity and media in 0.7.0
+
+[Taste Skill v2.0.0](https://github.com/Leonxlnx/taste-skill/tree/v2.0.0), by
+Leonxlnx, was inspected on 2026-10-15 at
+`2b44c81bbe36ac8a8a6bdd1c9ff593f28b8728f4`, alongside the initial revision above.
+The upstream is MIT licensed. Its new SKILL, imagery, critique, layout, copy,
+type, colour, motion and research references and draw/asset/inspection scripts informed this
+review; no upstream prose, code, templates, datasets, media or tools are bundled.
+
+Independently expressed additions cover five mechanisms: subject-derived visual
+identity and a competitor-specificity check; media inventory, sourcing, provenance,
+crops and delivery; concrete rendered critique and bounded corrections; comparison
+of composition candidates when direction is open; and optional useful product
+interactions with honest data and accessible fallbacks.
+Follow-up source review also informed scoped illustration craft and display-type
+refinements in imagery and [visual details](references/visual-details.md).
+
+[Imagery](references/imagery.md) is independently authored technical guidance under
+CC BY 4.0, as are the technical media routing, rendered-critique and visual-detail additions.
+Commercial additions in [landing pages](references/landing-pages.md) and
+[commercial visuals](references/commercial-visuals.md) extend the existing commercial
+references and retain their preserved source-available terms. The source scope
+above is unchanged; upstream Taste Skill research is not commercial validation.
+
+Adaptation boundaries: retain approved design and Impeccable ownership, narrow-task
+scope, real component owners and evidence limits. Composition alternatives are
+conditional, media and motion have no minimum counts, and aesthetic preferences
+are not universal correctness rules. The upstream's palette/type bans, two-line
+headline limit, fixed layout formulas, mandatory interaction and motion quotas,
+random draw and Awwwards scoring are not package requirements. Its study and
+blind model judgments motivate investigation, not a claim of measured superiority,
+conversion uplift or reliability for Frontend Craft. Maintainer evaluation records
+live outside the installed skill.
+
+## Performance audit operations
+
+The optional [performance audit procedure](references/performance-audits.md) is
+independently authored technical guidance under CC BY 4.0. The maintainer's
+installed `web-perf` skill was comparison material on 2026-10-21; its source
+revision was unavailable. The compared `SKILL.md` had SHA-256
+`79c531e95ca4d96a7de920c28c127c2c09ec55cd452a92222267d2954580be23`.
+Only missing operational coverage was added. Fixed tool/API names, setup recipes,
+universal budgets, blanket rejection of zero estimated savings and a duplicate
+accessibility checklist were excluded. Existing performance evidence rules remain
+authoritative; the comparison does not establish measured site improvements.
+
+The 0.27.3 preload-on-intent check started from a third-party tip and was
+verified against React's source at commit `df6aa4ec` on 2026-11-13:
+`ReactLazy.js` calls the import factory on first render and waits on its
+promise; `ReactFiberWorkLoop.js` sets `FALLBACK_THROTTLE_MS = 300` for retry
+commits. The tip's "about 2 ms" figure was not verified and is not used.
+
+## Content restraint
+
+The maintainer-supplied `minimalist-ui` skill was comparison material on
+2026-10-21. The maintainer's recurring corrections motivated independently
+authored [content restraint](references/interaction-accessibility.md#content-restraint)
+guidance under CC BY 4.0. It extends existing interaction and review owners;
+the comparison skill's font bans, fixed palettes, layout recipes and mandatory
+animations were not incorporated. Approved design direction and accessibility
+remain authoritative. No upstream prose or assets are bundled, and no measured
+usability improvement is claimed.
+
+## Marketing copy editing
+
+Installed `copy-editing` and `copywriting` skills, both metadata version `2.1.0`,
+and `humanizer` version `2.8.2` were comparison material on 2026-10-21. Their
+upstream revisions were not recorded. The independently authored
+[marketing-copy guidance](references/copywriting.md#write-edit-and-refresh-marketing-copy)
+adds editing scope, voice matching, naturalness and factual refresh to the existing
+commercial owner and retains that guide's existing source terms. Existing audience,
+proof, CTA and claim-inventory guidance remains authoritative. No source prose,
+examples or reference catalogs are bundled; 0.24.0 later added the separately
+recorded [Corey Haines material](#shared-marketing-copy-guidance) to the same guide.
+
+Fixed editorial sweeps, simulated expert-score gates, prescribed page templates,
+punctuation and paragraph quotas, automatic refresh schedules and unsupported
+conversion estimates were not incorporated. Voice edits preserve facts and do not
+invent personal anecdotes or customer evidence. Stylistic cues are not authorship
+tests, and no measured writing, usability or commercial improvement is claimed.
+
+## GTM measurement and automation
+
+The maintainer's local `gtm-engineering` and `gtm-metrics` skills, both metadata
+version `1.0.0`, were comparison material on 2026-10-21. Their metadata identifies
+Chad Boyda's `agent-gtm-skills` as the original source and Felipe Rodrigues
+(`felipfr`) as modifier. The engineering implementation guide and quick reference
+were included in the comparison. Upstream commit revisions were unavailable;
+the maintainer coverage record preserves SHA-256 identifiers for all four files.
+
+The [measurement](references/gtm-measurement.md) and
+[automation](references/gtm-automation.md) references are independently authored
+under CC BY 4.0. They supply the operational subject coverage without copying
+source prose, examples, code, vendor tables or catalogs, or requiring another
+GTM skill. Existing linked commercial references retain their source-available
+terms; these additions do not relicense them. Existing frontend, accessibility,
+commercial-evidence and implementation/release owners remain authoritative.
+
+The scope includes platform selection and workflow implementation, using current
+official documentation at the point of a concrete vendor/API decision. Source
+vendor prices, feature counts, model rankings, universal benchmarks, fixed scoring
+weights and claimed savings were replaced with contextual selection/measurement
+rules. Role responsibilities are retained; salary, job-market and adoption claims
+are not operational requirements. Attribution remains credit allocation rather
+than proof of causality, and engineering completion is distinct from commercial gains.
+
+Primary sources consulted on 2026-10-21 are linked beside the relevant rules:
+ChartMogul's recurring-revenue movement taxonomy and Google's explanations of
+attribution credit versus incremental conversions. No vendor API recipe or
+industry threshold is asserted. Payback conversion, cost allocation and other
+calculations use explicit units and local reporting definitions; these are not
+claims that a project's financial data or live integrations were verified.
+
+## Motion vocabulary
+
+The maintainer's local `animation-vocabulary` entrypoint was comparison material
+on 2026-10-21; it declares no version. Its SHA-256 identifier was
+`40d2b27adfdfeb0570a9f20e7d0255109d9233c50603878bcd0dcd04c923fd94`.
+The [motion vocabulary](references/motion-vocabulary.md) is independently authored
+technical guidance under CC BY 4.0, covering all 91 named terms without copying
+source definitions, examples, invocation scripts or a separate vocabulary website.
+
+The comparison informed reverse lookup, concise answers and disambiguation.
+Fixed readiness replies, verbatim-quotation requirements and restrictions to a
+closed glossary were not incorporated. Existing motion, accessibility and
+performance owners remain authoritative. The reference distinguishes layout
+animation from forced-layout thrashing, skeletons from shimmer, timing curves from
+spatial paths and descriptive effects from browser APIs. It makes no universal
+frame-rate target or hardware/compositing guarantee.
+
+Browser terminology was checked through the configured Context7 MCP against MDN
+on 2026-10-21. Primary links beside the rules cover clipping/masking, view
+transitions, optimization hints and forced style/layout work. No implementation
+or browser-support claim follows from naming an effect.
+
+## Animation opportunity discovery
+
+The maintainer's local `find-animation-opportunities` skill was comparison
+material on 2026-10-21; its entrypoint declares no version and had SHA-256
+`f2db8db5950ef7ed2ebd0ec73f83534c36742f2aef8b5b9b03d8a953064b027d`.
+The independently authored [discovery mode](references/motion.md#find-animation-opportunities)
+is technical guidance under CC BY 4.0. It covers reconnaissance, unanimated
+interaction seams, purpose/frequency/response/function judgments, concrete
+proposals, rejected candidates and read-only handoff without another motion skill.
+
+The source's readiness reply, recipe snippets, fixed timing/easing values,
+candidate/rejection quotas and categorical keyboard/frequency bans were not
+incorporated. Existing project tokens, confirmation semantics, accessibility and
+reduced-motion rules remain authoritative; removing motion is a valid alternative.
+Source searches locate candidates, while observed behavior and measurement
+support defect or performance claims. No source recipe or rendered validation
+is bundled or implied by this comparison.
+
+## User behavior and decision-making
+
+The maintainer's six-principle video summary supplied on 2026-10-27 prompted the
+[user behavior section](references/behavioral-design.md#user-behavior-and-decision-making).
+No video URL, title or creator was supplied; the video itself was not inspected.
+The guidance is independently expressed, integrates with the existing behavioral
+owner and retains that commercial reference's preserved source-available terms.
+
+Research consulted for mechanism definitions and limits, not product lift forecasts:
+
+| Principle | Research reference | Consultation scope |
+| --- | --- | --- |
+| Smart defaults | Jachimowicz, Duncan, Weber and Johnson (2019), [When and Why Defaults Influence Decisions](https://www.hbs.edu/faculty/Pages/item.aspx?num=56568) | Author-institution abstract of the meta-analysis; effects vary across contexts |
+| Goal gradient | Kivetz, Urminsky and Zheng (2006), [The Goal-Gradient Hypothesis Resurrected](https://www.columbia.edu/~rk566/Session4/Goal-Gradient_Illusionary_Goal_Progress.pdf) | Author-hosted paper, including the abstract and bonus-stamp example; proximity and endowed progress are distinguished |
+| Reciprocity | Regan (1971), [Effects of a favor and liking on compliance](https://www.sciencedirect.com/science/article/pii/0022103171900254) | Search-indexed publication record and partial abstract only; publisher access was blocked |
+| IKEA effect | Norton, Mochon and Ariely (2012), [The IKEA Effect: When Labor Leads to Love](https://www.hbs.edu/faculty/Pages/item.aspx?num=41121) | Author-institution abstract; successful completion is a boundary, not a guarantee of retention |
+| Loss aversion | Kahneman and Tversky (1979), [Prospect Theory: An Analysis of Decision under Risk](https://www.econometricsociety.org/publications/econometrica/1979/03/01/prospect-theory-analysis-decision-under-risk) | Publisher abstract of decision-making under risk, not a test of upgrade copy |
+| Contrast | Simonson and Tversky (1992), [Choice in Context: Tradeoff Contrast and Extremeness Aversion](https://www.gsb.stanford.edu/faculty-research/publications/choice-context-tradeoff-contrast-extremeness-aversion) | Author-institution abstract about choice-set context, not proof that expensive-first ordering improves outcomes |
+
+This is not a systematic review or a replication assessment. No study statistics,
+video wording, artificial setup progress, obligation-based consent, manufactured
+losses or universal pricing order are adopted as product requirements. User-benefit
+and trust guardrails are application decisions, not claims tested by those papers.
+
+## Premium-web psychology
+
+The maintainer's summary of a video described as "The Psychology of Premium
+Websites," attributed to Sam Crawford, and an Apple screenshot prompted the halo,
+cognitive-load/processing-fluency and peak-end additions in the existing
+[behavioral owner](references/behavioral-design.md#user-behavior-and-decision-making).
+No video URL was supplied; the video itself and its exact publication metadata
+were not independently inspected.
+The screenshot is illustrative context, not evidence of usability, product quality
+or commercial outcomes. Neither source establishes a universal Apple-style
+composition or a reason to replicate its assets.
+
+Research consulted on 2026-10-28 supports mechanism definitions within the access
+and study limits below. Interface applications, trust boundaries and proposed
+checks are independently authored hypotheses, not UI findings or conversion-lift
+claims from these sources.
+
+| Mechanism | Research reference | Consultation scope |
+| --- | --- | --- |
+| Halo effect | Nisbett and Wilson (1977), [The halo effect: Evidence for unconscious alteration of judgments](https://deepblue.lib.umich.edu/items/da93fb79-74ef-4ff0-a1fe-da088de2dc42) | Search-indexed introduction from the university-hosted paper defines global evaluation influencing particular judgments; direct repository/page and PDF access returned HTTP 403, and APA access returned a challenge. The full study was not inspected; this is not evidence that visual polish establishes product quality or actual usability |
+| Cognitive load | Sweller (1988), [Cognitive Load During Problem Solving: Effects on Learning](https://doi.org/10.1207/s15516709cog1202_4) | Publisher-deposited abstract inspected through [Crossref](https://api.crossref.org/works/10.1207/s15516709cog1202_4); Wiley and ScienceDirect access returned HTTP 403. The abstract concerns problem-solving demands, processing capacity and schema acquisition, not a test of sparse interfaces or onboarding steps |
+| Processing fluency | Reber, Schwarz and Winkielman (2004), [Processing Fluency and Aesthetic Pleasure: Is Beauty in the Perceiver's Processing Experience?](https://pages.ucsd.edu/~pwinkiel/reber-schwarz-winkielman-beauty-PSPR-2004.pdf) | Author-hosted paper inspected through its definitions of perceptual/conceptual fluency, reviewed contrast/clarity evidence, and expectation/attribution qualifications. This theoretical review relates processing ease to aesthetic evaluation; it does not establish actual comprehension, task success or a universal visual formula |
+| Peak-end rule and remembered experience | Kahneman, Fredrickson, Schreiber and Redelmeier (1993), [When More Pain Is Preferred to Less: Adding a Better End](https://doi.org/10.1111/j.1467-9280.1993.tb00589.x); Fredrickson and Kahneman (1993), [Duration neglect in retrospective evaluations of affective episodes](https://pubmed.ncbi.nlm.nih.gov/8355141/) | First paper's publisher-deposited abstract inspected through [Crossref](https://api.crossref.org/works/10.1111/j.1467-9280.1993.tb00589.x); direct SAGE access returned HTTP 403. Second paper's abstract inspected through PubMed/NCBI; a university-hosted PDF yielded no usable extracted text. These cover aversive cold-water episodes and pleasant/aversive film clips, respectively, not proof that micro-interactions are emotional peaks or that better UI endings increase conversion |
+| Rapid visual impressions | Lindgaard, Fernandes, Dudek and Brown (2006), [Attention web designers: You have 50 milliseconds to make a good first impression!](https://www.makinggood.ac.nz/media/1265/lindegaardetal_2006_attention.pdf), DOI 10.1080/01449290500330448 | Empirical; original paper via academic mirror, methods/results inspected. Mean visual-appeal ratings were strongly related across brief exposure durations, with weaker individual agreement at the shortest exposure. Screenshot judgments do not establish comprehension, safety, buying intent or a universal decision deadline |
+| Complexity and category familiarity | Tuch et al. (2012), [The role of visual complexity and prototypicality regarding first impression of websites](https://research.google.com/pubs/archive/38315.pdf), DOI 10.1016/j.ijhcs.2012.06.003 | Empirical; institution-hosted manuscript inspected. Perceived complexity and corporate-site prototypicality interacted in beauty ratings of passive screenshots. Layout/color effects were not isolated; this is not a whitespace formula or proof that familiar brands and unfamiliar workflows are equivalent |
+| Website aesthetics versus performance | Thielsch, Haines and Flacke (2019), [Experimental investigation on the effects of website aesthetics on user performance in different virtual tasks](https://pmc.ncbi.nlm.nih.gov/articles/PMC6388663/), DOI 10.7717/peerj.6516 | Empirical; open-access article inspected. Perceived ratings improved without significant accuracy/time effects across the tested search, creative and transfer tasks. One medical-information setting and substantial attrition limit transfer; nonsignificance does not establish universal equivalence |
+| A contrasting aesthetics/performance result | Sonderegger and Sauer (2010), [The influence of design aesthetics in usability testing: Effects on user performance and perceived usability](https://folia.unifr.ch/documents/302271/files/Sonderegger_Sauer2010.pdf), DOI 10.1016/j.apergo.2009.09.002 | Empirical; original manuscript inspected. Attractive simulated phones improved perceived usability and task measures in two tasks with adolescents. Limited task/population and possible familiarity/prototypicality confounds prevent a universal aesthetics or web-sales claim |
+| Text whitespace | Chaparro et al. (2004), [Reading Online Text: A Comparison of Four White Space Layouts](https://portfolio.erau.edu/en/publications/reading-online-text-a-comparison-of-four-white-space-layouts/) | Empirical; institutional abstract only, original server unavailable. Margins affected reading measures and satisfaction; leading affected preference without a reading-performance effect. Text margins/leading do not establish a whole-page minimalism rule or numeric commercial lift |
+| Task-specific motion benefit | Heer and Robertson (2007), [Animated Transitions in Statistical Data Graphics](https://idl.uw.edu/papers/animated-transitions), DOI 10.1109/TVCG.2007.70539 | Empirical; author-hosted full paper inspected. Animation helped graphical tracking, but value-change results varied and more elaborate staging was not always better. Masked chart tasks do not establish general button-feedback, repeated-work or conversion benefits |
+| Motion preference/performance tradeoff | Robertson et al. (2008), [Effectiveness of Animation in Trend Visualization](https://pubmed.ncbi.nlm.nih.gov/18988980/), DOI 10.1109/TVCG.2008.125 | Empirical; PubMed abstract only. Animation was enjoyable and fast for presentation but error-prone; static alternatives were faster for analysis and small multiples more accurate. Trend interpretation is not a universal micro-interaction result |
+| Interactive peak/end limits | Gutwin et al. (2016), [Peak-End Effects on Player Experience in Casual Games](https://www.cs.mcgill.ca/~jeromew/data/COMP766/CHI2016/p5608-gutwin.pdf), DOI 10.1145/2858036.2858419 | Empirical; original paper via university mirror, methods/results/limitations inspected. Sequencing affected remembered challenge consistently, while fun/interest/replay-preference effects appeared in only one of three games. Small studies, immediate ratings and stated preference do not establish observed retention |
+| Complex experience and recall interval | Strijbosch et al. (2019), [From Experience to Memory: On the Robustness of the Peak-and-End-Rule for Complex, Heterogeneous Experiences](https://www.frontiersin.org/journals/psychology/articles/10.3389/fpsyg.2019.01705/full), DOI 10.3389/fpsyg.2019.01705 | Empirical; full text inspected. Peak valence best predicted immediate remembered valence; average valence best predicted approximately one-week evaluations, and end valence was not significant. One student VR-narrative study with retrospectively reconstructed affect, not causal proof about checkout or onboarding |
+
+This bounded consultation is not a systematic review, replication assessment or
+validation of a particular page. No study text, statistics, screenshot assets or
+video wording are reproduced. The additions extend the existing commercial
+behavioral reference under its preserved
+[source-available terms](licenses/revenue-centric-design.txt); independently
+expressing them does not relicense that owner. Existing technical guidance,
+including linked content restraint, retains CC BY 4.0. The research references
+and their own access/publication terms do not replace either package scope.
+
+## Service recovery and operational quality
+
+A maintainer-supplied video summary prompted the additions for blocked states,
+undo, payment recovery, journey consistency and recovery evidence, plus the
+conditional service-recovery discussion in the existing behavioral owner. No
+video URL, title or creator was supplied for this summary; the video and its
+Undertone and crypto-card examples were not independently inspected. Their
+reported account, deposit or perception changes are not adopted as causal
+evidence or product forecasts.
+
+On 2026-10-28, the [University of Lisbon publication record and abstract](https://researchportal.ulisboa.pt/en/publications/service-recovery-paradox-a-meta-analysis/)
+for de Matos, Henrique and Rossi (2007), *Service Recovery Paradox: A Meta-Analysis*,
+DOI [10.1177/1094670507303012](https://doi.org/10.1177/1094670507303012), was
+consulted. The abstract reports a positive aggregate effect on satisfaction,
+nonsignificant aggregate effects on repurchase intentions, word-of-mouth and
+corporate image, and variation with study characteristics. Nonsignificance is
+not proof of zero effect. Publisher access returned HTTP 403; the full paper was
+not inspected. This bounded consultation does not establish effects on trust,
+deposits, conversion or retention for a particular interface.
+
+Additional recovery studies were consulted on the same date:
+
+| Source | Evidence and access | Finding and transfer limit |
+| --- | --- | --- |
+| McCollough, Berry and Yadav (2000), [An Empirical Investigation of Customer Satisfaction after Service Failure and Recovery](https://doi.org/10.1177/109467050032002) | Original abstract reproduced in OpenAlex inspected; publisher returned HTTP 403 and full text was not inspected | Two scenario experiments reported satisfaction below error-free service even with high recovery performance. A counterexample to guaranteed restoration, not a universal outcome or observed revenue result |
+| Maxham and Netemeyer (2002), [A Longitudinal Study of Complaining Customers' Evaluations of Multiple Service Failures and Recovery Efforts](https://doi.org/10.1509/jmkg.66.4.57.18512) | Publisher-indexed abstract excerpts and [OpenAlex abstract metadata](https://api.openalex.org/works/W1970492996?select=title,doi,publication_year,abstract_inverted_index) inspected; full text inaccessible | Repeated-measures field research reported paradoxical increases after one failure but not two. Satisfaction, recommendation likelihood and repurchase intent are not transactions; absence of a paradox does not by itself establish below-baseline outcomes |
+| Magnini et al. (2007), [The service recovery paradox: justifiable theory or smoldering myth?](https://digitalcommons.longwood.edu/business_facpubs/210/), DOI 10.1108/08876040710746561 | University-hosted abstract of role-play experiments inspected; full publisher text returned HTTP 403 | Paradoxical satisfaction was more likely under limited severity, no prior failure and particular perceived causes. Student participants and one setting do not justify deterministic thresholds or externalizing blame |
+
+The operational instructions are independently authored application contracts,
+not requirements tested by that meta-analysis. Linked technical owners retain
+CC BY 4.0; additions to the existing checkout and behavioral commercial owners
+retain their preserved source-available terms. No source wording, statistics,
+video assets or executable recipes are bundled; existing mixed terms remain.
+
+## Operational standards and usability heuristics
+
+The following were consulted on 2026-10-28 as standards or expert guidance,
+not empirical proof of premium appeal or commercial uplift:
+
+| Source and type | Consulted contract and boundary |
+| --- | --- |
+| W3C [WCAG 2.2](https://www.w3.org/TR/WCAG22/), Recommendation and informative Understanding pages | Relevant error identification/suggestion, serious-submission protection, consistent identification/help, status and motion criteria inspected. 3.3.4 AA permits reversible, checked, or review/confirm/correct protection; it does not universally require undo or dialogs. 2.3.3 is AAA and differs from 2.2.2 A. Apply the adopted target and applicable exceptions; Understanding text is informative |
+| WAI APG [Alert](https://www.w3.org/WAI/ARIA/apg/patterns/alert/) and [Modal Dialog](https://www.w3.org/WAI/ARIA/apg/patterns/dialog-modal/), implementation guidance | Patterns inspected for focus, announcements and consequential actions. APG recommendations are not themselves WCAG success criteria, nor a requirement to put confirmation on every save |
+| [RFC 9110](https://www.rfc-editor.org/rfc/rfc9110.html), [RFC 6585](https://www.rfc-editor.org/rfc/rfc6585.html) and [RFC 9457](https://www.rfc-editor.org/rfc/rfc9457.html), HTTP standards | Relevant retry, accepted-status, Retry-After/429 and problem-detail/privacy sections inspected. Acceptance and elapsed waiting do not establish business completion or quota renewal; occurrence IDs and diagnostic URLs are not automatically safe to share |
+| Nielsen (1994, reviewed 2024), [10 Usability Heuristics for User Interface Design](https://www.nngroup.com/articles/ten-usability-heuristics/), original-author expert heuristics | Visible status, user control, prevention/recovery and consistent meanings support inspection questions, not controlled causal claims, fixed UI recipes or conversion forecasts |
+| PCI Security Standards Council [FAQ 1319](https://www.pcisecuritystandards.org/faqs/1319/), official interpretive guidance | CVV collection is tied to authorization when necessary; retention after authorization is prohibited, even encrypted. This is not a blanket claim about all payment fields. Support payloads and permitted UI drafts still follow the actual security/privacy contract |
+
+## Generated-interface review
+
+[Visant skills](https://github.com/pedrojaques99/visant-skills-public), MIT,
+recorded reference `9e1d4d3303a1017679085ad3501db4edf7c9606c`. Its
+`visant-killer` skill and its references were comparison material on 2026-10-29.
+They informed the independently expressed [generated-interface defaults](references/review.md#check-generated-interface-defaults),
+region classification, existence, data-truth and measurement-validity questions,
+root-first ranking and the content-restraint removal test. Its scanners, report and scoring
+ritual, tier question counts, component registry, house-skill dependencies and
+Tailwind-specific prohibitions were not incorporated; no upstream prose, code or
+assets are bundled. No endorsement is implied.
+
+[antiwebslop](https://github.com/cesaroeduardo/antiwebslop), Cesar Eduardo,
+MIT, recorded reference `2bed29c1b4592f874be62402bddc6287ea632698`, described
+by its author as unfinished. Its `SKILL.md` and references were comparison
+material on 2026-10-29 for the independently expressed
+[generated marketing defaults](references/landing-pages.md#question-generated-marketing-defaults),
+the reading surface type and the text-setting notes in
+[display typography](references/visual-details.md#display-typography-and-optical-alignment).
+Its numeric design dials, per-project `DESIGN.md`, reply-voice rules, motion
+pattern catalog, lint script and editor hook were not incorporated; no upstream
+prose, code or assets are bundled. No endorsement is implied.
+
+## Agentic screen repair
+
+[Enmera's ai-design-check repository](https://github.com/enmerasoftware/ai-design-check),
+MIT, recorded reference `9ef8300772554df810ea126b670ff4edac8de034`, consulted on
+2026-11-02. The `skills/design-fix/SKILL.md` agent workflow and its `proof.md`,
+`motions.md` and previously inspected `scales.md` references informed this
+comparison. The adapted [screen-repair section](references/review.md#repair-a-generated-looking-screen)
+retains the [full Enmera MIT notice](licenses/enmera-ai-design-check.txt).
+
+Adaptations: preserve a comparable before state; measure role-level spacing and
+shape when relevant; state a short product-specific repair brief; fix by user
+consequence across the affected screen; compare content and behavior; verify in
+the existing rendered/interaction loop. Existing landing-page, imagery, motion,
+component and shared-owner references remain authoritative for their subjects.
+The upstream's product-proof and motion-stage recipes were comparison material,
+not copied implementations or mandatory new page patterns.
+
+Not incorporated: the rule catalog, static checker, editor hooks, CLI commands,
+token/font generator, numeric finding targets, video tooling, bundled example
+code/assets, universal spacing/style prescriptions, automatic motion stages,
+blanket brand-foreground preservation despite inaccessible contrast, or a new
+approval checkpoint for an already authorized repair. This is an agent-guided
+workflow, not an integration or redistribution of the upstream skill package.
+Practitioner experience motivates the procedure; it does not establish measured
+agent reliability, visual superiority or commercial lift.
+
+## Choice surfaces
+
+A maintainer-supplied summary of a practitioner video, comparing junior through
+staff designs of food-delivery and home-search screens, was comparison material on
+2026-11-04; its title and URL are not recorded, and the video itself was not
+inspected. It motivated the independently expressed
+[choice-surface section](references/components.md#choice-surfaces-and-decision-support):
+comparable trade-offs, outcome previews, control selection, distributions and
+decision aids. Query scope, authorization, recovery, accessibility and data-policy
+conditions are author judgment. Not incorporated: seniority levels as a review
+standard, the claim that fold placement does not matter, a preference for custom
+icons over photography, or any research tool. It does not establish measured
+usability or commercial lift.
+
+## Build-time interface checks
+
+The 0.17.0 build checklist and the rules it links (conditional reveals, keyboard
+shortcuts, multi-step keyboard flow, same-setting controls, interactive states,
+domain modeling, time ranges, summaries and redesign parity) are original
+author guidance. They generalize defects a maintainer found by hand while
+reviewing a consuming product's onboarding and admin screens; product names,
+commits and code are not bundled. The single-key rule cites WCAG 2.2 success
+criterion 2.1.4; clock formatting relies on
+[`Intl.DateTimeFormat`](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Intl/DateTimeFormat). This guidance retains CC BY 4.0 with the other technical guidance.
+
+## Motion coordination, performance and mobile web
+
+The 0.18.0 sections on [coordinating several moving elements](references/motion.md#coordinate-several-moving-elements),
+[diagnosing dropped frames](references/motion.md#diagnose-dropped-frames),
+[removing or reducing motion](references/motion.md#remove-or-reduce-motion),
+the two-phase gesture rules and [mobile web](references/interaction-accessibility.md#mobile-web)
+are independently expressed from the `choreograph`, `animation-performance`,
+`remove-animations`, `gestures` and `mobile-native` skills in
+[Emil Kowalski's skills](https://github.com/emilkowalski/skills) at commit `5206a95`
+(MIT). No text, recipes or code were copied. Not incorporated: the removal gate
+that deletes all keyboard-triggered or high-frequency motion (this skill keeps
+weighing purpose and frequency case by case), fixed daily-count thresholds, a
+universal 500 ms sheet curve, a global `user-select: none` on links and the
+`animate-expo`, `write-swift`, `ask-sonner` and `pick-ui-library` skills, which
+are platform- or library-specific. The Motion 14.2 acceleration note was checked
+against Motion's [changelog](https://motion.dev/changelog) and
+[performance page](https://motion.dev/docs/performance) on 2026-11-08.
+
+## Mobile keyboard, input and Back behavior
+
+The 0.27.6 additions to [mobile web](references/interaction-accessibility.md#mobile-web)
+and its [principles that carry to native apps](references/interaction-accessibility.md#mobile-principles-that-carry-to-native-apps)
+generalize a keyboard defect a maintainer hit in a consuming web app's sign-in
+screen; product names and code are not bundled. Browser support was checked on
+2026-11-20 against Chrome's [viewport resize behavior](https://developer.chrome.com/blog/viewport-resize-behavior)
+note, [caniuse for `interactive-widget`](https://caniuse.com/mdn-html_elements_meta_name_viewport_interactive-widget)
+(Safari on iOS unsupported through 26.5),
+[MDN `VisualViewport`](https://developer.mozilla.org/en-US/docs/Web/API/VisualViewport)
+and [MDN `CloseWatcher`](https://developer.mozilla.org/en-US/docs/Web/API/CloseWatcher)
+(Chromium and Firefox; not Safari). The Chromium-only
+[VirtualKeyboard API](https://developer.chrome.com/docs/web-platform/virtual-keyboard)
+was considered and left out in favour of the two portable mechanisms. Target-size
+figures cite Apple's Human Interface Guidelines and Material Design. This guidance
+retains CC BY 4.0 with the other technical guidance.
+
+## Prototype doctrine
+
+The 0.21.0 [prototyping with production components](references/reuse-consistency.md#prototype-with-production-components)
+section, the [content-ownership rule](references/review.md#compare-a-render-with-a-binding-design)
+of the binding comparison and the [transcription baseline](references/review.md#prove-redesign-parity)
+of redesign parity adapt practice from [Compozy](https://github.com/compozy/compozy)
+(MIT, Copyright (c) 2026 NauckGroup LTDA) at commit `b153f4a`, read on
+2026-11-11: `docs/design/prototyping.md`, lessons `L-032` (prototype fidelity
+binds visual language, not content) and `L-034` (prototypes of implemented
+surfaces are transcriptions plus deltas), and the shared authoring rules of the
+`open-design` extension skill. The full upstream notice is kept in
+[licenses/compozy.txt](licenses/compozy.txt). Adapted ideas: component prototypes
+versus exploratory drafts and the graduation of a draft; splitting a pure view
+from a data-bound container before prototyping; fixtures shared with stories; no
+network calls from prototypes; a production build that excludes prototype code;
+declared states; journeys whose edges carry the real control text; stable ids
+for feedback; approval by people only; labeled illustrative data. The text is
+reworded and reorganized around this skill's review sections, and every rule is
+tool-agnostic.
+
+Not incorporated: the `@compozy/proto` package, its CLI, gallery, review files,
+flow file format, `proto check` problem codes, port numbers, paths and `meta`
+API, the `data-od-id` attribute name, the `open-design` lint and browser tools,
+spec directories, Compozy component names and repository examples. This package
+ships no server, script or tool: it names no required preview tool and tells the
+agent to use the one the project has, falling back to the existing
+[temporary-harness rules](references/review.md#stress-a-real-component). Compozy
+is a single project's practice, not evidence of measured agent reliability.
+
+## AI interfaces and dark theme
+
+The 0.22.0 [AI and agent interfaces](references/ai-interfaces.md) reference and
+the [dark theme](references/visual-details.md#design-a-dark-theme) section of
+visual details adapt practice from Pedro Nauck's
+[ui-craft skill](https://github.com/pedronauck/skills/tree/main/skills/mine/ui-craft)
+(MIT, Copyright (c) 2026 Pedro Nauck) at commit `682e738`, read on 2026-11-11:
+`references/human-ai-ux.md` and `references/dark-mode.md`. The full upstream
+notice is kept in [licenses/pedronauck-skills.txt](licenses/pedronauck-skills.txt).
+The AI material is organized by the public origin the source itself cites,
+Microsoft's Guidelines for Human-AI Interaction (Amershi et al., CHI 2019), with
+IBM's accountability, value-alignment, explainability and data-rights framing
+folded into sources, uncertainty and memory control. Adapted ideas: capability and
+limit disclosure, cheap invocation, dismissal and correction, the streaming state
+set, partial output and input preserved on failure, scroll-follow only at the
+bottom, citations and reasons, graded uncertainty, per-response feedback, visible
+memory, global controls, announcing a stream once rather than per token and a
+shipping check. Dark theme: lightness-based elevation, avoiding pure black and
+white, accent retuning with the hue kept, dangerous pairs, per-theme focus and
+disabled tokens, theme-aware assets, `prefers-color-scheme` with a persisted
+choice applied before paint and per-theme contrast checks. The upstream repository ships no LICENSE file; its MIT terms and the
+copyright line were confirmed with the package maintainer, who knows the author.
+The text is reworded
+and condensed, and every rule links to the existing owner for async recovery,
+announcements, motion, loading states, behavioral guardrails and shared style
+changes instead of restating it.
+
+Not incorporated: the source's scene-test gate and its skill-specific
+vocabulary (anti-slop hit names and severities), Figma tooling routes, the
+`ui-craft` file structure and cross-references, exact token timings, hex and
+OKLCH values, letter-spacing and weight offsets, the surface-scale code, the
+inline theme script, and its third-party citations beyond the Microsoft
+guidelines. Brand-specific examples (Perplexity, Material, Apple, IBM Carbon) are
+omitted. The 0.22.0 release shipped no script, checker or generator; 0.23.0 adds
+the two helpers recorded in [Bundled helper scripts](#bundled-helper-scripts). The Microsoft guidelines are
+a public research publication consulted through the source's summary, not
+re-read for this release.
+
+## Bundled helper scripts
+
+The 0.23.0 [`scripts/check-contrast.mjs`](scripts/check-contrast.mjs) and
+[`scripts/detect-token-drift.mjs`](scripts/detect-token-drift.mjs) are adapted
+from `scripts/check-contrast.mjs` and `scripts/detect-token-drift.mjs` in Pedro
+Nauck's [ui-craft skill](https://github.com/pedronauck/skills/tree/main/skills/mine/ui-craft)
+(MIT, Copyright (c) 2026 Pedro Nauck) at commit `682e738`, read on 2026-11-11 and
+never run from the downloaded copy. The notice is the one already kept in
+[licenses/pedronauck-skills.txt](licenses/pedronauck-skills.txt); each script
+carries a header crediting the source. They are optional, read-only,
+dependency-free Node helpers and are not required gates: a project's own lint or
+codegen that owns the invariant takes precedence.
+
+Reviewed and changed from the upstream files. Contrast: the APCA low clip was
+the 0.027 offset instead of APCA-W3 0.0.98G-4g's 0.1 (small contrasts reported a
+positive Lc instead of 0); the version of the algorithm is now stated, and Lc is
+signed as published; alpha in hex, `rgb()` and `oklch()` was silently dropped and
+is now composited over the background (a translucent background is rejected);
+`oklch()` out-of-gamut colors were clipped per channel and are now mapped by
+reducing chroma; hue units, percentages and `none` are parsed, trailing garbage
+and unknown arguments are rejected, a failing ratio is never shown as the
+threshold through rounding, and empty or malformed `--json` input exits 2. The
+WCAG luminance formula was already correct (the 0.04045 breakpoint replaces
+0.03928 with identical 8-bit results). Drift scan: comments, URL fragments and
+anchors (`href="#add"`), HTML entities, id selectors and class fields were
+reported as colors; functions whose first argument is a variable
+(`hsl(var(--x))`) were reported as raw colors; multi-line literals were missed;
+token files matched only as whole directories and by absolute path; symlinks
+were followed; the report cited a file of the source skill; unknown flags were
+treated as directories. A `token-drift-ignore` marker was added. Residual
+limits are listed in the script header. Not incorporated: the upstream
+spacing-value claims in its comments (colors only) and its references to
+`ai-slop-patterns.md`. Tests and fixtures live outside the distributed tree in
+`scripts/test_skill_scripts.mjs` and `evals/fixtures/token-drift/`.
+
+APCA constants were compared with the `apca-w3` 0.1.9 package source and its test
+vectors (read, not executed). APCA is a draft, not part of WCAG 2.2 conformance.
+
+## Shared marketing-copy guidance
+
+The 0.24.0 [marketing-copy guide](references/copywriting.md) adapts practice from
+the `copywriting` skill in Corey Haines'
+[marketingskills](https://github.com/coreyhaines31/marketingskills) (MIT,
+Copyright (c) 2025 Corey Haines) at commit
+`1f837447b20bb6f0e72d87b80ece1c221c362c7d`, read on 2026-11-11: its `SKILL.md`
+and `references/copy-frameworks.md` and `references/ai-tells.md`. The full upstream
+notice is kept in [licenses/coreyhaines-marketingskills.txt](licenses/coreyhaines-marketingskills.txt).
+The text is reworded and condensed, and the examples are original.
+
+Adapted ideas: the headline families (outcome, problem, audience,
+differentiation, proof) as a menu for generating alternatives rather than
+templates; diagnosing the situation first (blank or generic, real voice present,
+point edit) and reading taste out of the input; declining an unsupported claim
+by naming the evidence that would unlock it; and the structural patterns of
+generated-sounding copy (contrast reveal, negation list, trailing pile-on,
+question then answer, colon reveal, reflexive threes, uniform rhythm, abstract
+subjects, false ranges). The patterns are recast as review signals that prompt a
+check of whether the sentence carries a supported claim.
+
+Not incorporated: the upstream hard bans and per-section frequency caps, its
+punctuation rules (including the em-dash ban) and word blacklists, which
+conflict with this skill's stance that punctuation bans and fixed counts are not
+quality measures; the product-marketing-context file protocol, the learnings
+log, the `[NEED: ...]` convention as a required format (kept only as an example
+placeholder), the Human Action Model and "Now you can" clarity tests, its
+conversion-lift statistics, the landing-page section types and page templates
+(already covered by [landing pages](references/landing-pages.md), which ties
+sections to the visitor's decision rather than a template), the CTA formulas,
+the natural-transition phrase bank, the persona-building exercise, the
+second-generation-tell list and the sibling skills it routes to. The upstream
+file credits Profound's `improved-copywriting` skill (MIT) for part of the
+diagnosis and gate material; that part was read through Corey Haines' text, not
+from the original. Frontend Craft's pre-existing "Commercial brief and claim
+inventory" and "Write, edit and refresh marketing copy" sections were moved
+into the same guide with only the wording changes needed to stand alone for any
+skill (page-specific links became plain-text pointers).
+
+The guide lives in `shared/copywriting.md` at the repository root and is copied
+into each consuming skill's `references/` by `scripts/sync_shared.py`; see the
+repository README.
+
+## Binding-design comparison
+
+The 0.20.0 [binding-design comparison](references/review.md#compare-a-render-with-a-binding-design)
+adapts the screen-verification method of `tlc-spec-lean` 2.2.0 and
+`tlc-spec-driven` 4.1.0 by Tech Leads Club, from
+[tech-leads-club/agent-skills](https://github.com/tech-leads-club/agent-skills)
+at commit `e74dc8a`, compared on 2026-11-11: `tlc-spec-lean/references/verify-screens.md`
+and rules 9–10 of `tlc-spec-lean/SKILL.md`. Both skills declare
+[CC BY 4.0](https://creativecommons.org/licenses/by/4.0/) in their metadata; the
+repository root carries an MIT notice. Adapted ideas: a supplied design binds
+unless called inspiration and only the user changes it; approved departures are
+listed before judging; each drawn state is captured at the design's pixel size
+over its scale, never resized, with smaller text as the tell-tale; a fresh judge
+sees the design, pictures and departures but not code, diff or builder notes and
+takes no new captures; an inventory marked `same`/`differs` by kind is the whole
+judgement; undrawn states are proven by tests or interaction; the verdict is tied
+to a commit, with one regression-aware second round and no third. The text is
+adapted: condensed, reworded and reorganized around this skill's review
+sections, with a size example, a no-subagent fallback and the separation from
+the critique's iteration limit added; the billing example rows follow the
+source's illustration. No endorsement is implied.
+
+Not incorporated: the `.specs/` files and their formats (`plan.md`, `checks.md`,
+`screens.md`, `STATE.md` decisions and `AD-NNN` confirmations), the
+`<capture>.running.png` naming, `walk` proofs, the `validate_verification.py`
+completion gate and any script, the Verifier role and its dispatch bookkeeping,
+and resuming the round-one subagent as a requirement. Pictures stay review
+evidence under the [rendered-critique rule](references/review.md#critique-the-rendered-composition),
+not gate steps.
+
+## Worst-case data, motion craft and variant comparison
+
+The 0.19.0 additions were compared against the remaining skills in
+[Emil Kowalski's skills](https://github.com/emilkowalski/skills) at commit
+`715c180` (MIT) on 2026-11-09: `break-ui`, `prototype`, `animate`,
+`review-animations`, `emil-design-eng`, `apple-design` and the repository's UI
+cheat sheet. The [value map, worst-case shapes and failure signatures](references/review.md#stress-a-real-component),
+the [per-field truncation rule](references/interaction-accessibility.md#layout-typography-and-color),
+the [variant comparison](references/reuse-consistency.md#compare-variants-when-direction-is-open),
+the mechanism ladder, easing selection, entrance origin, tooltip warm-up, spring
+tuning, drag threshold and momentum projection in [motion](references/motion.md),
+the discomfort triggers and `prefers-reduced-transparency`/`prefers-contrast`
+branches, and the [translucent surfaces](references/visual-details.md#translucent-surfaces)
+section are independently expressed; no text, catalog rows, recipes, picker code
+or plan templates were copied. The momentum projection and interruption model
+follow Apple's public [Designing Fluid Interfaces](https://developer.apple.com/videos/play/wwdc2018/803/)
+session, which `apple-design` also distills. Numeric curves, thresholds and
+scales are labelled as illustrative starting points because project tokens remain
+authoritative.
+
+Not incorporated: hard bans on animating keyboard-triggered or frequent actions
+and on `ease-in`, a universal 300 ms ceiling, a fixed press scale, a Block
+verdict on a single easing, hold-to-confirm for destructive actions (which
+conflicts with the approved-confirmation rule), the before/after review table,
+canned greeting responses, the prototype picker's chrome and invocation syntax,
+the `improve-animations` plan-file and reconcile workflow, system fonts by
+default, and the specific library recommendations of `pick-ui-library`; its
+library-agnostic rule against hand-rolling solved problems is adopted in
+[reuse and consistency](references/reuse-consistency.md#select-a-precedent-by-responsibility).
+MDN and Apple links beside the new rules were checked on 2026-11-09.
+
+## Public launch readiness
+
+The 0.18.0 [launch-readiness pass](references/technical-seo.md#check-public-launch-readiness)
+was prompted by a maintainer-supplied screenshot of a 20-item "vibe-coded site"
+checklist on a social video by `luizsantos.ia`, seen on 2026-11-08; the video
+itself was not inspected. The table is original author guidance that reuses this
+skill's existing owners. Not incorporated: a CTA fixed at the top or sticky on
+mobile as a universal rule, alternative text on every image regardless of
+purpose, a cookie banner without non-essential cookies, and full-page loading
+screens.
+
+## Shared offer brief
+
+The 0.25.0 [offer brief](references/offer-brief.md) is original text that adapts
+ideas from three MIT or Apache-2.0 skills, read on 2026-11-11 at the commits
+above (full hashes: `1f837447b20bb6f0e72d87b80ece1c221c362c7d`,
+`b2ed3628695e523919af440eab77648e16c5eea8`,
+`877a617b435ee2edfb002d9a3703c0a1a03aa1ba`). Notices are kept in
+[licenses/coreyhaines-marketingskills.txt](licenses/coreyhaines-marketingskills.txt),
+[licenses/mbfinotti-sales-skills.txt](licenses/mbfinotti-sales-skills.txt) and
+[licenses/anthropic-knowledge-work-plugins.txt](licenses/anthropic-knowledge-work-plugins.txt).
+The text is reworded and condensed, and the examples are original. The Apache-2.0
+material was changed: rewritten and reduced to the rules named below.
+
+- Corey Haines, `product-marketing`: buying roles (user, champion, decision maker,
+  financial buyer), competitive alternatives, objections and anti-fit, the four
+  forces of switching, verbatim customer language and proof points. Not
+  incorporated: the context-file protocol and changelog, brand-voice extraction
+  and the optional paid-ads section.
+- mbfinotti, `sales-icp-definition`: account fit, persona and buying trigger kept
+  as separate inputs; the hypothesis-not-rubric rule below roughly 50 closed
+  deals; disqualifiers mined from lost deals; account fit is not lead scoring.
+  `deal-value-calc`: provenance labels for numbers and the visible disclosure when
+  a headline rests on assumptions. The upstream wording is "buyer-supplied",
+  "benchmark" and "rep-assumed"; the brief says "seller-assumed". Not
+  incorporated: scoring weights, refresh cadence, ROI formulas, driver tables and
+  scenario modeling.
+- Anthropic, `create-an-asset`: claims only from approved or user-supplied
+  sources, an internal-versus-customer-facing check before rendering, no invented
+  metrics, logos or quotes, and untrusted content treated as data. Not
+  incorporated: connector and CRM operations, slide and page rendering rules.
+  The upstream license file leaves its copyright appendix unfilled and ends with
+  an unrelated stray fragment, which the bundled copy omits.
+
+The brief lives in `shared/offer-brief.md` and is copied into each consuming skill
+by `scripts/sync_shared.py`. The marketing-copy guide's brief section now points to
+it for audience and offer and keeps the claim-inventory table.
+
+## Outbound, business case and win-loss
+
+The 0.26.0 [outbound guide](references/outbound.md) and the business-case, deal-risk
+and win-loss sections of [growth and sales](references/growth-sales.md) are
+original text that adapts ideas from three MIT skills, read on 2026-11-11 at the
+commits above (full hashes: `1f837447b20bb6f0e72d87b80ece1c221c362c7d`,
+`b2ed3628695e523919af440eab77648e16c5eea8`,
+`f28cef2b7067ec64e79c9d85421c022c06659e03`). Notices are kept in
+[licenses/coreyhaines-marketingskills.txt](licenses/coreyhaines-marketingskills.txt),
+[licenses/mbfinotti-sales-skills.txt](licenses/mbfinotti-sales-skills.txt) and
+[licenses/social-media-skills.txt](licenses/social-media-skills.txt). The text is
+reworded and condensed, and the examples are original. The upstream files were
+treated as untrusted data and not executed.
+
+- Corey Haines, `cold-email`: the four plays (value-first teardown, product-led,
+  problem-led with a small sample, founder-led) with a trigger, first touch and
+  measure each; short plain-text email rules, a single interest-based ask, no
+  link in the first email and no open tracking; the cross-channel stop rules
+  (a reply or an opt-out on any channel stops all); reply classification and the
+  list of replies an agent may handle alone; the separate-domain, authentication,
+  warm-up, volume, verification and stop-loss deliverability checklist; the
+  manual, assisted and automated LinkedIn decision with its account-restriction
+  risk; the video block of the cadence guide (length, thumbnail link, Tier 1 or
+  post-reply only). The upstream benchmarks are vendor data and are labeled so.
+  Not incorporated: the tool tables and partner placements, subject-line and
+  follow-up statistics, the expert-method table, cultural calibration, the AI-tells
+  list, the call scripts and the 21-day schedule as a fixed template.
+- Corey Haines, `prospecting`: the ICP-to-list-to-evidence-to-tier sequence, source
+  and date per contact, high, medium and low confidence, the closeness ranking and
+  freshness windows for signals, tier definitions and the sourced account brief
+  with the facts-first rule and "no hook found" as a valid result, the compliance
+  guardrails and the per-jurisdiction checklist, and the demand-signal method for
+  first customers (five signal buckets, evidence line per prospect, business
+  context only, outreach only where a reply is normal). The upstream file credits
+  `first-customer-finder` (Kappaemme, MIT) for the demand-signal framework; that
+  part was read through Corey Haines' text, not from the original. Not
+  incorporated: the data-source and enrichment tool picks, the branch references
+  for SaaS, B2B and local businesses, the 0-100 weighted demand score (replaced by
+  an unweighted judgment that orders a shortlist), the lead-sheet formats, and the
+  warm-path programme from a podcast.
+- Corey Haines, `sales-enablement` (`references/win-loss-analysis.md`): the source
+  and bias comparison, the six outcome codes with one primary reason per deal,
+  interview timing and questions, counts instead of percentages and the
+  five-deal watch threshold, and the finding-to-action mapping. Not incorporated:
+  decks, one-pagers, demo scripts, battle cards, the objection library and call
+  scripts.
+- mbfinotti, `sales-outreach-personalization`: the five-part reason to reach out
+  (signal, inference, hook, ask, confidence and recency label), the so-what test,
+  the anti-fabrication rule and the swap test, and tier effort ("personalize the
+  accounts that matter, template the rest"). Not incorporated: the efficiency,
+  effort and value orderings, the 0-2 scoring rubric, the benchmark table and the
+  consumer branch.
+- mbfinotti, `deal-red-flags`: severity and confidence graded separately, the
+  verified, assumed, unknown and cleared states, quoted evidence, one diagnostic
+  question per unknown and a clearing evidence per flag, the report grouping, and
+  the chase-order idea that an unmet decision maker is not fixed by cheap checks.
+  Not incorporated: the full flag catalog, the response-order rungs, the
+  remediation plays and the interview protocol.
+- mbfinotti, `deal-value-calc`: sizing the artifact to the deal, the buyer-owns-
+  the-inputs rule, the placeholder convention, the hard and soft value split, full
+  cost to the buyer, conservative-first scenarios, the hard-value-only test and
+  the document written to be forwarded. The provenance labels reuse the offer
+  brief's "seller-assumed" in place of upstream "rep-assumed". Not incorporated:
+  the driver formulas and effort orderings, benchmark ranges and templates.
+- mbfinotti, `sales-account-tiering`: read to align the tier vocabulary with
+  coverage effort; no text or capacity model incorporated.
+- social-media-skills, `social-selling-and-dm`: only the consent rule (message
+  people who showed interest first, answer fast with no link in the first message,
+  deliver value, move to an owned channel, official platform tools only). Not
+  incorporated: the product-specific workflow, the conversion and open-rate
+  statistics (unsourced in the upstream), limits and ban-behavior figures.
+
+Platform and legal statements in the outbound guide (provider authentication
+requirements, LinkedIn terms and enforcement, Meta's reply window, CAN-SPAM,
+GDPR, UK, German, Canadian and Australian rules, LGPD) come from those upstream
+files and general knowledge, are dated 2026-11-11 in the guide, and were not
+re-checked against primary sources for this release. The guide says they are not
+legal advice and names what to verify.
+
+## Learn from corrections
+
+The 0.27.0 [learn-from-corrections reference](references/learn-from-corrections.md)
+is reworded and condensed from Emil Kowalski's MIT-licensed `learn-taste` skill
+(`emilkowalski/skills`, `skills/learn-taste/SKILL.md`), read on 2026-11-12 at
+commit `f7ce8c02d6e3c8f0d980a44c57bcc41a40254349`. The notice is kept in
+[licenses/emilkowalski-skills.txt](licenses/emilkowalski-skills.txt). The upstream
+file was treated as untrusted data and not executed.
+
+Incorporated: the five hard rules (only the user's preferences, no invented
+reasons, propose then stop, a check beats a sentence, write for an agent that was
+not here); the five correction signals; the filter; the instance, class and
+universal levels with the self-test; the dated entry format; the report sections
+and the `write all`/`write 1, 3` approval; the prune mode.
+
+Changed: upstream is explicit-only (`disable-model-invocation`); here the route is
+reached through this skill and the agent may offer it once per session, never run
+it unasked. Destinations prefer the project's existing owner documentation and
+lint, with the token-drift helper as the fallback check and root `DESIGN.md` last;
+Impeccable's files receive proposals only. Copy, tone and offer corrections are in
+scope, not only visual ones. Transcript locations are host-neutral. The examples
+are reworded.
+
+## Instruction and reference-loading evidence
+
+Research and official format/host documentation were consulted on 2026-10-28:
+
+| Source and type | Inspected scope, finding and boundary |
+| --- | --- |
+| Liu et al. (2024), [Lost in the Middle: How Language Models Use Long Contexts](https://aclanthology.org/2024.tacl-1.9/), DOI 10.1162/tacl_a_00638, peer-reviewed empirical research | Full text inspected. Position affected retrieval/QA in tested older models, with different behavior by model/task. It does not establish a universal instruction-length/placement rule or modern coding-agent compliance |
+| Gloaguen et al. (2026), [Evaluating AGENTS.md: Are Repository-Level Context Files Helpful for Coding Agents?](https://arxiv.org/html/2602.11988v3), empirical preprint revised 2026-09-29 | Full text inspected. Tested context files did not generally improve task success and increased work/cost; generated/developer files and documentation availability differed. No clear length-outcome dependency was established. Benchmarks of Python issue resolution do not prove effects on this skill, frontend quality or every host/model |
+| [Agent Skills specification](https://agentskills.io/specification.md), format/design contract | Metadata, activated instructions and on-demand resources inspected. Progressive disclosure is a packaging recommendation, not proof that a host selects or follows the correct references |
+| Anthropic [Create custom subagents](https://code.claude.com/docs/en/sub-agents.md#what-loads-at-startup), vendor contract | Startup/inheritance sections inspected. Worker context depends on actual host/mode; this supports checking inheritance and supplying missing sources, not assuming universal isolation or inheritance |
+
+These sources motivate testing task-relevant instructions rather than assuming
+more prose helps. Conditional routes, freshness checks and source handoffs are
+independently authored safeguards, not measured reliability gains. Explicit skill
+invocation, automatic host activation and delegated execution require separate
+evidence; this package does not install a new loader or enforce file reads.
+
+## Companion and distribution
+
+[Impeccable](https://github.com/pbakaus/impeccable) is an optional companion and
+owns its own design/context workflow. Frontend Craft does not redistribute it,
+invoke an assumed version-specific launcher, or require its installation.
+
+[Skills CLI](https://github.com/vercel-labs/skills) supplies discovery and
+installation. Its documented local/Git repository support is used directly;
+there is no custom installation protocol in this package.

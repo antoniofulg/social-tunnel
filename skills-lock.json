@@ -1,0 +1,173 @@
+{
+  "version": 2,
+  "skills": {
+    "frontend-craft": {
+      "source": "antoniofulg/frontend-craft",
+      "commit": "0e3497c3c85f8521ea5f65a0f02888cf49e8292f",
+      "sourceType": "github",
+      "skillPath": "skills/frontend-craft/SKILL.md",
+      "computedHash": "3651040822532b29adc0cd70046d7b22334dbc5123f143149d5f50dcfa8dafea"
+    },
+    "react": {
+      "source": "pedronauck/skills",
+      "commit": "71a96003910d1e222c49f9bfa3830127f46b240f",
+      "sourceType": "github",
+      "skillPath": "skills/mine/react/SKILL.md",
+      "computedHash": "459dfe1067178a1ea3906dc946e427d44581d5731319cb3514f0e74e871d7d59"
+    },
+    "security-implementation": {
+      "source": "antoniofulg/security-lifecycle",
+      "commit": "193f804694e40055f3f19eb543ab04168ddbc72f",
+      "sourceType": "github",
+      "skillPath": "skills/security-implementation/SKILL.md",
+      "computedHash": "8c8f102c66d2489383cfadfe4f87b0b3787b08f3e052e73a0e55434253fad4b6"
+    },
+    "security-review": {
+      "source": "antoniofulg/security-lifecycle",
+      "commit": "193f804694e40055f3f19eb543ab04168ddbc72f",
+      "sourceType": "github",
+      "skillPath": "skills/security-review/SKILL.md",
+      "computedHash": "51bfe637b41b44b2b36ac3524e9784e540c77fa162b080ea52dcb5bf795929db"
+    },
+    "security-spec": {
+      "source": "antoniofulg/security-lifecycle",
+      "commit": "193f804694e40055f3f19eb543ab04168ddbc72f",
+      "sourceType": "github",
+      "skillPath": "skills/security-spec/SKILL.md",
+      "computedHash": "b076d9d0dccddcb26d571e720dfd44f3146d4408fe39d15136870b53ae06cdc5"
+    },
+    "security-threat-model": {
+      "source": "antoniofulg/security-lifecycle",
+      "commit": "193f804694e40055f3f19eb543ab04168ddbc72f",
+      "sourceType": "github",
+      "skillPath": "skills/security-threat-model/SKILL.md",
+      "computedHash": "33ace79f9a590a869310b1d76618e5a1383549f0523bc34d7eded5ac51c40fda"
+    },
+    "tailwindcss": {
+      "source": "pedronauck/skills",
+      "commit": "71a96003910d1e222c49f9bfa3830127f46b240f",
+      "sourceType": "github",
+      "skillPath": "skills/mine/tailwindcss/SKILL.md",
+      "computedHash": "d29a4861f3f47a309a0552562cc51cd07ed0eafac2a8e01b09e282af8af5ee64"
+    },
+    "tauri-v2": {
+      "source": "nodnarbnitram/claude-code-extensions",
+      "commit": "35e7f7deae689e12b94f9c242b8f59efe0f66476",
+      "sourceType": "github",
+      "skillPath": ".claude/skills/tauri-v2/SKILL.md",
+      "computedHash": "785f2858f21d8d6757c136dded755da9ebb16d292391defcb7171e445c03e77d"
+    },
+    "wtk": {
+      "source": "antoniofulg/workflow-toolkit",
+      "commit": "345d47f452e3f0156ee16714f184504594ee055a",
+      "sourceType": "github",
+      "skillPath": ".agents/skills/wtk/SKILL.md",
+      "computedHash": "d916ad8ddafd27bc6bc697d8645ec0b236ed1c8be2624932ea2e7a2c91cd579d"
+    },
+    "wtk-deep-review": {
+      "source": "antoniofulg/workflow-toolkit",
+      "commit": "345d47f452e3f0156ee16714f184504594ee055a",
+      "sourceType": "github",
+      "skillPath": ".agents/skills/wtk-deep-review/SKILL.md",
+      "computedHash": "ea46652772d29e2c66e75598e6c102ab82796ee0b26840f75984924d8c05a8a9"
+    },
+    "wtk-discover": {
+      "source": "antoniofulg/workflow-toolkit",
+      "commit": "345d47f452e3f0156ee16714f184504594ee055a",
+      "sourceType": "github",
+      "skillPath": ".agents/skills/wtk-discover/SKILL.md",
+      "computedHash": "abc1fa0f6d1f820efcb3564b7d3352961a0c1707bcf3471394068ae2e4ab8f02"
+    },
+    "wtk-implement": {
+      "source": "antoniofulg/workflow-toolkit",
+      "commit": "345d47f452e3f0156ee16714f184504594ee055a",
+      "sourceType": "github",
+      "skillPath": ".agents/skills/wtk-implement/SKILL.md",
+      "computedHash": "65e9c9a7147c11e02e6b4f44706c5ef54ba7bcb2d69e78121d674daa02ebb313"
+    },
+    "wtk-knowledge-check": {
+      "source": "antoniofulg/workflow-toolkit",
+      "commit": "345d47f452e3f0156ee16714f184504594ee055a",
+      "sourceType": "github",
+      "skillPath": ".agents/skills/wtk-knowledge-check/SKILL.md",
+      "computedHash": "1797b970018cb56fded6824a3a9752a2c75e5c1dca85cd80e7506e6ec57c5917"
+    },
+    "wtk-lean": {
+      "source": "antoniofulg/workflow-toolkit",
+      "commit": "345d47f452e3f0156ee16714f184504594ee055a",
+      "sourceType": "github",
+      "skillPath": ".agents/skills/wtk-lean/SKILL.md",
+      "computedHash": "64be719072f6738c4d3ab25ed4d78dbadebf89eb2bbe1e25fcd2989ebdf1b9a4"
+    },
+    "wtk-plan": {
+      "source": "antoniofulg/workflow-toolkit",
+      "commit": "345d47f452e3f0156ee16714f184504594ee055a",
+      "sourceType": "github",
+      "skillPath": ".agents/skills/wtk-plan/SKILL.md",
+      "computedHash": "6c13cfc432bf8bdad3d13ae922225081c8255b4a4b150a65c9e7d56b7ee20b75"
+    },
+    "wtk-plan-review": {
+      "source": "antoniofulg/workflow-toolkit",
+      "commit": "345d47f452e3f0156ee16714f184504594ee055a",
+      "sourceType": "github",
+      "skillPath": ".agents/skills/wtk-plan-review/SKILL.md",
+      "computedHash": "1b683e5c80abd3850e5c2191e04ff79ff4011e252a159343f7c47c34c24b2dcb"
+    },
+    "wtk-qa": {
+      "source": "antoniofulg/workflow-toolkit",
+      "commit": "345d47f452e3f0156ee16714f184504594ee055a",
+      "sourceType": "github",
+      "skillPath": ".agents/skills/wtk-qa/SKILL.md",
+      "computedHash": "2484cd0e61392a858d95157b6c0cb412484f27e4154e42bd677e53b70ef7d183"
+    },
+    "wtk-qa-execute": {
+      "source": "antoniofulg/workflow-toolkit",
+      "commit": "345d47f452e3f0156ee16714f184504594ee055a",
+      "sourceType": "github",
+      "skillPath": ".agents/skills/wtk-qa-execute/SKILL.md",
+      "computedHash": "e38662203e76e0f69686cfbcacf841d8826045a64eedb79b4c483f4cd47465ff"
+    },
+    "wtk-qa-plan": {
+      "source": "antoniofulg/workflow-toolkit",
+      "commit": "345d47f452e3f0156ee16714f184504594ee055a",
+      "sourceType": "github",
+      "skillPath": ".agents/skills/wtk-qa-plan/SKILL.md",
+      "computedHash": "e99639349c4ebb4cdc9b53d93a77bbf7107b0085f83acc6151dd9f8d5cc4a7bf"
+    },
+    "wtk-reuse-review": {
+      "source": "antoniofulg/workflow-toolkit",
+      "commit": "345d47f452e3f0156ee16714f184504594ee055a",
+      "sourceType": "github",
+      "skillPath": ".agents/skills/wtk-reuse-review/SKILL.md",
+      "computedHash": "40e87d203a2747a6c1bf69cb3350e20ea9ce9953bcb5577417ee2b282982f827"
+    },
+    "wtk-setup": {
+      "source": "antoniofulg/workflow-toolkit",
+      "commit": "345d47f452e3f0156ee16714f184504594ee055a",
+      "sourceType": "github",
+      "skillPath": ".agents/skills/wtk-setup/SKILL.md",
+      "computedHash": "a353bd5968d1865850f0fcc7d75eacdcfd876c407bc9dea18d2eb7b4e8c9ebd9"
+    },
+    "wtk-ship": {
+      "source": "antoniofulg/workflow-toolkit",
+      "commit": "345d47f452e3f0156ee16714f184504594ee055a",
+      "sourceType": "github",
+      "skillPath": ".agents/skills/wtk-ship/SKILL.md",
+      "computedHash": "73497710dcff64c4debeef387dfee0670c8fe77ae7386c434132164e69213c72"
+    },
+    "wtk-test-audit": {
+      "source": "antoniofulg/workflow-toolkit",
+      "commit": "345d47f452e3f0156ee16714f184504594ee055a",
+      "sourceType": "github",
+      "skillPath": ".agents/skills/wtk-test-audit/SKILL.md",
+      "computedHash": "257fb5dd9d0c8dee14380a0bcb58f34eff5af474d4e8b61a1a6debe9494ccfae"
+    },
+    "wtk-test-review": {
+      "source": "antoniofulg/workflow-toolkit",
+      "commit": "345d47f452e3f0156ee16714f184504594ee055a",
+      "sourceType": "github",
+      "skillPath": ".agents/skills/wtk-test-review/SKILL.md",
+      "computedHash": "ec30e5df7e259e79839148ea5d1829aba0d21f064feef1f7123643385946a6df"
+    }
+  }
+}
