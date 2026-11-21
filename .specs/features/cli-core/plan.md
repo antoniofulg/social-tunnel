@@ -45,8 +45,8 @@ None - no stored-data shape change beyond two new local JSON files, whose litera
 | Interface | In | Out | Outcomes |
 | --- | --- | --- | --- |
 | `social-tunnel run` | `--config <path>`, `--json` | log lines on stderr (JSON lines with `--json`); `state.json` | exit 0 on SIGINT/SIGTERM, 2 config/usage or already running, 13 host key mismatch |
-| `social-tunnel status` | `--config <path>`, `--json` | `{ok, command, state, reason, since, retryAt, pid, server, remotePort, domains}` | exit 0 connected, 10 not connected, 11 port blocked, 13 host key mismatch, 2 config |
-| `social-tunnel doctor` | `--config <path>`, `--json`, `--domain <host>` | `{ok, command, hops: [{hop, ok, detail, fix}]}` | exit 0 all pass, 2 config/key, 10 unreachable/auth/egress, 11 forward refused, 12 domain refused, 13 host key mismatch, 14 lockdown failed |
+| `social-tunnel status` | `--config <path>`, `--json` | `{ok, command, configPath, state, reason, since, retryAt, pid, server, remotePort, domains}` | exit 0 connected, 10 not connected, 11 port blocked, 13 host key mismatch, 2 config |
+| `social-tunnel doctor` | `--config <path>`, `--json`, `--domain <host>` | `{ok, command, configPath, hops: [{hop, ok, detail, fix}]}` | exit 0 all pass, 2 config/key, 10 unreachable/auth/egress, 11 forward refused, 12 domain refused, 13 host key mismatch, 14 lockdown failed |
 | any verb, `--help`, `--version` | unknown verb or flag | usage on stderr | exit 2 for unknown input, 0 for help/version |
 | proxy over a forwarded channel | `CONNECT host:443 HTTP/1.1` | relayed bytes | `200 Connection Established`, `400`, `403`, `405`, `408`, `502`, `503`, `504` |
 
@@ -56,7 +56,7 @@ None - no stored-data shape change beyond two new local JSON files, whose litera
 | --- | --- | --- |
 | 1. Exit codes | `0` ok · `1` internal error · `2` usage/config · `10` tunnel down · `11` server port blocked · `12` domain refused · `13` host key mismatch · `14` server tunnel user too permissive | One non-zero code: agents could not tell which hop to fix |
 | 2. `--json` envelope | one JSON object on stdout, top-level `ok` (bool) and `command` (verb); errors as `error: {code, message, field?}` | NDJSON streams: harder to parse for a one-shot status call |
-| 3. Config path and schema v1 | `--config` > `$SOCIAL_TUNNEL_CONFIG` > `$XDG_CONFIG_HOME/social-tunnel/config.json` > `~/.config/social-tunnel/config.json` (`%APPDATA%\social-tunnel\config.json` on Windows); `{version: 1, server: {host, port, user, hostKey}, remotePort, keyPath, domains}`; unknown keys rejected | `~/Library/Application Support` on macOS: two paths for agents and docs to know on the two main platforms |
+| 3. Config path and schema v1 | `--config` > `$SOCIAL_TUNNEL_CONFIG` > the platform config dir + `social-tunnel/config.json`: macOS `~/Library/Application Support`, Linux `$XDG_CONFIG_HOME` else `~/.config`, Windows `%APPDATA%`; `{version: 1, server: {host, port, user, hostKey}, remotePort, keyPath, domains}`; unknown keys rejected | `~/.config` on every OS: non-native on macOS and apart from where the Tauri app keeps its data (user chose native, 2026-11-21) |
 | 4. Proxy runs in-process on forwarded channels | `tunnel` passes each `tcp connection` stream to `proxy.handle(stream)`; no listening socket on the home machine | Local `127.0.0.1` TCP listener: any local process, or a mis-bind to the LAN, could use the home IP |
 | 5. CONNECT-only, port 443 | method other than CONNECT gets `405`, port other than 443 gets `403` | Plain-HTTP absolute-form forwarding: more parsing surface, and the target platforms are HTTPS-only |
 | 6. `ssh2` dependency | `ssh2@1.17.0`, pure JS under Bun (spike: handshake, host key pin, key auth and reverse-forward round trip pass on Bun 1.4.4) | System `ssh` binary: README requires no external `ssh`, and Windows lacks it by default |
@@ -73,7 +73,8 @@ A command either gets a valid config or tells the user exactly what is wrong, in
 
 **Acceptance Criteria**
 
-1. WHEN a command starts THEN the system SHALL read the config from the first present of `--config`, `$SOCIAL_TUNNEL_CONFIG`, `$XDG_CONFIG_HOME/social-tunnel/config.json`, `~/.config/social-tunnel/config.json`
+1. WHEN a command starts THEN the system SHALL read the config from `--config`, else `$SOCIAL_TUNNEL_CONFIG`, else `<platform config dir>/social-tunnel/config.json` where the dir is `~/Library/Application Support` on macOS, `$XDG_CONFIG_HOME` or `~/.config` on Linux, and `%APPDATA%` on Windows
+55. WHEN `status` or `doctor` prints `--json` THEN the object SHALL include `configPath`, the absolute path the config was resolved from
 2. IF the config file is missing, is not JSON, or fails schema v1 validation THEN the system SHALL exit 2 and, with `--json`, print `{"ok":false,"command":<verb>,"error":{"code":"config_invalid","field":<json path>,"message":<text>}}`
 3. IF a domain entry is not a DNS hostname with at least two labels, or contains a scheme, port, path, wildcard or IP literal THEN the system SHALL reject the config naming that entry
 4. WHEN a domain entry has upper-case letters or one trailing dot THEN the system SHALL store it lower-cased without the dot
@@ -177,7 +178,7 @@ The user or an agent learns which hop failed and what to do about it.
 
 | ID | Slice | Criteria | Status |
 | --- | --- | --- | --- |
-| CFG-01 | S1 | 1, 2, 3, 4, 5, 6 | Pending |
+| CFG-01 | S1 | 1, 2, 3, 4, 5, 6, 55 | Pending |
 | PRX-01 | S2 | 7-17, 44, 45, 46, 47 | Pending |
 | TUN-01 | S3 | 18-28, 48, 49, 50 | Pending |
 | STA-01 | S4 | 29-34, 51 | Pending |
@@ -210,13 +211,13 @@ The user or an agent learns which hop failed and what to do about it.
 | Per-host rate limits and per-host counters in `status` (threat T4) | Needs real traffic data to set limits; the 256-relay cap bounds damage meanwhile |
 | Server-side guard against another process binding the port while the tunnel is down (threat T3) | Needs root on the server; belongs to `setup` |
 | Rejecting public-suffix allowlist entries (threat T1) | Belongs to `domains add`, which writes the list |
-| Refusing the home's own public IP (threat T2) | Needs an external IP lookup; recorded as open question 4 |
+| Refusing the home's own public IP (threat T2) | Needs an external IP lookup; recorded as open question 2 |
 
 ## Assumptions
 
 | Assumption | Chosen default | Rationale | Confirmed? |
 | --- | --- | --- | --- |
-| Name of the long-running verb | `run` (foreground; `install` will launch it later) | README lists no verb that holds the tunnel; `run` is the plain word agents will guess | n |
+| Name of the long-running verb | `run` (foreground; `install` will launch it later) | README lists no verb that holds the tunnel; `run` is the plain word agents will guess | y |
 | Default `remotePort` | 8888 | Matches the README diagram and the working manual setup | n |
 | Logs from `run` | human lines on stderr, JSON lines with `--json`; no log file in v0.1 | `logs` is out of scope | y |
 | Supported runtime | Bun 1.4.x on macOS and Linux for tests | Bun 1.4.4 is installed; spike ran on it | y |
@@ -226,10 +227,8 @@ The user or an agent learns which hop failed and what to do about it.
 
 | # | Kind | Question | Until answered |
 | --- | --- | --- | --- |
-| 1 | open | Approve CONNECT-only to port 443 (door 5)? Recommended: yes - all target platforms are HTTPS and it removes the HTTP-parsing surface | Criteria 9 and 13 are written for CONNECT-only |
-| 2 | open | Confirm `run` as the verb name and `~/.config/social-tunnel/` as the config home on macOS too (door 3) | Criteria 1 and 18 use these names |
-| 3 | open | Keep default `remotePort` 8888 (fixed by the agentes.chat firewall rule?) or move to a less common port to reduce accidental takeover (threat T3) | Default stays 8888 |
-| 4 | open | Does the home network use IPv6 or a VPN, and should the proxy also refuse the home's public IPv4 (router hairpin, threat T2)? | Criterion 11 covers interface prefixes only |
+| 1 | open | Keep default `remotePort` 8888 (fixed by the agentes.chat firewall rule?) or move to a less common port to reduce accidental takeover (threat T3) | Default stays 8888 |
+| 2 | open | Does the home network use IPv6 or a VPN, and should the proxy also refuse the home's public IPv4 (router hairpin, threat T2)? | Criterion 11 covers interface prefixes only |
 
 ## Observable
 
@@ -259,3 +258,11 @@ The user or an agent learns which hop failed and what to do about it.
 - [AGENTS.md](../../../AGENTS.md) - safety invariants this feature must keep
 - [Threat model](../../../docs/security/threat-model.md) - provisional v0.1 model; controls T1-T8 land in criteria 11, 44-54
 - Coordinator dispatch, 2026-11-21 - scope: config, allowlist proxy, `ssh2` reverse tunnel, `status`/`doctor` with `--json` and stable exit codes
+
+## Approval
+
+- Decision: "Approve (Recommended)" for the plan; "HTTPS only (Recommended)" for door 5; "Native per platform (Recommended)" for door 3, applied in this revision with `configPath` added to `--json` output (criterion 55)
+- Source: user answers in the coordinating Claude Code chat (AskUserQuestion), relayed dispatch msg_774255650268
+- Date: 2026-11-21
+- Reviewed revision: commit fd86af3 plus the door 3 change the user chose
+- Scope: build S1-S6 with tests and local commits only; no push, publish or server changes

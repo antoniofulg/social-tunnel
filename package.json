@@ -1,0 +1,25 @@
+{
+  "name": "social-tunnel",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Route chosen domains from a server's browser through your home internet over an SSH reverse tunnel.",
+  "type": "module",
+  "bin": {
+    "social-tunnel": "src/cli.ts"
+  },
+  "engines": {
+    "bun": ">=1.4.0"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "test": "bun test"
+  },
+  "dependencies": {
+    "ssh2": "1.17.0"
+  },
+  "devDependencies": {
+    "@types/bun": "1.4.5",
+    "@types/ssh2": "1.15.6",
+    "typescript": "7.0.2"
+  }
+}
