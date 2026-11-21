@@ -44,6 +44,8 @@ Proof: run unit | (pass) [C60]
 
 ### S2 - Only allowlisted HTTPS hosts leave through the home IP
 
+Complete: C8-C24, C63 - proofs green; C58 needs the S3 `run` and is marked there
+
 **C8** - With `instagram.com` allowlisted, `CONNECT instagram.com:443`, `www.instagram.com:443`, `WWW.Instagram.COM:443` and `instagram.com.:443` each get `HTTP/1.1 200 Connection Established` and bytes flow both ways (PRX-01, AC 7)
 Proof: run unit | (pass) [C8]
 

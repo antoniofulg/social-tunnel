@@ -70,3 +70,15 @@ export async function cli(argv: string[], overrides: Partial<Io> = {}) {
   const stdout = out.join("");
   return { code, stdout, stderr: err.join(""), json: () => JSON.parse(stdout) };
 }
+
+export function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+export async function until(condition: () => boolean, ms = 5000, what = "condition"): Promise<void> {
+  const deadline = Date.now() + ms;
+  while (!condition()) {
+    if (Date.now() > deadline) throw new Error(`timed out waiting for ${what}`);
+    await sleep(5);
+  }
+}
