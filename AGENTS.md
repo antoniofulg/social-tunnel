@@ -4,7 +4,7 @@ What it does, why, and the release plan: [README.md](README.md). Read it before 
 
 ## Stack and layout
 
-The CLI core (`run`, `status`, `doctor`) is built; `app/` and `skills/` are still planned. Change the layout by decision, not drift:
+Change the layout by decision, not drift:
 
 | Path | Holds | Stack |
 | --- | --- | --- |
@@ -16,10 +16,8 @@ The tray app holds no tunnel or proxy logic: it calls the CLI (`--json`), so CLI
 
 ## Commands
 
-- Run the CLI from source: `bun src/cli.ts <run|status|doctor> [--json] [--config <path>]`.
 - Tests: `env -u CLAUDECODE taskpolicy -b nice -n 10 bun test` (Bun hides per-test pass lines when `CLAUDECODE` is set). Test names start with their check id, `[C12] ...`.
-- Tests use an in-process `ssh2` server and injected resolvers and dialers: no internet, no sshd. Keep it that way.
-- `ssh2`'s `utils.generateKeyPairSync("ed25519")` under Bun returns a pair `ssh2` cannot parse about 1 time in 200; parse-check any generated key before use.
+- Keep tests hermetic: an in-process `ssh2` server and injected DNS and network fakes, never the internet or a real `sshd`.
 
 ## Safety invariants
 
