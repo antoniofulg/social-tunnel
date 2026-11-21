@@ -275,3 +275,4 @@ The user or an agent learns which hop failed and what to do about it.
 - Reviewed revision: commit fd86af3 plus the door 3 change the user chose
 - Scope: build S1-S6 with tests and local commits only; no push, publish or server changes
 - Revision after criteria review (2026-11-21): settled contradictions and ambiguities the reviewer found (criteria 2, 6, 7, 11, 15, 30, 33, 35, 36, 40, 44, 51 clarified; 56 and 57 added; `skipped` added to the doctor hop shape). No capability added or removed; reported to the user for objection
+- Revision after verification round 1 (2026-11-21): criteria 59 (lockdown also probes a shell without a PTY and `exec`, counting only an evaluated marker), 60 (a stale `state.json` does not block `run`) and 61 (a channel holds a relay slot from open) appended to close verifier findings F1, F3 and F7; reported to the user in the coordinating chat. No capability added or removed
