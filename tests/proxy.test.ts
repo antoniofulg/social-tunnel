@@ -1,4 +1,5 @@
 import { expect, test } from "bun:test";
+import { Duplex } from "node:stream";
 import { DEFAULTS } from "../src/defaults";
 import { sleep, until } from "./helpers";
 import { harness, OK, PUBLIC } from "./proxy-harness";
@@ -260,4 +261,105 @@ test("[C69] channels still sending their head count against the relay cap", asyn
   await sleep(20);
   expect(await h.connect("instagram.com:443").head()).toBe(`${OK}\r\n\r\n`);
   expect(await h.status("instagram.com:443")).toBe("HTTP/1.1 503 Service Unavailable");
+});
+
+// An upstream whose writes complete one at a time, `delayMs` apart (never, when null). Everything
+// it has taken is in `taken`; what the proxy handed over but it has not taken yet sits in its queue.
+function slowUpstream(delayMs: number | null) {
+  const taken: Buffer[] = [];
+  const upstream = new Duplex({
+    writableHighWaterMark: 16 * 1024 * 1024,
+    read() {},
+    write(chunk, _encoding, done) {
+      taken.push(chunk);
+      if (delayMs !== null) setTimeout(done, delayMs);
+    },
+  });
+  return { upstream, size: () => taken.reduce((n, c) => n + c.length, 0) };
+}
+
+test("[C79] bytes already handed to a slow upstream are delivered after the client closes first", async () => {
+  const slow = slowUpstream(2);
+  const h = harness({ dial: async () => slow.upstream });
+  const channel = h.connect("instagram.com:443");
+  expect(await channel.head()).toBe(`${OK}\r\n\r\n`);
+
+  const chunks = 200;
+  for (let i = 0; i < chunks; i++) channel.client.write(Buffer.alloc(1024, i));
+  // The proxy has passed everything on; the upstream has taken only the first few chunks.
+  await until(() => slow.upstream.writableLength === chunks * 1024);
+  expect(slow.size()).toBeLessThan(20 * 1024);
+
+  channel.client.destroy();
+  await until(() => slow.upstream.destroyed, 5000, "upstream to close");
+  expect(slow.size()).toBe(chunks * 1024);
+  expect(slow.upstream.writableFinished).toBe(true);
+});
+
+test("[C80] a flush that cannot finish is cut off by the idle timeout, even while upstream keeps sending", async () => {
+  const idleTimeoutMs = 300;
+  const stalled = slowUpstream(null);
+  const h = harness({ idleTimeoutMs, dial: async () => stalled.upstream });
+  const channel = h.connect("instagram.com:443");
+  expect(await channel.head()).toBe(`${OK}\r\n\r\n`);
+  channel.client.write(Buffer.alloc(64 * 1024));
+  await until(() => stalled.upstream.writableLength === 64 * 1024);
+
+  channel.client.destroy();
+  const closedAt = Date.now();
+  // Upstream keeps talking; with the client gone that must not keep the relay alive.
+  const chatter = setInterval(() => stalled.upstream.push("x"), 20);
+  try {
+    await sleep(idleTimeoutMs / 3);
+    expect(stalled.upstream.destroyed).toBe(false);
+    await until(() => stalled.upstream.destroyed, idleTimeoutMs * 5, "the idle timeout to end the flush");
+    expect(Date.now() - closedAt).toBeLessThan(idleTimeoutMs * 3);
+  } finally {
+    clearInterval(chatter);
+  }
+});
+
+test("[C81] a channel that closes during the DNS lookup causes no outbound connection", async () => {
+  let answer!: (addresses: string[]) => void;
+  const lookups: string[] = [];
+  const h = harness({
+    resolve: (host) => {
+      lookups.push(host);
+      return new Promise((resolve) => (answer = resolve));
+    },
+  });
+  const channel = h.connect("instagram.com:443");
+  await until(() => lookups.length === 1);
+
+  channel.client.destroy();
+  await sleep(30);
+  answer([PUBLIC]);
+  await sleep(30);
+  expect(h.dials).toEqual([]);
+
+  // The same lookup answered while the channel is open does dial, so the close is what stopped it.
+  const open = h.connect("instagram.com:443");
+  await until(() => lookups.length === 2);
+  answer([PUBLIC]);
+  expect(await open.head()).toBe(`${OK}\r\n\r\n`);
+  expect(h.dials.length).toBe(1);
+});
+
+test("[C82] traffic in one direction alone keeps a relay open past the idle timeout", async () => {
+  const idleTimeoutMs = 300;
+  for (const direction of ["client to upstream", "upstream to client"]) {
+    const h = harness({ idleTimeoutMs });
+    const channel = h.connect("instagram.com:443");
+    expect(await channel.head()).toBe(`${OK}\r\n\r\n`);
+    const remote = h.dials[0]!.remote;
+
+    const begun = Date.now();
+    while (Date.now() - begun < idleTimeoutMs * 3) {
+      if (direction === "client to upstream") channel.client.write("a");
+      else remote.write("b");
+      await sleep(40);
+    }
+    expect([direction, channel.ended(), remote.destroyed]).toEqual([direction, false, false]);
+    await until(() => channel.ended() && remote.destroyed, 5000, "the quiet relay to close");
+  }
 });
