@@ -5,7 +5,7 @@ import type { Duplex } from "node:stream";
 import { loadConfig } from "../src/config";
 import { createLogger } from "../src/log";
 import type { State } from "../src/state";
-import { retryDelay, startTunnel, type Tunnel, type TunnelOptions } from "../src/tunnel";
+import { isExpectedForward, retryDelay, startTunnel, type Tunnel, type TunnelOptions } from "../src/tunnel";
 import { sleep, until } from "./helpers";
 import { harness, OK } from "./proxy-harness";
 import { readJson, setup, startServer, type TestServer } from "./ssh-server";
@@ -253,4 +253,13 @@ test("[C37] a log line for an invalid host shows no host, and control characters
   expect(banner).toBeDefined();
   expect(banner).toContain("welcome[2J ]0;ownedto theserver");
   for (const line of lines) expect(line.slice(0, -1)).not.toMatch(/[\x00-\x1f\x7f-\x9f]/);
+});
+
+test("[C67] the forward filter accepts only 127.0.0.1 on the configured remote port", () => {
+  expect(isExpectedForward({ destIP: "127.0.0.1", destPort: 8888 }, 8888)).toBe(true);
+  expect(isExpectedForward({ destIP: "127.0.0.1", destPort: 8889 }, 8888)).toBe(false);
+  expect(isExpectedForward({ destIP: "0.0.0.0", destPort: 8888 }, 8888)).toBe(false);
+  expect(isExpectedForward({ destIP: "localhost", destPort: 8888 }, 8888)).toBe(false);
+  expect(isExpectedForward({ destIP: "::1", destPort: 8888 }, 8888)).toBe(false);
+  expect(isExpectedForward({ destIP: "127.0.0.1", destPort: 0 }, 8888)).toBe(false);
 });

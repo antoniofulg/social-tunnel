@@ -89,6 +89,12 @@ export function retryDelay(failures: number, backoffMs: readonly number[] = DEFA
   return backoffMs[Math.min(failures, backoffMs.length - 1)]!;
 }
 
+// Only the forward this tunnel asked for may reach the proxy (criterion 48). ssh2 drops forwards
+// it did not register; this check does not depend on that.
+export function isExpectedForward(info: { destIP: string; destPort: number }, remotePort: number): boolean {
+  return info.destIP === "127.0.0.1" && info.destPort === remotePort;
+}
+
 export interface TunnelOptions extends ConnectOptions {
   config: Config;
   key: Buffer;
@@ -197,8 +203,7 @@ export function startTunnel(options: TunnelOptions): Tunnel {
     client = c;
 
     c.on("tcp connection", (info, accept, reject) => {
-      // Only the forward this tunnel asked for may reach the proxy (criterion 48).
-      if (info.destIP !== "127.0.0.1" || info.destPort !== remotePort) {
+      if (!isExpectedForward(info, remotePort)) {
         log?.("rejected a forwarded connection for an unexpected address");
         return reject();
       }

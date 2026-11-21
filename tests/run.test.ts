@@ -101,3 +101,34 @@ test("[C61] run --json stopped by SIGTERM prints one object on stdout and logs o
   expect(logs.length).toBeGreaterThanOrEqual(3);
   expect(logs.filter((l) => l.message === "tunnel state").map((l) => l.state)).toEqual(["connecting", "connected", "stopped"]);
 }, 30_000);
+
+test("[C66] run starts when state.json names a live pid but stopped being refreshed over 90 s ago", async () => {
+  // A crashed run left its state behind and the pid now belongs to another process.
+  const env = await setup({}, (config) => (config.server.hostKey = "SHA256:" + "A".repeat(43)));
+  servers.push(env.ssh);
+  const leftover = (ageMs: number) => ({
+    version: 1,
+    pid: process.ppid,
+    state: "connected",
+    reason: null,
+    since: new Date(Date.now() - 3_600_000).toISOString(),
+    retryAt: null,
+    server: { host: "127.0.0.1", port: env.ssh.port },
+    remotePort: env.remotePort,
+    updatedAt: new Date(Date.now() - ageMs).toISOString(),
+  });
+
+  writeFileSync(env.statePath, JSON.stringify(leftover(91_000)));
+  const started = await cli(["run", "--json", "--config", env.path]);
+  // It got past the guard and reached the server, where the wrong host key pin ends it.
+  expect(started.code).toBe(13);
+  expect(started.json()).toEqual({ ok: false, command: "run", state: "blocked", reason: "host_key_mismatch" });
+  expect(env.ssh.clients.length).toBe(1);
+  expect(readJson(env.statePath).pid).toBe(process.pid);
+
+  writeFileSync(env.statePath, JSON.stringify(leftover(60_000)));
+  const refused = await cli(["run", "--json", "--config", env.path]);
+  expect(refused.code).toBe(2);
+  expect(refused.json().error.code).toBe("already_running");
+  expect(env.ssh.clients.length).toBe(1);
+}, 30_000);

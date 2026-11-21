@@ -5,7 +5,7 @@ import net from "node:net";
 import os from "node:os";
 import pkg from "../package.json" with { type: "json" };
 import { loadConfig, loadKey, resolveConfigPath } from "./config";
-import { EXIT } from "./defaults";
+import { DEFAULTS, EXIT } from "./defaults";
 import { runDoctor } from "./doctor";
 import { createLogger, sanitize } from "./log";
 import { createProxy, type Dialer, type Resolver } from "./proxy";
@@ -145,8 +145,10 @@ export async function main(argv: string[], io: Io): Promise<number> {
       return exit;
     }
 
+    // A state that stopped being refreshed belongs to a dead run whose pid may have been reused.
     const prior = readState(statePath(configPath));
-    if (prior && prior.pid !== process.pid && prior.state !== "stopped" && pidAlive(prior.pid)) {
+    const fresh = prior !== null && Date.now() - Date.parse(prior.updatedAt) <= DEFAULTS.staleMs;
+    if (prior && fresh && prior.pid !== process.pid && prior.state !== "stopped" && pidAlive(prior.pid)) {
       return fail(EXIT.usage, "already_running", `social-tunnel run is already running (pid ${prior.pid})`);
     }
     const key = loadKey(config.keyPath, io, io.platform);
