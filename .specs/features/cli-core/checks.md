@@ -1,12 +1,12 @@
 # CLI core checks
 
 Profile: standard
-Risk: C9, C12, C14, C15, C20, C21, C26, C34, C35, C51, C53, C58, C64, C65 - allowlist, address guard, no-listener, host-key pin, key leakage, channel filter and server lockdown are the safety invariants; a weak test there ships an open proxy, a MITM or a usable server account
+Risk: C9, C12, C14, C15, C20, C21, C26, C34, C35, C51, C53, C58, C64, C65, C75, C76 - allowlist, address guard, no-listener, host-key pin, key leakage, channel filter and server lockdown are the safety invariants; a weak test there ships an open proxy, a MITM or a usable server account
 Build: `taskpolicy -b nice -n 10 bun run typecheck`
 Run unit: `env -u CLAUDECODE taskpolicy -b nice -n 10 bun test`
 Plan: `.specs/features/cli-core/plan.md`
 
-68 checks in 6 slices (ids C1-C69; C57 unused; C64-C69 added after verification round 1) · 8 one-way doors · 2 open, of which 0 block
+77 checks in 6 slices (ids C1-C78; C57 unused; C64-C69 added after verification round 1, C70-C78 after deep review round 1) · 8 one-way doors · 2 open, of which 0 block
 
 Test names start with the check id in brackets, so `bun test` prints `(pass) [C<n>] ...`. Each id has exactly one test. `CLAUDECODE` is unset because Bun hides per-test pass lines when it is set.
 
@@ -16,7 +16,7 @@ Seams: the proxy and tunnel take their resolver and dialer as parameters; produc
 
 ### S1 - Config loads or fails with a named field
 
-Complete: C1-C7, C60, C68 - proofs green
+Complete: C1-C7, C60, C68, C72 - proofs green
 
 **C1** - Config path resolves `--config` > `$SOCIAL_TUNNEL_CONFIG` > platform dir: macOS `~/Library/Application Support`, Linux `$XDG_CONFIG_HOME` then `~/.config`, Windows `%APPDATA%`, each + `social-tunnel/config.json` (CFG-01, AC 1)
 Proof: run unit | (pass) [C1]
@@ -45,9 +45,12 @@ Proof: run unit | (pass) [C60]
 **C68** - Each of a bad `server.host`, `server.port`, `server.user` or `keyPath` and an unknown `server.password` key exits 2 with `config_invalid` and `field` naming it on `status --json` and `run --json`; `--config` with no value, `--domain` with no value and `--domain` on `status` or `run` print usage on stderr and exit 2 (CFG-01, CLI-01, AC 2, 5, 42)
 Proof: run unit | (pass) [C68]
 
+**C72** - `run --json` with a missing key file exits 2 with `key_unreadable`; with a file of garbage, and with a 0600 file holding the public key, it exits 2 with `key_invalid`; `doctor --json` reports each as a failed `key` hop with no `error` envelope and exits 2 (CFG-01, AC 68)
+Proof: run unit | (pass) [C72]
+
 ### S2 - Only allowlisted HTTPS hosts leave through the home IP
 
-Complete: C8-C24, C63, C65, C69 - proofs green; C58 needs the S3 `run` and is marked there
+Complete: C8-C24, C63, C65, C69, C70 - proofs green; C58 needs the S3 `run` and is marked there
 
 **C8** - With `instagram.com` allowlisted, `CONNECT instagram.com:443`, `www.instagram.com:443`, `WWW.Instagram.COM:443` and `instagram.com.:443` each get `HTTP/1.1 200 Connection Established` and bytes flow both ways (PRX-01, AC 7)
 Proof: run unit | (pass) [C8]
@@ -112,9 +115,12 @@ Proof: run unit | (pass) [C65]
 **C69** - With 256 channels open that have not finished their head, the 257th CONNECT gets `503`; after one closes, the next CONNECT gets `200` (PRX-01, AC 16, 61)
 Proof: run unit | (pass) [C69]
 
+**C70** - An 8 MiB response whose origin closes right after sending arrives byte-exact (same length and SHA-256) at a client of the forwarded port, through the in-process tunnel, in each of 6 consecutive relays (PRX-01, AC 7, 66)
+Proof: run unit | (pass) [C70]
+
 ### S3 - `run` holds the tunnel open and reports every state change
 
-Complete: C25-C33, C35-C37, C59, C61, C66, C67 and C58 (S2) - proofs green; C34 covers two `doctor` paths and is marked with S5
+Complete: C25-C33, C35-C37, C59, C61, C66, C67, C71, C78 and C58 (S2) - proofs green; C34 covers two `doctor` paths and is marked with S5
 
 **C25** - Against an in-process SSH server, the tunnel authenticates with the key, requests `tcpip-forward` on `127.0.0.1:<remotePort>`, and `state.json` goes `connecting` -> `connected` (TUN-01, AC 18, 20)
 Proof: run unit | (pass) [C25]
@@ -167,9 +173,15 @@ Proof: run unit | (pass) [C66]
 **C67** - The forward filter accepts `127.0.0.1:<remotePort>` and rejects another port, `0.0.0.0`, `localhost`, `::1` and port 0 (TUN-01, AC 48)
 Proof: run unit | (pass) [C67]
 
+**C71** - A server that refuses the key gives `connecting` -> `disconnected`/`auth_failed` with `retryAt` one backoff step after `since`, and `status --json` then exits 10 with `reason` `auth_failed` (TUN-01, AC 62)
+Proof: run unit | (pass) [C71]
+
+**C78** - `sanitize` removes ESC, BEL, DEL, U+009B, U+200B, U+200E, U+200F, U+202A, U+202E, U+2028, U+2029, U+2066, U+2069 and U+FEFF, and leaves accented and CJK text unchanged (TUN-01, AC 50, 70)
+Proof: run unit | (pass) [C78]
+
 ### S4 - `status` answers in one call
 
-Complete: C38-C44 - proofs green
+Complete: C38-C44, C73 - proofs green
 
 **C38** - Live pid + `connected` exits 0 with `state`, `since`, `server.host`, `remotePort`, `domains` count (STA-01, AC 29)
 Proof: run unit | (pass) [C38]
@@ -192,9 +204,12 @@ Proof: run unit | (pass) [C43]
 **C44** - A live pid with `updatedAt` older than 90 s reports `stopped`/`stale` and exits 10 (STA-01, AC 51)
 Proof: run unit | (pass) [C44]
 
+**C73** - With a live `connected` state.json naming another `remotePort`, server host or server port than the config, `status --json` exits 10 with `stopped`/`config_changed`, and the `doctor` `forward` hop sends `tcpip-forward` then `cancel-tcpip-forward` for the config's port (STA-01, DOC-01, AC 63)
+Proof: run unit | (pass) [C73]
+
 ### S5 - `doctor` names the broken hop and its fix
 
-Complete: C45-C54, C62, C64 and C34 (S3) - proofs green
+Complete: C45-C54, C62, C64, C74-C76 and C34 (S3) - proofs green
 
 **C45** - Hops run in order `config, key, server_reachable, ssh_auth, forward, lockdown, egress`; after a `server_reachable` failure the later hops have `ok: false`, `skipped: true` and an empty `fix` (DOC-01, AC 35, 36)
 Proof: run unit | (pass) [C45]
@@ -232,15 +247,27 @@ Proof: run unit | (pass) [C54]
 **C64** - A server that refuses a PTY but runs a shell fails the `lockdown` hop naming exactly `shell`; one that runs `exec` fails naming exactly `exec`; one that grants both requests but runs only its forced command passes (DOC-01, AC 59)
 Proof: run unit | (pass) [C64]
 
+**C74** - For a 0644 key whose path holds a space, a single quote and `; touch pwned #`, the `key` hop's fix run verbatim by `sh -c` sets the key to 0600 and creates no file; a missing config's fix says to create it; the `lockdown` fix names `restrict`, `permitlisten="127.0.0.1:<remotePort>"`, `command=`, `PermitOpen none`, `PermitTTY no` and `ForceCommand` (DOC-01, AC 67)
+Proof: run unit | (pass) [C74]
+
+**C75** - A server whose shell or exec runs commands but rejects `$((...))` as fish and tcsh do fails the `lockdown` hop with exit 14 naming exactly `shell` or `exec` (DOC-01, AC 64)
+Proof: run unit | (pass) [C75]
+
+**C76** - A server that permits a local forward but answers "connect failed" fails `lockdown` naming `local forward`, and the probe targets `127.0.0.1:<server.port>`; an administratively prohibited forward passes; a server refusing `<remotePort + 1>` but granting `<remotePort + 2>` fails naming `remote forward` (DOC-01, AC 65)
+Proof: run unit | (pass) [C76]
+
 ### S6 - The CLI never blocks an agent
 
-Complete: C55, C56 - proofs green
+Complete: C55, C56, C77 - proofs green
 
 **C55** - `social-tunnel frobnicate` and `status --bogus` print usage on stderr and exit 2; `--help` and `--version` exit 0 (CLI-01, AC 42)
 Proof: run unit | (pass) [C55]
 
 **C56** - With stdin held open and never written, `status` and `run` with an invalid config and `doctor` with a valid config against the in-process server each exit within 5 s; an unexpected exception exits 1 with `error.code` `internal` (CLI-01, AC 43; door 1)
 Proof: run unit | (pass) [C56]
+
+**C77** - `status` without `--json` prints `state`, `since`, `retry at`, `server`, `remote port` and `domains` lines with an escape character in `reason` removed and exits 10 for `disconnected`; `doctor` without `--json` prints `ok`, `FAIL` with its `fix`, and `skip` lines and exits 2 for a 0644 key (STA-01, DOC-01, AC 29, 36)
+Proof: run unit | (pass) [C77]
 
 ## Coverage
 
@@ -265,13 +292,14 @@ Proof: run unit | (pass) [C56]
 | tunnel states (6) | `connecting` C25 · `connected` C25 · `disconnected` C28, C59 · `reconnecting` C28 · `blocked` C26, C27 · `stopped` C32 | - |
 | `status` state mapping (9 cases) | connected C38 · absent C39 · dead pid C39 · stopped C39 · connecting C40 · disconnected C40 · reconnecting C40 · stale C44 · host key mismatch dead pid C42 | - |
 | doctor hops (8) | `config` C62 · `domain` C50 · `key` C62, C54 · `server_reachable` C45 · `ssh_auth` C51 · `forward` C47, C48 · `lockdown` C53 · `egress` C49 | - |
-| lockdown attempts (6) | shell C53 · shell without PTY C64 · exec C64 · sftp C53 · local forward C53 · other remote port C53 | - |
+| lockdown attempts (6) | shell C53 · shell without PTY C64, C75 · exec C64, C75 · sftp C53 · local forward C53, C76 · other remote port C53, C76 | - |
+| `--json` reason and error codes (12) | `host_key_mismatch` C26 · `port_blocked` C27 · `connection_lost` C28 · `auth_failed` C71 · `stale` C44 · `config_changed` C73 · `config_invalid` C2 · `key_permissions` C6 · `key_unreadable` C72 · `key_invalid` C72 · `already_running` C33 · `internal` C56 | - |
 | key-leak paths (5) | connected run C34 · auth refused C34 · malformed key C34 · doctor pass C34 · doctor ssh_auth fail C34 | - |
 | shutdown signals (2) | SIGTERM C32 · SIGINT C32 | - |
 | backoff steps (7) | 1 s C29 · 2 s C29 · 4 s C29 · 8 s C29 · 16 s C29 · 30 s cap C29 · reset C29 | - |
 | startup assembly (2) | CLI subprocess C26, C32, C58 · in-process harness C25 | - |
 
-- Claims naming an outcome, interface or response shape: C2, C8-C19, C21-C23, C26, C32, C38-C44, C50-C53, C55, C58, C61, C62, C64-C66, C68, C69 - each has a proof that crosses the boundary it names
+- Claims naming an outcome, interface or response shape: C2, C8-C19, C21-C23, C26, C32, C38-C44, C50-C53, C55, C58, C61, C62, C64-C66, C68-C77 - each has a proof that crosses the boundary it names
 - No other check claims more than the cases its proof enumerates
 
 ## Security cases
@@ -284,8 +312,8 @@ Proof: run unit | (pass) [C56]
 | SEC-004 | Something on the home machine or LAN reaches the proxy without the tunnel | No listening socket exists | C20, C58, C35, C67 |
 | SEC-005 | Server presents a different host key (MITM) | No auth sent, exit 13 on `run` and `doctor` | C26, C51 |
 | SEC-006 | Private key leaks through output, logs or state | No key line in any captured output | C6, C34 |
-| SEC-007 | Malformed or smuggled CONNECT head | `400`/`405`/`408`, trailing bytes never parsed | C16, C17, C21, C22, C23, C37 |
-| SEC-008 | Tunnel user can open a shell, sftp or other forwards | `lockdown` hop fails, exit 14 | C53, C64 |
+| SEC-007 | Malformed or smuggled CONNECT head | `400`/`405`/`408`, trailing bytes never parsed | C16, C17, C21, C22, C23, C37, C74, C78 |
+| SEC-008 | Tunnel user can open a shell, sftp or other forwards | `lockdown` hop fails, exit 14 | C53, C64, C75, C76 |
 | SEC-009 | Connection flood or slow client exhausts the home machine | `503` past 256 relays, timeouts close stalled sockets | C17, C18, C19, C24, C63, C69 |
 
 ## Test policy
@@ -306,18 +334,18 @@ Evidence:
 - `src/tunnel.ts` (planned): 6 states, 7 backoff steps -> decides
 - closest analogue in the repo: none - first code in the repository
 
-Cost: about 68 tests in 10 files, all `bun test`; SSH tests use an in-process `ssh2` server, network tests use injected resolvers and dialers, so the suite needs no internet and no sshd.
+Cost: about 77 tests in 10 files, all `bun test`; SSH tests use an in-process `ssh2` server, network tests use injected resolvers and dialers, so the suite needs no internet and no sshd.
 
 ## Swept
 
-- validation: C2, C3, C4, C5, C21, C60, C68
-- failure modes: C18, C27, C28, C59
+- validation: C2, C3, C4, C5, C21, C60, C68, C72
+- failure modes: C18, C27, C28, C59, C70, C71
 - idempotency: n/a - no request is retried by this tool; a reconnect re-requests the forward, covered by C28
-- authorization: C9, C10, C11, C14, C35, C53, C64, C65, C67
+- authorization: C9, C10, C11, C14, C35, C53, C64, C65, C67, C75, C76
 - concurrency: C19, C33, C66, C69
 - data lifecycle: C31, C44 - `state.json` is replaced atomically and goes stale after 90 s
 - dependency failure: C18, C28, C49
 - state transitions: C25, C26, C27, C28, C32
-- observability: C37, C43, C61 - state and hop results are the observable surface; no metrics in v0.1
+- observability: C37, C43, C61, C73, C77, C78 - state and hop results are the observable surface; no metrics in v0.1
 - deploy compatibility: n/a - first release; schema `version: 1` in config and state allows later migration
 - performance budget: C19, C24, C63 - relay cap and idle timeout bound memory and sockets; no throughput target in v0.1

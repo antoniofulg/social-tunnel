@@ -50,6 +50,7 @@ None - no stored-data shape change beyond two new local JSON files, whose litera
 | any verb, `--help`, `--version` | unknown verb or flag | usage on stderr | exit 2 for unknown input, 0 for help/version |
 | proxy over a forwarded channel | `CONNECT host:443 HTTP/1.1` | relayed bytes | `200 Connection Established`, `400`, `403`, `405`, `408`, `502`, `503`, `504` |
 | `--json` reason and error codes | - | `state.json` / `status` `reason`: `host_key_mismatch`, `port_blocked`, `connection_lost`, `auth_failed` (server refused the key; retried with backoff), `stale`; `error.code`: `config_invalid`, `key_permissions`, `key_unreadable` (key file missing or unreadable), `key_invalid` (not an unencrypted SSH private key), `already_running`, `internal` | `key_*` and `config_invalid` exit 2; `auth_failed` leaves `run` retrying and `status` at exit 10 |
+| `--json` reason (added after deep review round 1) | - | `status` `reason`: `config_changed` (a live run in this config directory serves another server or port) | `status` exit 10 |
 
 ## Landing
 
@@ -82,6 +83,8 @@ A command either gets a valid config or tells the user exactly what is wrong, in
 5. IF the config contains a key not in schema v1 THEN the system SHALL reject it naming that key
 6. IF `run` finds the key file readable or writable by group or others on macOS or Linux THEN it SHALL exit 2 with error code `key_permissions` and the key path, without reading the key; `doctor` reports the same condition as a failed `key` hop (criterion 41)
 56. IF `server.hostKey` is missing or is not `SHA256:` followed by 43 unpadded base64 characters THEN the system SHALL reject the config naming `server.hostKey`
+68. IF the key file does not hold an unencrypted SSH private key (a public key file included) THEN `run` SHALL exit 2 with error code `key_invalid`, and IF it is missing or unreadable THEN with `key_unreadable`; `doctor` reports both as a failed `key` hop (added after deep review round 1)
+69. IF `--config` or `--domain` is given an empty value THEN the system SHALL treat it as a usage error (criterion 42) and never fall back to another config (added after deep review round 1)
 
 **Independent test:** run `social-tunnel status --json --config <fixture>` against valid, missing, malformed and bad-domain fixtures and read the exit code and JSON.
 
@@ -108,6 +111,7 @@ The proxy handler, given a forwarded stream, relays only allowlisted `host:443` 
 47. IF a relay carries no bytes in either direction for 300 s THEN the system SHALL close both sides
 58. The system SHALL ship these defaults: request-head timeout 10 s, DNS and connect timeout 10 s, relay idle timeout 300 s, relay cap 256, keepalive 15 s with 3 misses, state heartbeat 30 s, stale threshold 90 s
 61. The relay cap of criterion 16 SHALL count a channel from the moment it opens, so a channel still sending its request head holds a slot and the next channel past 256 gets `503 Service Unavailable` (added after verification round 1; clarifies 16)
+66. WHEN one side of a relay closes THEN the system SHALL deliver the bytes already accepted for the other side before closing it, bounded by the idle timeout of criterion 47 (added after deep review round 1; clarifies 7)
 
 **Independent test:** feed the handler in-memory duplex streams with allowed, refused, IP-literal, private-resolving, malformed and oversized requests; assert status lines and that refused cases made no lookup or connection.
 
@@ -132,6 +136,8 @@ The home machine keeps a reverse tunnel to the server and records connected, los
 27. IF `state.json` names a live pid other than its own with a state other than `stopped` THEN `run` SHALL exit 2 with error code `already_running`
 57. WHEN `run --json` exits after its config and key loaded THEN it SHALL print one JSON object `{ok, command: "run", state, reason}` on stdout, and its log lines SHALL go to stderr only
 60. IF the `state.json` of criterion 27 has an `updatedAt` older than the 90 s of criterion 51 THEN `run` SHALL treat it as not running and start, because the pid may have been reused after a crash (added after verification round 1; clarifies 27)
+62. IF the server refuses the key THEN the system SHALL write state `disconnected` with reason `auth_failed` and the next `retryAt`, and retry with the delays of criterion 23 (added after deep review round 1; records behaviour shipped in S3)
+70. The control characters of criterion 50 SHALL include zero-width and bidirectional format characters (U+200B-U+200F, U+2028-U+202E, U+2066-U+2069, U+FEFF) (added after deep review round 1)
 28. The system SHALL write no private key material and no passphrase to stdout, stderr, `state.json` or `--json` output
 
 **Independent test:** start `run` against an in-process `ssh2` test server; kill the server, watch `state.json` go `connected` -> `disconnected` -> `reconnecting` -> `connected`; present a wrong host key and see exit 13.
@@ -148,6 +154,7 @@ An agent or the tray learns the tunnel state and acts on the exit code.
 32. WHILE the state is `blocked` with reason `port_blocked` `status` SHALL exit 11
 33. WHILE `state.json` holds `blocked` with reason `host_key_mismatch`, whether or not its pid is alive or its `updatedAt` is stale, `status` SHALL exit 13
 51. IF `state.json` names a live pid and its `updatedAt` is older than 90 s THEN `status` SHALL report state `stopped` with reason `stale` and exit 10
+63. IF a live `state.json` names a `server` or `remotePort` other than the loaded config's THEN `status` SHALL report state `stopped` with reason `config_changed` and exit 10, and the `doctor` `forward` hop SHALL request the forward itself instead of trusting that run (added after deep review round 1)
 34. WHEN any command gets `--json` THEN the system SHALL write exactly one JSON object and a newline to stdout and nothing else
 
 **Independent test:** write fixture `state.json` files for each state and pid case; run `status --json` and assert exit code and fields.
@@ -169,6 +176,9 @@ The user or an agent learns which hop failed and what to do about it.
 53. WHEN the `lockdown` hop runs THEN the system SHALL, as the tunnel user, try a shell session, an `sftp` subsystem, a local forward to `127.0.0.1:22` and a remote forward on `127.0.0.1:<remotePort + 1>`, and fail naming each attempt the server allowed
 54. WHEN `keyPath` names a file matching `~/.ssh/id_*` THEN the `key` hop SHALL pass with a detail advising a dedicated tunnel key
 59. WHEN the `lockdown` hop runs THEN the system SHALL also request a shell without a PTY and an `exec`, each carrying a probe command, and fail naming either when the server runs the command; a granted request whose forced command runs instead does not count as allowed (added after verification round 1; extends 53)
+64. The probe command of criterion 59 SHALL be one that sh, bash, zsh, fish and tcsh all evaluate, and whose evaluated output does not occur in the command text (added after deep review round 1)
+65. The local-forward attempt of criterion 53 SHALL target the server's own SSH port (`server.port`) and count a "connect failed" answer as allowed, and the remote-forward attempt SHALL try `<remotePort + 2>` when `<remotePort + 1>` is refused, because a refusal on one port can mean the port is taken (added after deep review round 1; refines 53)
+67. Every `fix` that is a runnable command SHALL quote paths for a POSIX shell, the `config` hop's fix for a missing or non-JSON file SHALL say to create it, and the `lockdown` fix SHALL name a restriction for each access it probes, including `PermitOpen none` for local forwards (added after deep review round 1)
 
 **Independent test:** run `doctor --json` against the in-process test server with a good setup, a wrong host key, a refused forward and an unlisted `--domain`; assert hop list and exit code.
 
@@ -185,11 +195,11 @@ The user or an agent learns which hop failed and what to do about it.
 
 | ID | Slice | Criteria | Status |
 | --- | --- | --- | --- |
-| CFG-01 | S1 | 1, 2, 3, 4, 5, 6, 55, 56 | Done |
-| PRX-01 | S2 | 7-17, 44, 45, 46, 47, 58, 61 | Done |
-| TUN-01 | S3 | 18-28, 48, 49, 50, 57, 60 | Done |
-| STA-01 | S4 | 29-34, 51 | Done |
-| DOC-01 | S5 | 35-41, 52, 53, 54, 59 | Done |
+| CFG-01 | S1 | 1, 2, 3, 4, 5, 6, 55, 56, 68, 69 | Done |
+| PRX-01 | S2 | 7-17, 44, 45, 46, 47, 58, 61, 66 | Done |
+| TUN-01 | S3 | 18-28, 48, 49, 50, 57, 60, 62, 70 | Done |
+| STA-01 | S4 | 29-34, 51, 63 | Done |
+| DOC-01 | S5 | 35-41, 52, 53, 54, 59, 64, 65, 67 | Done |
 | CLI-01 | S6 | 42, 43 | Done |
 
 ## Security Surfaces
@@ -276,3 +286,4 @@ The user or an agent learns which hop failed and what to do about it.
 - Scope: build S1-S6 with tests and local commits only; no push, publish or server changes
 - Revision after criteria review (2026-11-21): settled contradictions and ambiguities the reviewer found (criteria 2, 6, 7, 11, 15, 30, 33, 35, 36, 40, 44, 51 clarified; 56 and 57 added; `skipped` added to the doctor hop shape). No capability added or removed; reported to the user for objection
 - Revision after verification round 1 (2026-11-21): criteria 59 (lockdown also probes a shell without a PTY and `exec`, counting only an evaluated marker), 60 (a stale `state.json` does not block `run`) and 61 (a channel holds a relay slot from open) appended to close verifier findings F1, F3 and F7; reported to the user in the coordinating chat. No capability added or removed
+- Revision after deep review round 1 (2026-11-21): criteria 62-70 and one Surface row appended for the defects in `.wtk-deep-review/cli-core/review.md`. Approver: none recorded. This revision and the two above were directed by the coordinating agent and reported to the user; the user's recorded approval covers only the revision named under "Reviewed revision"

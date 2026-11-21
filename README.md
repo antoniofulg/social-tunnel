@@ -204,10 +204,10 @@ Options: `--json` (one JSON object on stdout), `--config <path>`, `--help`, `--v
 | --- | --- |
 | `connecting` | First connection in progress |
 | `connected` | Tunnel up; chosen domains go through home |
-| `disconnected` | Connection lost; `retryAt` says when the next try starts |
+| `disconnected` | Connection lost, or the server refused the key (`auth_failed`); `retryAt` says when the next try starts |
 | `reconnecting` | Trying again (1, 2, 4, 8, 16, then every 30 s) |
 | `blocked` | The server refused the port (`port_blocked`, retried every 30 s) or presented a different host key (`host_key_mismatch`, stops) |
-| `stopped` | No `run` is active, or it stopped reporting (`stale`) |
+| `stopped` | No `run` is active, it stopped reporting (`stale`), or the running one serves another server or port than this config (`config_changed`: restart `run`) |
 
 ### Exit codes
 
@@ -217,7 +217,7 @@ Stable, so scripts and agents can branch on them:
 | --- | --- |
 | `0` | OK |
 | `1` | Internal error |
-| `2` | Usage or config error, bad key permissions, or `run` already active |
+| `2` | Usage or config error, a key that is missing, not a private key or readable by others, or `run` already active |
 | `10` | Tunnel down, server unreachable, SSH login refused, or no home internet |
 | `11` | Server refused the tunnel port |
 | `12` | Domain not on the allowlist (`doctor --domain`) |
