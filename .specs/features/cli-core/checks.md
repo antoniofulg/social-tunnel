@@ -179,6 +179,8 @@ Proof: run unit | (pass) [C44]
 
 ### S5 - `doctor` names the broken hop and its fix
 
+Complete: C45-C54, C62 and C34 (S3) - proofs green
+
 **C45** - Hops run in order `config, key, server_reachable, ssh_auth, forward, lockdown, egress`; after a `server_reachable` failure the later hops have `ok: false`, `skipped: true` and an empty `fix` (DOC-01, AC 35, 36)
 Proof: run unit | (pass) [C45]
 

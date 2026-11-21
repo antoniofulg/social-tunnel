@@ -1,4 +1,5 @@
 import { chmodSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs";
+import net from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { utils } from "ssh2";
@@ -111,4 +112,14 @@ export function spawnCli(argv: string[], env: Record<string, string> = {}) {
       return { code, stdout: await stdout, stderr: await stderr };
     },
   };
+}
+
+// A real TCP dial, for doctor tests that talk to the in-process SSH server on 127.0.0.1.
+export function localDial(address: string, port: number): Promise<net.Socket> {
+  return new Promise((resolve, reject) => {
+    if (address !== "127.0.0.1") return reject(new Error(`test dial outside loopback: ${address}`));
+    const socket = net.connect({ host: address, port });
+    socket.once("error", reject);
+    socket.once("connect", () => resolve(socket));
+  });
 }

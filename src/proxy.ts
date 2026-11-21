@@ -39,9 +39,9 @@ function refusal(status: number): string {
   );
 }
 
-const TIMEOUT = Symbol("timeout");
+export const TIMEOUT = Symbol("timeout");
 
-function withTimeout<T>(work: Promise<T>, ms: number, onLate?: (value: T) => void): Promise<T> {
+export function withTimeout<T>(work: Promise<T>, ms: number, onLate?: (value: T) => void): Promise<T> {
   return new Promise((resolve, reject) => {
     let late = false;
     const timer = setTimeout(() => {

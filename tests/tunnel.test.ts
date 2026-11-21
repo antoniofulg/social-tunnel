@@ -8,7 +8,7 @@ import type { State } from "../src/state";
 import { retryDelay, startTunnel, type Tunnel, type TunnelOptions } from "../src/tunnel";
 import { sleep, until } from "./helpers";
 import { harness, OK } from "./proxy-harness";
-import { freePort, readJson, setup, startServer, stateIs, type TestServer } from "./ssh-server";
+import { readJson, setup, startServer, type TestServer } from "./ssh-server";
 
 const tunnels: Tunnel[] = [];
 const servers: TestServer[] = [];

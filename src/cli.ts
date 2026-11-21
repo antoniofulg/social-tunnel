@@ -25,6 +25,8 @@ export interface Io {
   resolve: Resolver;
   dial: Dialer;
   onSignal: (stop: () => void) => void;
+  // Tests shorten doctor's network timeout; production leaves it at the default.
+  connectTimeoutMs?: number;
 }
 
 const USAGE = `usage: social-tunnel <command> [options]
@@ -100,7 +102,7 @@ export async function main(argv: string[], io: Io): Promise<number> {
     const configPath = resolveConfigPath(args.config, io.env, io.platform, io.homedir);
 
     if (args.verb === "doctor") {
-      const { hops, exit } = await runDoctor(configPath, io);
+      const { hops, exit } = await runDoctor(configPath, args.domain, io);
       if (args.json) print({ ok: exit === EXIT.ok, command: "doctor", configPath, hops });
       else {
         for (const h of hops) {
