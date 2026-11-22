@@ -4,6 +4,8 @@
 use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -100,49 +102,71 @@ pub struct ProcessRunner;
 
 impl Runner for ProcessRunner {
     fn run(&self, program: &Path, args: &[String], timeout: Duration, max_stdout: usize) -> CallOutput {
-        let mut child = match Command::new(program)
-            .args(args)
-            .stdin(Stdio::null())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::null())
-            .spawn()
-        {
-            Ok(child) => child,
-            Err(_) => return CallOutput::default(),
-        };
-        let mut pipe = child.stdout.take().expect("stdout is piped");
-        let reader = std::thread::spawn(move || {
-            let mut kept = Vec::new();
-            let mut overflow = false;
-            let mut buf = [0u8; 16 * 1024];
-            while let Ok(n) = pipe.read(&mut buf) {
-                if n == 0 {
-                    break;
-                }
-                let room = (max_stdout + 1).saturating_sub(kept.len());
-                kept.extend_from_slice(&buf[..n.min(room)]);
-                if kept.len() > max_stdout {
-                    overflow = true;
-                }
-            }
-            (kept, overflow)
-        });
-        let started = Instant::now();
-        let mut timed_out = false;
-        let status = loop {
-            match child.try_wait() {
-                Ok(Some(status)) => break Some(status),
-                Ok(None) if started.elapsed() >= timeout => {
-                    timed_out = true;
-                    // Our own live child, through its handle.
-                    let _ = child.kill();
-                    break child.wait().ok();
-                }
-                Ok(None) => std::thread::sleep(Duration::from_millis(20)),
-                Err(_) => break None,
-            }
-        };
-        let (stdout, overflow) = reader.join().unwrap_or_default();
-        CallOutput { exit: status.and_then(|s| s.code()), stdout, timed_out, overflow }
+        run_process(program, args, timeout, max_stdout, None)
     }
+}
+
+/// A `ProcessRunner` whose calls are also killed once `cancel` is set (Quit, criterion 46).
+pub struct CancellableRunner(pub Arc<AtomicBool>);
+
+impl Runner for CancellableRunner {
+    fn run(&self, program: &Path, args: &[String], timeout: Duration, max_stdout: usize) -> CallOutput {
+        if self.0.load(Ordering::SeqCst) {
+            return CallOutput::default();
+        }
+        run_process(program, args, timeout, max_stdout, Some(&self.0))
+    }
+}
+
+fn run_process(
+    program: &Path,
+    args: &[String],
+    timeout: Duration,
+    max_stdout: usize,
+    cancel: Option<&AtomicBool>,
+) -> CallOutput {
+    let mut child = match Command::new(program)
+        .args(args)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+    {
+        Ok(child) => child,
+        Err(_) => return CallOutput::default(),
+    };
+    let mut pipe = child.stdout.take().expect("stdout is piped");
+    let reader = std::thread::spawn(move || {
+        let mut kept = Vec::new();
+        let mut overflow = false;
+        let mut buf = [0u8; 16 * 1024];
+        while let Ok(n) = pipe.read(&mut buf) {
+            if n == 0 {
+                break;
+            }
+            let room = (max_stdout + 1).saturating_sub(kept.len());
+            kept.extend_from_slice(&buf[..n.min(room)]);
+            if kept.len() > max_stdout {
+                overflow = true;
+            }
+        }
+        (kept, overflow)
+    });
+    let started = Instant::now();
+    let mut timed_out = false;
+    let status = loop {
+        match child.try_wait() {
+            Ok(Some(status)) => break Some(status),
+            Ok(None) if started.elapsed() >= timeout || cancel.is_some_and(|c| c.load(Ordering::SeqCst)) => {
+                timed_out = true;
+                // Our own live child, through its handle.
+                let _ = child.kill();
+                break child.wait().ok();
+            }
+            Ok(None) => std::thread::sleep(Duration::from_millis(20)),
+            Err(_) => break None,
+        }
+    };
+    let (stdout, overflow) = reader.join().unwrap_or_default();
+    CallOutput { exit: status.and_then(|s| s.code()), stdout, timed_out, overflow }
 }

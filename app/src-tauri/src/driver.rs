@@ -31,6 +31,8 @@ pub struct Snapshot {
     pub ownership: Option<String>,
     pub open_at_login: bool,
     pub reduce_transparency: bool,
+    /// A doctor run is in flight (Run Check, Check Again).
+    pub checking: bool,
 }
 
 impl Snapshot {
@@ -65,6 +67,7 @@ impl Snapshot {
             ownership,
             open_at_login,
             reduce_transparency: false,
+            checking: false,
         }
     }
 }
