@@ -1,6 +1,7 @@
 import { afterEach, expect, test } from "bun:test";
-import { writeFileSync } from "node:fs";
-import { cli, spawnCli } from "./helpers";
+import { existsSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
+import { cli, sleep, spawnCli } from "./helpers";
 import { readJson, setup, stateIs, type TestServer } from "./ssh-server";
 
 const servers: TestServer[] = [];
@@ -127,6 +128,49 @@ test("[C66] run starts when state.json names a live pid but stopped being refres
   expect(readJson(env.statePath).pid).toBe(process.pid);
 
   writeFileSync(env.statePath, JSON.stringify(leftover(60_000)));
+  const refused = await cli(["run", "--json", "--config", env.path]);
+  expect(refused.code).toBe(2);
+  expect(refused.json().error.code).toBe("already_running");
+  expect(env.ssh.clients.length).toBe(1);
+}, 30_000);
+
+test("[C112] two runs started at once on one config: one connects, the other exits 2 already_running", async () => {
+  const env = await setup();
+  servers.push(env.ssh);
+  const a = spawnCli(["run", "--json", "--config", env.path]);
+  const b = spawnCli(["run", "--json", "--config", env.path]);
+  procs.push(a, b);
+
+  const first = await Promise.race([a.exit().then((r) => ({ r, loser: a, winner: b })), b.exit().then((r) => ({ r, loser: b, winner: a }))]);
+  expect(first.r.code).toBe(2);
+  expect(JSON.parse(first.r.stdout)).toMatchObject({ ok: false, command: "run", error: { code: "already_running" } });
+
+  await stateIs(env.statePath, "connected");
+  await sleep(300);
+  expect(env.ssh.clients.length).toBe(1);
+  expect(env.ssh.requests.filter((r) => r.name === "tcpip-forward").length).toBe(1);
+  expect(readJson(env.statePath).pid).toBe(first.winner.pid);
+
+  first.winner.kill("SIGTERM");
+  expect((await first.winner.exit()).code).toBe(0);
+  expect(readJson(env.statePath)).toMatchObject({ state: "stopped", pid: first.winner.pid });
+  expect(existsSync(join(env.path, "..", "run.lock"))).toBe(false);
+}, 30_000);
+
+test("[C113] a run.lock left by a dead pid is taken over; a fresh one held by a live pid refuses", async () => {
+  const env = await setup({}, (config) => (config.server.hostKey = "SHA256:" + "A".repeat(43)));
+  servers.push(env.ssh);
+  const lock = join(env.path, "..", "run.lock");
+  const dead = Bun.spawnSync(["true"]).pid;
+
+  writeFileSync(lock, `${dead}\n`);
+  const started = await cli(["run", "--json", "--config", env.path]);
+  // It got past the claim and reached the server, where the wrong host key pin ends it.
+  expect(started.code).toBe(13);
+  expect(env.ssh.clients.length).toBe(1);
+  expect(existsSync(lock)).toBe(false);
+
+  writeFileSync(lock, `${process.ppid}\n`);
   const refused = await cli(["run", "--json", "--config", env.path]);
   expect(refused.code).toBe(2);
   expect(refused.json().error.code).toBe("already_running");

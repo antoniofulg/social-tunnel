@@ -9,7 +9,7 @@ import { DEFAULTS, EXIT } from "./defaults";
 import { runDoctor } from "./doctor";
 import { createLogger, sanitize } from "./log";
 import { createProxy, type Dialer, type Resolver } from "./proxy";
-import { pidAlive, readState, statePath } from "./state";
+import { claimRun, lockPath, pidAlive, readState, releaseRun, statePath } from "./state";
 import { evaluateStatus, isLiveRun } from "./status";
 import { startTunnel } from "./tunnel";
 
@@ -162,24 +162,42 @@ export async function main(argv: string[], io: Io): Promise<number> {
     const key = loadKey(config.keyPath, io, io.platform);
     if (!key.ok) return fail(EXIT.usage, key.code, key.message);
 
-    const log = createLogger(io.stderr, args.json);
-    const tunnel = startTunnel({
-      config,
-      key: key.key,
-      statePath: statePath(configPath),
-      handle: createProxy({
-        domains: config.domains,
-        resolve: io.resolve,
-        dial: io.dial,
-        log: (entry) => log("proxy request", entry),
-      }).handle,
-      log,
+    // The state.json check above cannot see a run that started a moment ago and has not written yet.
+    const lock = lockPath(configPath);
+    const holder = claimRun(lock, (pid, ageMs) => {
+      if (!pidAlive(pid)) return false;
+      const state = readState(statePath(configPath));
+      return state?.pid === pid ? isLiveRun(state, pidAlive, Date.now()) : ageMs <= DEFAULTS.staleMs;
     });
-    io.onSignal(() => void tunnel.stop());
-    const end = await tunnel.done;
-    const exit = end.reason === "host_key_mismatch" ? EXIT.hostKeyMismatch : EXIT.ok;
-    if (args.json) print({ ok: exit === EXIT.ok, command: "run", state: end.state, reason: end.reason });
-    return exit;
+    if (holder !== null) {
+      return fail(
+        EXIT.usage,
+        "already_running",
+        `social-tunnel run (pid ${holder}) already owns ${lock}; one run per config directory`,
+      );
+    }
+    try {
+      const log = createLogger(io.stderr, args.json);
+      const tunnel = startTunnel({
+        config,
+        key: key.key,
+        statePath: statePath(configPath),
+        handle: createProxy({
+          domains: config.domains,
+          resolve: io.resolve,
+          dial: io.dial,
+          log: (entry) => log("proxy request", entry),
+        }).handle,
+        log,
+      });
+      io.onSignal(() => void tunnel.stop());
+      const end = await tunnel.done;
+      const exit = end.reason === "host_key_mismatch" ? EXIT.hostKeyMismatch : EXIT.ok;
+      if (args.json) print({ ok: exit === EXIT.ok, command: "run", state: end.state, reason: end.reason });
+      return exit;
+    } finally {
+      releaseRun(lock);
+    }
   } catch (err) {
     return fail(EXIT.internal, "internal", err instanceof Error ? err.message : "unexpected error");
   }

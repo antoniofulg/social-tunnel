@@ -1,12 +1,12 @@
 # CLI core checks
 
 Profile: standard
-Risk: C9, C12, C14, C15, C20, C21, C26, C34, C35, C51, C53, C58, C64, C65, C75, C76, C87, C88, C89, C96, C101, C105 - allowlist, address guard, no-listener, host-key pin, key leakage, channel filter and server lockdown are the safety invariants; a weak test there ships an open proxy, a MITM or a usable server account
+Risk: C9, C12, C14, C15, C20, C21, C26, C34, C35, C51, C53, C58, C64, C65, C75, C76, C87, C88, C89, C96, C101, C105, C112 - allowlist, address guard, no-listener, host-key pin, single-instance claim, key leakage, channel filter and server lockdown are the safety invariants; a weak test there ships an open proxy, a MITM or a usable server account
 Build: `taskpolicy -b nice -n 10 bun run typecheck`
 Run unit: `env -u CLAUDECODE taskpolicy -b nice -n 10 bun test`
 Plan: `.specs/features/cli-core/plan.md`
 
-110 checks in 6 slices (ids C1-C111; C57 unused; C64-C69 added after verification round 1, C70-C78 after deep review round 1, C79-C84 after round 2, C85-C89 after round 4, C90-C104 after round 5, C105-C111 after round 6) · 8 one-way doors · 2 open, of which 0 block
+112 checks in 6 slices (ids C1-C113; C57 unused; C64-C69 added after verification round 1, C70-C78 after deep review round 1, C79-C84 after round 2, C85-C89 after round 4, C90-C104 after round 5, C105-C111 after round 6, C112-C113 after round 8) · 8 one-way doors · 2 open, of which 0 block
 
 Test names start with the check id in brackets, so `bun test` prints `(pass) [C<n>] ...`. Each id has exactly one test. `CLAUDECODE` is unset because Bun hides per-test pass lines when it is set.
 
@@ -162,7 +162,7 @@ Proof: run unit | (pass) [C100]
 
 ### S3 - `run` holds the tunnel open and reports every state change
 
-Complete: C25-C33, C35-C37, C59, C61, C66, C67, C71, C78, C83, C94, C95, C101-C103, C106-C108, C111 and C58 (S2) - proofs green; C34 covers two `doctor` paths and is marked with S5
+Complete: C25-C33, C35-C37, C59, C61, C66, C67, C71, C78, C83, C94, C95, C101-C103, C106-C108, C111-C113 and C58 (S2) - proofs green; C34 covers two `doctor` paths and is marked with S5
 
 **C25** - Against an in-process SSH server, the tunnel authenticates with the key, requests `tcpip-forward` on `127.0.0.1:<remotePort>`, and `state.json` goes `connecting` -> `connected` (TUN-01, AC 18, 20)
 Proof: run unit | (pass) [C25]
@@ -250,6 +250,12 @@ Proof: run unit | (pass) [C108]
 
 **C111** - `DEFAULTS.stopWaitMs` is 2000; a connected tunnel given a 100 ms bound whose server has stopped reading finishes `stop()` within 1 s and writes `stopped` (TUN-01, AC 89)
 Proof: run unit | (pass) [C111]
+
+**C112** - Two `social-tunnel run --json` subprocesses started at once on one config: one exits 2 with `already_running`, the server sees one client and one `tcpip-forward`, `state.json` names the other's pid, and after SIGTERM it exits 0 and `run.lock` is gone (TUN-01, AC 90)
+Proof: run unit | (pass) [C112]
+
+**C113** - A `run.lock` naming a dead pid is taken over (`run` reaches the server and removes the lock on exit); a fresh `run.lock` naming a live pid with no `state.json` exits 2 with `already_running` and no connection (TUN-01, AC 90)
+Proof: run unit | (pass) [C113]
 
 ### S4 - `status` answers in one call
 
@@ -381,7 +387,7 @@ Proof: run unit | (pass) [C77]
 | door 6 `ssh2` under Bun (1) | handshake, key auth and forward C25 | - |
 | door 7 `state.json` fields (9) | `version` C31 · `pid` C31 · `state` C31 · `reason` C31 · `since` C31 · `retryAt` C31 · `server` C31 · `remotePort` C31 · `updatedAt` C31 | - |
 | door 8 host-key pin (3) | `run` C26 · `doctor` C51 · format C60 | - |
-| `social-tunnel run` outcomes (3) | 0 C32 · 2 C33, C66 · 13 C26 | - |
+| `social-tunnel run` outcomes (3) | 0 C32 · 2 C33, C66, C112, C113 · 13 C26 | - |
 | `social-tunnel status` outcomes (5) | 0 C38 · 10 C39 · 11 C41 · 13 C42, C94 · 2 C2 | - |
 | `social-tunnel doctor` outcomes (7) | 0 C52, C105 · 2 C62 · 10 C52, C87, C96, C97 · 11 C52 · 12 C50 · 13 C51 · 14 C53 | - |
 | CLI meta outcomes (2) | unknown input 2 C55, C68 · help/version 0 C55 | - |
@@ -392,13 +398,13 @@ Proof: run unit | (pass) [C77]
 | `status` state mapping (9 cases) | connected C38 · absent C39 · dead pid C39 · stopped C39 · connecting C40 · disconnected C40 · reconnecting C40 · stale C44 · host key mismatch dead pid C42 | - |
 | doctor hops (8) | `config` C62 · `domain` C50 · `key` C62, C54 · `server_reachable` C45 · `ssh_auth` C51 · `forward` C47, C48 · `lockdown` C53 · `egress` C49 | - |
 | lockdown attempts (6) | shell C53 · shell without PTY C64, C75 · exec C64, C75 · sftp C53, C105 · local forward C53, C76 · other remote port C53, C76, C88 | - |
-| `--json` reason and error codes (12) | `host_key_mismatch` C26 · `port_blocked` C27 · `connection_lost` C28 · `auth_failed` C71 · `stale` C44 · `config_changed` C73 · `config_invalid` C2 · `key_permissions` C6 · `key_unreadable` C72 · `key_invalid` C72 · `already_running` C33 · `internal` C56 | - |
+| `--json` reason and error codes (12) | `host_key_mismatch` C26 · `port_blocked` C27 · `connection_lost` C28 · `auth_failed` C71 · `stale` C44 · `config_changed` C73 · `config_invalid` C2 · `key_permissions` C6 · `key_unreadable` C72 · `key_invalid` C72 · `already_running` C33, C112, C113 · `internal` C56 | - |
 | key-leak paths (5) | connected run C34 · auth refused C34 · malformed key C34 · doctor pass C34 · doctor ssh_auth fail C34 | - |
 | shutdown paths (5) | SIGTERM C32 · SIGINT C32 · pending retry cancelled C103 · stop during connect C107 · server ignores the cancel C111 | - |
 | backoff steps (7) | 1 s C29 · 2 s C29 · 4 s C29 · 8 s C29 · 16 s C29 · 30 s cap C29 · reset C29, C106 | - |
 | startup assembly (2) | CLI subprocess C26, C32, C58 · in-process harness C25 | - |
 
-- Claims naming an outcome, interface or response shape: C2, C8-C19, C21-C23, C26, C32, C38-C44, C50-C53, C55, C58, C61, C62, C64-C66, C68-C77, C85-C88, C90, C94, C96-C100, C104, C105, C110 - each has a proof that crosses the boundary it names
+- Claims naming an outcome, interface or response shape: C2, C8-C19, C21-C23, C26, C32, C38-C44, C50-C53, C55, C58, C61, C62, C64-C66, C68-C77, C85-C88, C90, C94, C96-C100, C104, C105, C110, C112, C113 - each has a proof that crosses the boundary it names
 - No other check claims more than the cases its proof enumerates
 
 ## Security cases
@@ -413,7 +419,7 @@ Proof: run unit | (pass) [C77]
 | SEC-006 | Private key leaks through output, logs or state | No key line in any captured output | C6, C34 |
 | SEC-007 | Malformed or smuggled CONNECT head | `400`/`405`/`408`, trailing bytes never parsed | C16, C17, C21, C22, C23, C37 |
 | SEC-008 | Tunnel user can open a shell, sftp or other forwards | `lockdown` hop fails, exit 14 | C53, C64, C75, C76, C84, C87, C88, C96, C105, C109 |
-| SEC-009 | Connection flood or slow client exhausts the home machine | `503` past 256 relays, timeouts close stalled sockets | C17, C18, C19, C24, C63, C69, C80, C82, C85, C86, C90, C91, C92, C93, C98, C99, C100, C110 |
+| SEC-009 | Connection flood or slow client exhausts the home machine | `503` past 256 relays, timeouts close stalled sockets | C17, C18, C19, C24, C63, C69, C80, C82, C85, C86, C90, C91, C92, C93, C98, C99, C100, C110, C112, C113 |
 | SEC-010 | Server-, request- or config-supplied text carries terminal control characters or shell syntax into output a person or agent acts on | Characters stripped; printed commands quoted | C37, C74, C78, C83, C104 |
 
 ## Test policy
@@ -442,8 +448,8 @@ Cost: about 110 tests in 10 files, all `bun test`; SSH tests use an in-process `
 - failure modes: C18, C27, C28, C59, C70, C71, C79, C80, C81, C85, C86, C87, C90, C91, C92, C93, C96, C97, C98, C99, C100, C105, C106, C108, C110, C111
 - idempotency: n/a - no request is retried by this tool; a reconnect re-requests the forward, covered by C28
 - authorization: C9, C10, C11, C14, C35, C53, C64, C65, C67, C75, C76, C88, C89, C101, C105
-- concurrency: C19, C33, C66, C69, C90, C92, C100, C107, C108
-- data lifecycle: C31, C44 - `state.json` is replaced atomically and goes stale after 90 s
+- concurrency: C19, C33, C66, C69, C90, C92, C100, C107, C108, C112, C113
+- data lifecycle: C31, C44, C113 - `state.json` is replaced atomically and goes stale after 90 s
 - dependency failure: C18, C28, C49, C93, C110
 - state transitions: C25, C26, C27, C28, C32, C94, C95, C102, C103, C106, C107, C108
 - observability: C37, C43, C61, C73, C77, C78, C95, C104 - state and hop results are the observable surface; no metrics in v0.1
