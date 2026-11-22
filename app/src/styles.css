@@ -1,1 +1,174 @@
 @import "tailwindcss";
+
+/* Semantic roles from docs/design/README.md (Tokens). Components read these; only the mapping
+   changes per theme. The first 13 are the roles of uiux.md; the rest derive from the same page
+   (_src/css.mjs) for controls and tints. */
+:root {
+  color-scheme: light dark;
+  --text: #1c1c1e;
+  --text-2: #46464b;
+  --text-3: #6c6c72;
+  --window: rgba(244, 244, 247, 0.8);
+  --solid: #f2f2f4;
+  --tile: rgba(255, 255, 255, 0.42);
+  --well: rgba(0, 0, 0, 0.055);
+  --hairline: rgba(0, 0, 0, 0.13);
+  --ok: #1b7f3b;
+  --warn: #8f5d00;
+  --down: #c4252f;
+  --busy: #46464b;
+  --skip: #6b6b70;
+
+  --field: #ffffff;
+  --field-border: #86868b;
+  --btn: #ffffff;
+  --btn-hover: #f0f0f2;
+  --btn-border: rgba(0, 0, 0, 0.2);
+  --hover: rgba(0, 0, 0, 0.07);
+  --stat-ink: #ffffff;
+  --ok-bg: rgba(27, 127, 59, 0.11);
+  --warn-bg: rgba(214, 152, 0, 0.16);
+  --down-bg: rgba(196, 37, 47, 0.1);
+  --accent: #0a64d6;
+  --focus: #0a64d6;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --text: #f0f0f3;
+    --text-2: #bcbcc4;
+    --text-3: #9a9aa2;
+    --window: rgba(30, 30, 34, 0.78);
+    --solid: #2a2a2e;
+    --tile: rgba(255, 255, 255, 0.08);
+    --well: rgba(0, 0, 0, 0.3);
+    --hairline: rgba(255, 255, 255, 0.15);
+    --ok: #45c869;
+    --warn: #e4b643;
+    --down: #ff7a72;
+    --busy: #bcbcc4;
+    --skip: #a3a3ab;
+
+    --field: #3a3a40;
+    --field-border: #8a8a93;
+    --btn: #4a4a51;
+    --btn-hover: #56565e;
+    --btn-border: rgba(255, 255, 255, 0.14);
+    --hover: rgba(255, 255, 255, 0.1);
+    --stat-ink: #17171a;
+    --ok-bg: rgba(69, 200, 105, 0.14);
+    --warn-bg: rgba(228, 182, 67, 0.15);
+    --down-bg: rgba(255, 113, 104, 0.15);
+    --accent: #1f6fde;
+    --focus: #7ab8ff;
+  }
+}
+
+/* The accent follows the system accent colour where WebKit knows it (plan assumption, concept A). */
+@supports (color: AccentColor) {
+  :root {
+    --accent: AccentColor;
+  }
+}
+
+/* Increase Contrast: stronger separators (the surface turns solid below). */
+@media (prefers-contrast: more) {
+  :root {
+    --hairline: rgba(0, 0, 0, 0.45);
+  }
+}
+@media (prefers-contrast: more) and (prefers-color-scheme: dark) {
+  :root {
+    --hairline: rgba(255, 255, 255, 0.5);
+  }
+}
+
+@theme inline {
+  --font-sans: -apple-system, BlinkMacSystemFont, "SF Pro Text", system-ui, sans-serif;
+  --font-mono: ui-monospace, "SF Mono", SFMono-Regular, Menlo, monospace;
+  --color-text: var(--text);
+  --color-text-2: var(--text-2);
+  --color-text-3: var(--text-3);
+  --color-window: var(--window);
+  --color-solid: var(--solid);
+  --color-tile: var(--tile);
+  --color-well: var(--well);
+  --color-hairline: var(--hairline);
+  --color-ok: var(--ok);
+  --color-warn: var(--warn);
+  --color-down: var(--down);
+  --color-busy: var(--busy);
+  --color-skip: var(--skip);
+  --color-field: var(--field);
+  --color-field-border: var(--field-border);
+  --color-btn: var(--btn);
+  --color-btn-hover: var(--btn-hover);
+  --color-btn-border: var(--btn-border);
+  --color-hover: var(--hover);
+  --color-stat-ink: var(--stat-ink);
+  --color-ok-bg: var(--ok-bg);
+  --color-warn-bg: var(--warn-bg);
+  --color-down-bg: var(--down-bg);
+  --color-accent: var(--accent);
+  --radius-control: 6px;
+  --radius-box: 8px;
+}
+
+@layer base {
+  html,
+  body {
+    margin: 0;
+    background: transparent;
+    color: var(--text);
+    font: 13px/1.38 var(--font-sans);
+    -webkit-font-smoothing: antialiased;
+    cursor: default;
+    user-select: none;
+  }
+
+  /* CLI-supplied text and the values a user may want to copy stay selectable. */
+  code,
+  dd {
+    user-select: text;
+  }
+
+  :focus-visible {
+    outline: 2px solid var(--focus);
+    outline-offset: 2px;
+  }
+}
+
+/* The page is transparent over the OS vibrancy material (AC 71). Reduce Transparency, read from the
+   system by Rust (`data-surface="solid"`), and the media features of the same preference or of
+   Increase Contrast fill it with the solid fallback. */
+@layer components {
+  .surface {
+    background: transparent;
+  }
+  .surface[data-surface="solid"] {
+    background: var(--solid);
+  }
+  @media (prefers-reduced-transparency: reduce), (prefers-contrast: more) {
+    .surface {
+      background: var(--solid);
+    }
+  }
+
+  /* Route strip connector for a stop still being checked: dots walking toward it. */
+  .route-busy::before {
+    height: 3px;
+    top: 6.5px;
+    background: radial-gradient(circle, var(--text) 0 1.2px, transparent 1.6px) 0 0 / 8px 2px repeat-x;
+    animation: march 0.5s linear infinite;
+  }
+  @keyframes march {
+    to {
+      background-position: 8px 0;
+    }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .route-busy::before {
+      animation: none;
+    }
+  }
+}
