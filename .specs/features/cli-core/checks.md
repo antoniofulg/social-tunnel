@@ -364,7 +364,7 @@ Proof: run unit | (pass) [C105]
 **C109** - The `lockdown` hop's fix contains `PermitListen 127.0.0.1:<remotePort>` and `GatewayPorts no` (DOC-01, AC 87)
 Proof: run unit | (pass) [C109]
 
-**C110** - With a 300 ms timeout and a dialer that never connects, once for the SSH port and once for 443, `doctor` exits 10 failing `server_reachable` and `egress` respectively, and each pending dial's abort signal has fired (DOC-01, AC 88)
+**C110** - With a 2 s timeout and a dialer that never connects, once for the SSH port and once for 443, `doctor` exits 10 failing `server_reachable` and `egress` respectively, and each pending dial's abort signal has fired (DOC-01, AC 88)
 Proof: run unit | (pass) [C110]
 
 ### S6 - The CLI never blocks an agent

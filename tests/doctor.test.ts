@@ -507,7 +507,8 @@ test("[C110] a server_reachable or egress dial still pending at the timeout is t
         signals.push(signal);
         return new Promise(() => {});
       },
-      connectTimeoutMs: 300,
+      // The SSH and lockdown hops share this timeout; 300 ms failed them under load (15.4).
+      connectTimeoutMs: 2000,
     };
     const result = await doctor(env.path, io);
     expect([hop, result.code]).toEqual([hop, 10]);
