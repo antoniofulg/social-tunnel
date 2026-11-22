@@ -12,7 +12,8 @@
   },
   "scripts": {
     "typecheck": "tsc --noEmit",
-    "test": "bun test"
+    "test": "bun test",
+    "build:sidecar": "bun app/scripts/build-sidecar.ts"
   },
   "dependencies": {
     "ssh2": "1.17.0"
