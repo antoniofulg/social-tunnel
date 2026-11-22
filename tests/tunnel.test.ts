@@ -438,3 +438,60 @@ test("[C86] a refusal the SSH peer never takes is closed once the head timeout h
   expect(Buffer.concat(delivered).length).toBe(0);
   expect(proxy.dials).toEqual([]);
 });
+
+test("[C90] on the tunnel's SSH channel, a relay ended by an upstream reset, an upstream close or the idle timeout frees its slot", async () => {
+  const relayCap = 2;
+  for (const ending of ["upstream reset", "upstream close", "idle timeout"]) {
+    const origin = net.createServer((socket) => {
+      socket.on("error", () => {});
+      if (ending === "upstream reset") socket.write("bye", () => socket.resetAndDestroy());
+      if (ending === "upstream close") socket.end("bye");
+    });
+    await new Promise<void>((resolve) => origin.listen(0, "127.0.0.1", resolve));
+    const originPort = (origin.address() as net.AddressInfo).port;
+    const upstreams: net.Socket[] = [];
+
+    const env = await setup({ open: true });
+    const proxy = harness({
+      relayCap,
+      idleTimeoutMs: ending === "idle timeout" ? 150 : 60_000,
+      dial: () =>
+        new Promise((resolve, reject) => {
+          const socket = net.connect(originPort, "127.0.0.1");
+          upstreams.push(socket);
+          socket.once("error", reject);
+          socket.once("connect", () => resolve(socket));
+        }),
+    });
+    const open = new Set<Duplex>();
+    const t = await tunnelTo(env, {
+      handle: (stream) => {
+        open.add(stream);
+        stream.once("close", () => open.delete(stream));
+        proxy.handle(stream);
+      },
+    });
+    await until(() => t.names().includes("connected"));
+
+    try {
+      // Twice the cap, one after the other: every relay has ended before the next one opens.
+      for (let run = 0; run < relayCap * 2; run++) {
+        let received = "";
+        let closed = false;
+        const socket = net.connect(env.remotePort, "127.0.0.1");
+        socket.on("error", () => {});
+        socket.on("data", (chunk) => (received += chunk.toString("latin1")));
+        socket.on("close", () => (closed = true));
+        socket.write(CONNECT);
+        await until(() => closed, 10000, `relay ${run} to close after ${ending}`);
+        expect([ending, run, received.split("\r\n")[0]]).toEqual([ending, run, OK]);
+      }
+      expect(proxy.logs.map((entry) => entry.status)).toEqual(Array(relayCap * 2).fill(200));
+      // No channel is left waiting for a reader: each one reported its close.
+      await until(() => open.size === 0, 5000, `every channel to close after ${ending}`);
+    } finally {
+      origin.close();
+      upstreams.forEach((socket) => socket.destroy());
+    }
+  }
+}, 60_000);

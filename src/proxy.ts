@@ -170,26 +170,36 @@ export function createProxy(options: ProxyOptions): { handle: (stream: Duplex) =
       }
       options.log?.({ status: 200, host });
 
-      const idleTimer = setTimeout(() => {
+      // Closes the channel from this side. Its slot is freed here and not on 'close': ssh2 reports a
+      // channel's close only once the peer has answered and the channel has been read to its end.
+      const drop = () => {
+        release();
         stream.destroy();
+      };
+      const idleTimer = setTimeout(() => {
+        drop();
         remote.destroy();
       }, idleTimeoutMs);
       const touch = () => idleTimer.refresh();
       // When one side is gone the other is ended, not destroyed: bytes already accepted for it may
-      // still be queued (an SSH channel waits for window) and are delivered first. From then on
+      // still be queued (an SSH channel waits for window) and are delivered first. What it still
+      // sends has nowhere to go and is read and discarded, so its own close is seen. From then on
       // nothing refreshes the idle timer, so it bounds the flush.
-      const flush = (to: Duplex) => {
+      const flush = (to: Duplex, from: Duplex) => {
         stream.off("data", touch);
         remote.off("data", touch);
+        to.unpipe(from);
+        to.resume();
+        const shut = to === stream ? drop : () => void to.destroy();
         if (to.destroyed) return clearTimeout(idleTimer);
         to.once("close", () => clearTimeout(idleTimer));
-        if (to.writableFinished) return void to.destroy();
-        to.once("finish", () => to.destroy());
+        if (to.writableFinished) return shut();
+        to.once("finish", shut);
         to.end();
       };
       remote.on("error", () => {});
-      remote.once("close", () => flush(stream));
-      stream.once("close", () => flush(remote));
+      remote.once("close", () => flush(stream, remote));
+      stream.once("close", () => flush(remote, stream));
       stream.on("data", touch);
       remote.on("data", touch);
 

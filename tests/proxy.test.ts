@@ -363,3 +363,67 @@ test("[C82] traffic in one direction alone keeps a relay open past the idle time
     await until(() => channel.ended() && remote.destroyed, 5000, "the quiet relay to close");
   }
 });
+
+const CONNECT = "CONNECT instagram.com:443 HTTP/1.1\r\n\r\n";
+
+// A channel driven by hand: `push` is what the server sends, `text` what the proxy wrote to it.
+// Once `stall` is called its writes never complete, like an SSH channel whose peer grants no window.
+function rawChannel(options: { emitClose?: boolean } = {}) {
+  const sent: Buffer[] = [];
+  let stalled = false;
+  const channel = new Duplex({
+    ...options,
+    read() {},
+    write(chunk, _encoding, done) {
+      if (stalled) return;
+      sent.push(chunk);
+      done();
+    },
+  });
+  return { channel, text: () => Buffer.concat(sent).toString("latin1"), stall: () => (stalled = true) };
+}
+
+test("[C91] after upstream closes, a client that takes nothing but keeps sending is cut off by the idle timeout", async () => {
+  const idleTimeoutMs = 300;
+  const h = harness({ idleTimeoutMs });
+  const raw = rawChannel();
+  h.handle(raw.channel);
+  raw.channel.push(CONNECT);
+  await until(() => raw.text() === `${OK}\r\n\r\n`);
+
+  // The client stops taking bytes with a response still queued for it, then upstream closes.
+  raw.stall();
+  h.dials[0]!.remote.write(Buffer.alloc(64 * 1024));
+  await until(() => raw.channel.writableLength > 0);
+  h.dials[0]!.remote.destroy();
+  const closedAt = Date.now();
+  // The client keeps talking; with upstream gone that must not keep the relay alive.
+  const chatter = setInterval(() => raw.channel.push("x"), 20);
+  try {
+    await sleep(idleTimeoutMs / 3);
+    expect(raw.channel.destroyed).toBe(false);
+    await until(() => raw.channel.destroyed, idleTimeoutMs * 5, "the idle timeout to end the flush");
+    expect(Date.now() - closedAt).toBeLessThan(idleTimeoutMs * 3);
+  } finally {
+    clearInterval(chatter);
+  }
+});
+
+test("[C92] a channel that never reports its own close frees its slot when upstream closes and when the relay idles out", async () => {
+  for (const ending of ["upstream close", "idle timeout"]) {
+    const h = harness({ relayCap: 1, idleTimeoutMs: ending === "idle timeout" ? 100 : 60_000 });
+    // Like an ssh2 channel nobody reads: closing it from this side raises no 'close' event.
+    const raw = rawChannel({ emitClose: false });
+    let closeEvents = 0;
+    raw.channel.on("close", () => closeEvents++);
+    h.handle(raw.channel);
+    raw.channel.push(CONNECT);
+    await until(() => raw.text() === `${OK}\r\n\r\n`);
+    expect([ending, await h.status("instagram.com:443")]).toEqual([ending, "HTTP/1.1 503 Service Unavailable"]);
+
+    if (ending === "upstream close") h.dials[0]!.remote.destroy();
+    await until(() => raw.channel.destroyed, 2000, `the channel to be closed after ${ending}`);
+    expect([ending, closeEvents]).toEqual([ending, 0]);
+    expect([ending, await h.connect("instagram.com:443").head()]).toEqual([ending, `${OK}\r\n\r\n`]);
+  }
+});
