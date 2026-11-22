@@ -166,6 +166,7 @@ test("[C125] a host key mismatch recorded for another server or port reads as th
     ["live pid, other host", { ...mismatch, server: { host: "old.example.com", port: 22 } }, { state: "stopped", reason: "config_changed", exit: 10 }],
     ["live pid, other remotePort", { ...mismatch, remotePort: 9999 }, { state: "stopped", reason: "config_changed", exit: 10 }],
     ["dead pid, other host", { ...mismatch, pid: dead, server: { host: "old.example.com", port: 22 } }, { state: "stopped", reason: null, exit: 10 }],
+    ["stale live pid, other host", { ...mismatch, updatedAt: new Date(at - 91_000).toISOString(), server: { host: "old.example.com", port: 22 } }, { state: "stopped", reason: null, exit: 10 }],
     ["dead pid, same server", { ...mismatch, pid: dead }, { state: "blocked", reason: "host_key_mismatch", exit: 13 }],
   ];
   for (const [name, patch, want] of rows) {

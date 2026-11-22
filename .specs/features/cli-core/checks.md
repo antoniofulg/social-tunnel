@@ -312,7 +312,7 @@ Proof: run unit | (pass) [C44]
 **C121** - `status` order, table-driven over `evaluateStatus` with a pinned clock: dead pid `blocked`/`port_blocked` -> `stopped` exit 10; stale live pid `blocked`/`port_blocked` -> `stopped`/`stale` exit 10; fresh live pid `blocked`/`port_blocked` -> exit 11; dead and stale live pid `disconnected` -> `stopped` exit 10 with no `retryAt`; dead and stale `host_key_mismatch` -> exit 13; the first two rows also through `status --json` (STA-01, AC 98)
 Proof: run unit | (pass) [C121]
 
-**C125** - With `state.json` holding `blocked`/`host_key_mismatch` for another server or `remotePort`: a live pid gives `stopped`/`config_changed` exit 10, a dead pid `stopped` exit 10; the same file for the configured server and port with a dead pid still gives exit 13 (STA-01, AC 102)
+**C125** - With `state.json` holding `blocked`/`host_key_mismatch` for another server or `remotePort`: a live pid gives `stopped`/`config_changed` exit 10, a dead pid or a stale live pid `stopped` with no reason, exit 10; the same file for the configured server and port with a dead pid still gives exit 13 (STA-01, AC 102, 103)
 Proof: run unit | (pass) [C125]
 
 **C73** - With a live `connected` state.json naming another `remotePort`, server host or server port than the config, `status --json` exits 10 with `stopped`/`config_changed`, and the `doctor` `forward` hop sends `tcpip-forward` then `cancel-tcpip-forward` for the config's port (STA-01, DOC-01, AC 63)
