@@ -36,7 +36,7 @@ The home-side rules (allowlist, home network, no open port, pinned key, key hand
 - **Pinned server key.** The server's host key is pinned by its `SHA256:` fingerprint. A different key stops the connection before authenticating. There is no trust-on-first-use.
 - **Narrow server access.** The tunnel user has no shell and may only listen on one loopback port. `social-tunnel doctor` checks this: it fails if that user can run a shell, run a command, use `sftp`, open a local forward or listen on another port.
 - **You log in yourself.** The tool never asks for, stores or logs platform passwords, 2FA codes or cookies. The SSH private key stays on the home computer, must be readable only by you, and never appears in output or logs.
-- **Bounded.** At most 256 relays at once; slow or idle connections are closed (10 s to send a request, 10 s to resolve and connect, 10 s for the server to take a refusal, 300 s idle).
+- **Bounded.** At most 256 relays at once; slow or idle connections are closed (10 s to send a request, 10 s for the DNS lookup and 10 s for the connect, each, 10 s for the server to take a refusal, 300 s idle).
 
 The full threat model is in [docs/security/threat-model.md](docs/security/threat-model.md).
 
