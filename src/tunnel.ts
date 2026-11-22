@@ -205,6 +205,8 @@ export function startTunnel(options: TunnelOptions): Tunnel {
     }
     if (stopping) return void c.end();
     client = c;
+    // Authenticated: the server is back, so the next loss starts the backoff at 1 s (criterion 86).
+    failures = 0;
 
     c.on("tcp connection", (info, accept, reject) => {
       if (!isExpectedForward(info, remotePort)) {
@@ -225,7 +227,6 @@ export function startTunnel(options: TunnelOptions): Tunnel {
         c.end();
         return retry("blocked", "port_blocked", options.blockedRetryMs ?? DEFAULTS.blockedRetryMs);
       }
-      failures = 0;
       set("connected");
     });
   }

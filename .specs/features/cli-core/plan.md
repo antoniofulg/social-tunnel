@@ -147,6 +147,7 @@ The home machine keeps a reverse tunnel to the server and records connected, los
 71. The characters of criterion 70 SHALL also include U+00AD, U+061C, U+2060-U+2069 and the tag characters U+E0000-U+E007F (added after deep review round 2)
 80. WHEN `run` has ended on the host key mismatch of criterion 19 THEN a SIGINT or SIGTERM that arrives before the process is gone SHALL leave `state.json` at `blocked` with reason `host_key_mismatch`, so `status` keeps exiting 13 (added after deep review round 5; refines 19, 26 and 33)
 81. The `since` of criterion 25 SHALL be the time the tunnel entered its current state and reason: WHEN the same state and reason are written again (a blocked port retried every 30 s, criterion 21) THEN `since` SHALL stay unchanged while `retryAt` and `updatedAt` move on (added after deep review round 5; refines 21 and 25)
+86. The "successful connection" of criterion 23 SHALL be an SSH connection whose key the server accepted: WHEN the server accepts the key THEN the next retry delay after a connection loss or connect failure SHALL be 1 s, whether or not the forward was then granted; the 30 s retry of criterion 21 is unchanged (added after deep review round 6; clarifies 23)
 28. The system SHALL write no private key material and no passphrase to stdout, stderr, `state.json` or `--json` output
 
 **Independent test:** start `run` against an in-process `ssh2` test server; kill the server, watch `state.json` go `connected` -> `disconnected` -> `reconnecting` -> `connected`; present a wrong host key and see exit 13.
@@ -213,7 +214,7 @@ The user or an agent learns which hop failed and what to do about it.
 | --- | --- | --- | --- |
 | CFG-01 | S1 | 1, 2, 3, 4, 5, 6, 55, 56, 68, 69 | Done |
 | PRX-01 | S2 | 7-17, 44, 45, 46, 47, 58, 61, 66, 73, 74, 77, 78, 79 | Done |
-| TUN-01 | S3 | 18-28, 48, 49, 50, 57, 60, 62, 70, 71, 80, 81 | Done |
+| TUN-01 | S3 | 18-28, 48, 49, 50, 57, 60, 62, 70, 71, 80, 81, 86 | Done |
 | STA-01 | S4 | 29-34, 51, 63, 84 | Done |
 | DOC-01 | S5 | 35-41, 52, 53, 54, 59, 64, 65, 67, 72, 75, 76, 82, 83, 85 | Done |
 | CLI-01 | S6 | 42, 43 | Done |
@@ -308,4 +309,4 @@ The user or an agent learns which hop failed and what to do about it.
 - Approval of criteria 59-77 (2026-11-22): Decision: "Approve 59–77 (Recommended)". Source: user answer in the coordinating Claude Code chat (AskUserQuestion), after deep review round 5 flagged the receipt. Scope: criteria 59-77 as written at commit aec4a8f
 - Revision after deep review round 5 (2026-11-22): criteria 78-84 and one Surface row appended for the relay slot that was never freed on a real SSH channel, the timed-out dial left connecting, the host key mismatch that a late stop overwrote, the `since` that restarted on every blocked retry, the `doctor` hops that read an unanswered request as a refusal, and (hardening) `--json` strings that skipped the sanitiser. Approver: none recorded; directed by the coordinating agent and awaiting the user's approval
 - Approval of criteria 78-84 (2026-11-22): Decision: "Approve 78–84 (Recommended)". Source: user answer in the coordinating Claude Code chat (AskUserQuestion). Scope: criteria 78-84 and the Surface row as written at commit 14e6a7a
-- Revision after deep review round 6 (2026-11-22): criterion 85 appended for the `sftp` lockdown attempt that read a granted subsystem running a hanging forced command as a silent server. Approver: none recorded; directed by the coordinating agent and awaiting the user's approval
+- Revision after deep review round 6 (2026-11-22): criteria 85 and 86 appended for the `sftp` lockdown attempt that read a granted subsystem running a hanging forced command as a silent server, and for the backoff that a connection with a refused forward did not reset. Approver: none recorded; directed by the coordinating agent and awaiting the user's approval

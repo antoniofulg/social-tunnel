@@ -632,3 +632,31 @@ test("[C103] stop() cancels the pending retry, and a retry that fires anyway ope
   expect(env.ssh.clients.length).toBe(1);
   expect(t.names().at(-1)).toBe("stopped");
 });
+
+test("[C106] a connection that authenticates but has its forward refused resets the backoff to 1 s", async () => {
+  // Down for three attempts (1, 2, 4 s), then back with the port refused, then down again.
+  const env = await setup({ forward: () => false });
+  await env.ssh.close();
+
+  const delays: number[] = [];
+  let ssh: TestServer | undefined;
+  const t = await tunnelTo(env, {
+    backoffMs: undefined,
+    schedule: (fn, ms) => {
+      delays.push(ms);
+      const go = async () => {
+        if (delays.length === 3) {
+          ssh = await startServer({ ...env.ssh.options, port: env.ssh.port, host: env.ssh.host });
+          servers.push(ssh);
+        }
+        if (delays.length === 4) await ssh!.close();
+        if (delays.length <= 4) fn();
+      };
+      void go();
+      return () => {};
+    },
+  });
+  await until(() => delays.length === 5);
+  expect(t.names().filter((n) => n.startsWith("blocked"))).toEqual(["blocked/port_blocked"]);
+  expect(delays).toEqual([1000, 2000, 4000, 30000, 1000]);
+});
