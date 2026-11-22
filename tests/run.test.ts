@@ -176,3 +176,25 @@ test("[C113] a run.lock left by a dead pid is taken over; a fresh one held by a 
   expect(refused.json().error.code).toBe("already_running");
   expect(env.ssh.clients.length).toBe(1);
 }, 30_000);
+
+test("[C116] several runs started at once over one dead-pid run.lock: exactly one connects", async () => {
+  const env = await setup();
+  servers.push(env.ssh);
+  writeFileSync(join(env.path, "..", "run.lock"), `${Bun.spawnSync(["true"]).pid}\n`);
+  const runs = Array.from({ length: 4 }, () => spawnCli(["run", "--json", "--config", env.path]));
+  procs.push(...runs);
+
+  await stateIs(env.statePath, "connected");
+  await sleep(1500);
+  const winner = runs.find((r) => r.pid === readJson(env.statePath).pid)!;
+  const losers = runs.filter((r) => r !== winner);
+  for (const loser of losers) {
+    const result = await loser.exit();
+    expect(result.code).toBe(2);
+    expect(JSON.parse(result.stdout).error.code).toBe("already_running");
+  }
+  expect(env.ssh.clients.length).toBe(1);
+  expect(env.ssh.requests.filter((r) => r.name === "tcpip-forward").length).toBe(1);
+  winner.kill("SIGTERM");
+  expect((await winner.exit()).code).toBe(0);
+}, 30_000);

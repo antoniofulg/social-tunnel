@@ -79,38 +79,35 @@ export function lockPath(configPath: string): string {
 
 // Claims the config directory for this process before it connects, so two runs started at once
 // cannot both pass the state.json check. The pid file is complete before link() publishes it, and
-// link() fails if the lock exists. A leftover lock is taken over only when `live` says its pid no
-// longer runs this tool. Returns the holder's pid when someone else owns it, null once claimed.
+// link() fails if the lock exists. A leftover lock is replaced only by the one process that wins
+// `<lock>.takeover` the same way, and only if the lock is still the file it judged dead; `live` says
+// whether a pid still runs this tool. Returns the holder's pid when someone else owns it, null once
+// claimed.
 export function claimRun(path: string, live: (pid: number, ageMs: number) => boolean): number | null {
   const temp = `${path}.${process.pid}.tmp`;
+  const takeover = `${path}.takeover`;
   writeFileSync(temp, `${process.pid}\n`, { mode: 0o600 });
   try {
     for (let attempt = 0; attempt < 3; attempt++) {
-      try {
-        linkSync(temp, path);
-        return null;
-      } catch (err) {
-        if ((err as NodeJS.ErrnoException).code !== "EEXIST") throw err;
-      }
+      if (tryLink(temp, path)) return null;
       const held = readLock(path);
       if (held === null) continue;
       if (live(held.pid, held.ageMs)) return held.pid;
-      // Move the leftover aside, then check it is the one judged dead and not a fresh claim.
-      const aside = `${path}.${process.pid}.stale`;
-      try {
-        renameSync(path, aside);
-      } catch {
+      if (!tryLink(temp, takeover)) {
+        // Another run is replacing the lock. A takeover file outlives its owner only after a crash
+        // between two system calls; past 10 s it is cleared and the lock judged again.
+        const other = readLock(takeover);
+        if (other && other.ageMs <= 10_000) return other.pid;
+        rmSync(takeover, { force: true });
         continue;
       }
-      const moved = readLock(aside);
-      if (moved && moved.pid !== held.pid) {
-        try {
-          linkSync(aside, path);
-        } catch {}
-        rmSync(aside, { force: true });
-        return moved.pid;
+      try {
+        const again = readLock(path);
+        if (again && again.ino === held.ino && !live(again.pid, again.ageMs)) rmSync(path);
+        if (tryLink(temp, path)) return null;
+      } finally {
+        rmSync(takeover, { force: true });
       }
-      rmSync(aside, { force: true });
     }
     const held = readLock(path);
     return held ? held.pid : -1;
@@ -119,16 +116,27 @@ export function claimRun(path: string, live: (pid: number, ageMs: number) => boo
   }
 }
 
+function tryLink(from: string, to: string): boolean {
+  try {
+    linkSync(from, to);
+    return true;
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === "EEXIST") return false;
+    throw err;
+  }
+}
+
 // Removes the lock only while it still names this process.
 export function releaseRun(path: string): void {
   if (readLock(path)?.pid === process.pid) rmSync(path, { force: true });
 }
 
-function readLock(path: string): { pid: number; ageMs: number } | null {
+function readLock(path: string): { pid: number; ageMs: number; ino: number } | null {
   try {
     const text = readFileSync(path, "utf8").trim();
     const pid = /^[1-9][0-9]*$/.test(text) ? Number(text) : 0;
-    return { pid, ageMs: Date.now() - statSync(path).mtimeMs };
+    const stat = statSync(path);
+    return { pid, ageMs: Date.now() - stat.mtimeMs, ino: stat.ino };
   } catch {
     return null;
   }
