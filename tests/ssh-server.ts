@@ -25,6 +25,8 @@ export interface ServerOptions {
   localForward?: boolean | "connect-failed";
   shellFlavor?: "posix" | "fish" | "tcsh";
   banner?: string;
+  // Runs when a session is requested, before the server answers it.
+  onSession?: () => void;
 }
 
 export interface TestServer {
@@ -123,6 +125,7 @@ export async function startServer(options: ServerOptions): Promise<TestServer> {
         } else reject?.();
       });
       client.on("session", (accept, reject) => {
+        options.onSession?.();
         if (!options.shell && !options.sftp && !options.exec && !options.forced) return reject();
         const session = accept();
         // A small stand-in for the account's login shell: joins quoted pieces like every shell,

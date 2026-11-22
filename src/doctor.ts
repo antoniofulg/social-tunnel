@@ -49,6 +49,8 @@ export async function runDoctor(
   let config!: Config;
   let key!: Buffer;
   let client: Client | undefined;
+  // Set once the SSH connection is gone: from then on a `false` from `allowed` is not a refusal.
+  let lost = false;
 
   // Resolves true when the server granted the request. No answer in time counts as refused.
   const allowed = (ask: (answer: (granted: boolean) => void) => void) =>
@@ -57,7 +59,8 @@ export async function runDoctor(
         try {
           ask(resolve);
         } catch {
-          resolve(false); // ssh2 throws when the connection is already gone
+          lost = true; // ssh2 throws when the connection is already gone
+          resolve(false);
         }
       }),
       timeoutMs,
@@ -121,6 +124,7 @@ export async function runDoctor(
       run: async () => {
         try {
           client = await connectSsh({ ...config.server, key }, { readyTimeoutMs: timeoutMs });
+          client.once("close", () => (lost = true));
         } catch (err) {
           const kind = err instanceof ConnectError ? err.kind : "unreachable";
           if (kind === "host_key_mismatch") {
@@ -205,15 +209,24 @@ export async function runDoctor(
           ],
           [
             "remote forward on another port",
-            // Two ports: a refusal on one may only mean that port is taken on the server.
+            // Two ports: a refusal on one may only mean that port is taken on the server. They are
+            // the two above the tunnel port, or the two below it where those above do not exist.
             (answer) => {
+              const step = config.remotePort + 2 > 65535 ? -1 : 1;
               const tryPort = (other: number, last: boolean) =>
                 c.forwardIn("127.0.0.1", other, (err) => {
-                  if (!err) c.unforwardIn("127.0.0.1", other, () => {});
-                  if (!err || last) return answer(!err);
-                  tryPort(other + 1, true);
+                  // This runs inside ssh2, outside the try in `allowed`: a throw here means the
+                  // connection is gone.
+                  try {
+                    if (!err) c.unforwardIn("127.0.0.1", other, () => {});
+                    if (!err || last) return answer(!err);
+                    tryPort(other + step, true);
+                  } catch {
+                    lost = true;
+                    answer(false);
+                  }
                 });
-              tryPort(config.remotePort + 1, false);
+              tryPort(config.remotePort + step, false);
             },
           ],
         ];
@@ -224,6 +237,14 @@ export async function runDoctor(
             `the server allowed the tunnel user: ${granted.join(", ")}`,
             `On the server, start the tunnel key's authorized_keys line with restrict,port-forwarding,permitlisten="127.0.0.1:${config.remotePort}",command="/usr/sbin/nologin" and add to sshd_config: Match User ${config.server.user} / AllowTcpForwarding remote / PermitOpen none / AllowStreamLocalForwarding no / PermitTTY no / ForceCommand /usr/sbin/nologin. permitlisten limits only remote forwards; PermitOpen none is what closes local ones.`,
             EXIT.lockdown,
+          );
+        }
+        // Probes that were never answered prove nothing, so a lost connection is never a pass.
+        if (lost) {
+          return fail(
+            "the SSH connection closed during the lockdown checks, so they did not finish",
+            "Run doctor again. If the connection closes every time, read the server's sshd log: it may be dropping the tunnel user on a refused request.",
+            EXIT.down,
           );
         }
         return pass("the server ran no shell or exec command and refused sftp, a local forward and a forward on another port");

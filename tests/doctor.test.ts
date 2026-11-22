@@ -414,3 +414,44 @@ test("[C84] the lockdown fix also closes Unix-socket forwarding", async () => {
   expect(code).toBe(14);
   expect(hop("lockdown").fix).toContain("AllowStreamLocalForwarding no");
 });
+
+test("[C87] an SSH connection that closes during the lockdown hop fails the hop with exit 10, never a pass", async () => {
+  const drop = (ssh: TestServer) => ssh.clients.forEach((c) => (c as unknown as { _sock: { destroy(): void } })._sock.destroy());
+  // Both servers grant a forward on any port, so an undisturbed doctor run fails lockdown with exit 14.
+  const table: [string, (env: () => Awaited<ReturnType<typeof setup>>) => Server][] = [
+    ["at the first session request", (env) => ({ onSession: () => drop(env().ssh) })],
+    ["while the forward on another port waits", (env) => ({ forward: (port) => port === env().remotePort || (drop(env().ssh), false) })],
+  ];
+  for (const [when, server] of table) {
+    let env!: Awaited<ReturnType<typeof setup>>;
+    env = await setup(server(() => env));
+    servers.push(env.ssh);
+    const { code, hop } = await doctor(env.path, seams().io);
+    expect([when, code]).toEqual([when, 10]);
+    expect(hop("forward")).toMatchObject({ ok: true });
+    expect(hop("lockdown")).toMatchObject({ ok: false, skipped: false });
+    expect(hop("lockdown").detail).toMatch(/connection closed/);
+    expect(hop("lockdown").detail).not.toMatch(/refused/);
+    expect(hop("lockdown").fix).toMatch(/doctor again/);
+    expect(hop("egress")).toMatchObject({ ok: false, skipped: true });
+  }
+});
+
+test("[C88] at the top of the port range the lockdown hop asks for real other ports below the tunnel port", async () => {
+  for (const remotePort of [65535, 65534]) {
+    // The server grants a remote forward on every port that exists.
+    const env = await setup({ forward: (port) => port >= 1 && port <= 65535 }, (c) => (c.remotePort = remotePort));
+    servers.push(env.ssh);
+    const { code, hop } = await doctor(env.path, seams().io);
+    expect([remotePort, code]).toEqual([remotePort, 14]);
+    expect(hop("lockdown").detail).toContain("remote forward");
+    const asked = env.ssh.requests.filter((r) => r.name === "tcpip-forward").map((r) => r.bindPort!);
+    expect(asked.filter((port) => port !== remotePort)).toEqual([remotePort - 1]);
+  }
+
+  // Refused on the first neighbour, granted on the second: still reported.
+  const env = await setup({ forward: (port) => port === 65535 || port === 65533 }, (c) => (c.remotePort = 65535));
+  servers.push(env.ssh);
+  expect((await doctor(env.path, seams().io)).code).toBe(14);
+  expect(env.ssh.requests.filter((r) => r.name === "tcpip-forward").map((r) => r.bindPort)).toEqual([65535, 65534, 65533]);
+});
