@@ -230,6 +230,32 @@ test("[C36] updatedAt is rewritten every heartbeat while connected and while ret
   }
 });
 
+test("[C118] a text-mode log value with a space, =, quote or backslash is quoted, so a server banner cannot forge a field", async () => {
+  const lines: string[] = [];
+  const log = createLogger((text) => void lines.push(text), false);
+  const fields = (line: string) =>
+    [...line.matchAll(/ ([A-Za-z]+)=("(?:[^"\\]|\\.)*"|[^ \n]*)/g)].map((m) => [m[1], m[2]!.startsWith('"') ? JSON.parse(m[2]!) : m[2]]);
+
+  log("unit", { plain: "example.org", spaced: "a b", eq: "k=v", quote: 'say "x"', slash: "c:\\d", empty: "", n: 7 });
+  expect(fields(lines[0]!)).toEqual([
+    ["plain", "example.org"],
+    ["spaced", "a b"],
+    ["eq", "k=v"],
+    ["quote", 'say "x"'],
+    ["slash", "c:\\d"],
+    ["empty", ""],
+    ["n", "7"],
+  ]);
+  expect(lines[0]).toContain(" plain=example.org ");
+
+  lines.length = 0;
+  const env = await setup({ banner: 'hi state=stopped reason="forged" pid=1' });
+  const t = await tunnelTo(env, { log });
+  await until(() => t.names().includes("connected"));
+  const banner = lines.find((line) => line.includes("server banner"))!;
+  expect(fields(banner)).toEqual([["text", 'hi state=stopped reason="forged" pid=1']]);
+});
+
 test("[C37] a log line for an invalid host shows no host, and control characters in server text are stripped", async () => {
   const lines: string[] = [];
   const log = createLogger((text) => void lines.push(text), false);

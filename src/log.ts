@@ -23,7 +23,11 @@ export function createLogger(write: (text: string) => void, json: boolean): Log 
     }
     const time = new Date().toISOString();
     if (json) return write(JSON.stringify({ time, message, ...clean }) + "\n");
-    const tail = Object.entries(clean).map(([key, value]) => ` ${key}=${value}`);
+    // A value that could read as more than one field (space, `=`, quote, backslash, or empty) is
+    // printed as a JSON string, so server text cannot forge a field.
+    const text = (value: string | number) =>
+      typeof value === "string" && (value === "" || /[\s="\\]/.test(value)) ? JSON.stringify(value) : value;
+    const tail = Object.entries(clean).map(([key, value]) => ` ${key}=${text(value)}`);
     write(`${time} ${message}${tail.join("")}\n`);
   };
 }

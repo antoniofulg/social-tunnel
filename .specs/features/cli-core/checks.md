@@ -6,7 +6,7 @@ Build: `taskpolicy -b nice -n 10 bun run typecheck`
 Run unit: `env -u CLAUDECODE taskpolicy -b nice -n 10 bun test`
 Plan: `.specs/features/cli-core/plan.md`
 
-116 checks in 6 slices (ids C1-C117; C57 unused; C64-C69 added after verification round 1, C70-C78 after deep review round 1, C79-C84 after round 2, C85-C89 after round 4, C90-C104 after round 5, C105-C111 after round 6, C112-C116 after round 8, C117 after round 9) · 8 one-way doors · 2 open, of which 0 block
+117 checks in 6 slices (ids C1-C118; C57 unused; C64-C69 added after verification round 1, C70-C78 after deep review round 1, C79-C84 after round 2, C85-C89 after round 4, C90-C104 after round 5, C105-C111 after round 6, C112-C116 after round 8, C117-C118 after round 9) · 8 one-way doors · 2 open, of which 0 block
 
 Test names start with the check id in brackets, so `bun test` prints `(pass) [C<n>] ...`. Each id has exactly one test. `CLAUDECODE` is unset because Bun hides per-test pass lines when it is set.
 
@@ -165,7 +165,7 @@ Proof: run unit | (pass) [C100]
 
 ### S3 - `run` holds the tunnel open and reports every state change
 
-Complete: C25-C33, C35-C37, C59, C61, C66, C67, C71, C78, C83, C94, C95, C101-C103, C106-C108, C111-C113, C115-C117 and C58 (S2) - proofs green; C34 covers two `doctor` paths and is marked with S5
+Complete: C25-C33, C35-C37, C59, C61, C66, C67, C71, C78, C83, C94, C95, C101-C103, C106-C108, C111-C113, C115-C118 and C58 (S2) - proofs green; C34 covers two `doctor` paths and is marked with S5
 
 **C25** - Against an in-process SSH server, the tunnel authenticates with the key, requests `tcpip-forward` on `127.0.0.1:<remotePort>`, and `state.json` goes `connecting` -> `connected` (TUN-01, AC 18, 20)
 Proof: run unit | (pass) [C25]
@@ -265,6 +265,9 @@ Proof: run unit | (pass) [C116]
 
 **C117** - With a 50 ms heartbeat and a 400 ms stale threshold, a connected in-process `run` whose `state.json` is replaced by a directory (so it stays missing) still holds `run.lock` 1.2 s later: a second `run` exits 2 with `already_running` and the server sees one client and one `tcpip-forward` (TUN-01, AC 93)
 Proof: run unit | (pass) [C117]
+
+**C118** - A text-mode log line prints `example.org` bare and quotes `a b`, `k=v`, `say "x"`, a backslash and an empty value as JSON strings that parse back to the input; a server banner `hi state=stopped reason="forged" pid=1` logged by a connecting tunnel parses as one field `text` holding that whole banner (TUN-01, AC 95)
+Proof: run unit | (pass) [C118]
 
 **C115** - The key file's first 32 bytes as a JSON-serialised Buffer number array, and its first 96 bytes as base64 in two 48-byte blocks, appear nowhere in stdout, stderr or `state.json` of a connected `run --json`, a `run` with auth refused, `doctor --json` with all hops passing and `doctor --json` with `ssh_auth` failing; the detector finds both forms when they are printed (TUN-01, AC 28)
 Proof: run unit | (pass) [C115]
@@ -432,7 +435,7 @@ Proof: run unit | (pass) [C77]
 | SEC-007 | Malformed or smuggled CONNECT head | `400`/`405`/`408`, trailing bytes never parsed | C16, C17, C21, C22, C23, C37 |
 | SEC-008 | Tunnel user can open a shell, sftp or other forwards | `lockdown` hop fails, exit 14 | C53, C64, C75, C76, C84, C87, C88, C96, C105, C109 |
 | SEC-009 | Connection flood or slow client exhausts the home machine | `503` past 256 relays, timeouts close stalled sockets | C17, C18, C19, C24, C63, C69, C80, C82, C85, C86, C90, C91, C92, C93, C98, C99, C100, C110, C112, C113, C116, C117 |
-| SEC-010 | Server-, request- or config-supplied text carries terminal control characters or shell syntax into output a person or agent acts on | Characters stripped; printed commands quoted | C37, C74, C78, C83, C104 |
+| SEC-010 | Server-, request- or config-supplied text carries terminal control characters or shell syntax into output a person or agent acts on | Characters stripped; printed commands quoted | C37, C74, C78, C83, C104, C118 |
 
 ## Test policy
 
@@ -464,6 +467,6 @@ Cost: about 110 tests in 10 files, all `bun test`; SSH tests use an in-process `
 - data lifecycle: C31, C44, C113 - `state.json` is replaced atomically and goes stale after 90 s
 - dependency failure: C18, C28, C49, C93, C110
 - state transitions: C25, C26, C27, C28, C32, C94, C95, C102, C103, C106, C107, C108
-- observability: C37, C43, C61, C73, C77, C78, C95, C104 - state and hop results are the observable surface; no metrics in v0.1
+- observability: C37, C43, C61, C73, C77, C78, C95, C104, C118 - state and hop results are the observable surface; no metrics in v0.1
 - deploy compatibility: n/a - first release; schema `version: 1` in config and state allows later migration
 - performance budget: C19, C24, C63, C86, C111 - relay cap and idle timeout bound memory and sockets; no throughput target in v0.1
