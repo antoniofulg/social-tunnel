@@ -108,6 +108,7 @@ export interface TunnelOptions extends ConnectOptions {
   heartbeatMs?: number;
   backoffMs?: readonly number[];
   blockedRetryMs?: number;
+  stopWaitMs?: number;
 }
 
 export interface Tunnel {
@@ -239,7 +240,7 @@ export function startTunnel(options: TunnelOptions): Tunnel {
     client = undefined;
     if (c) {
       await new Promise<void>((resolve) => {
-        const timer = setTimeout(resolve, 2000);
+        const timer = setTimeout(resolve, options.stopWaitMs ?? DEFAULTS.stopWaitMs);
         const cancelled = () => {
           clearTimeout(timer);
           resolve();

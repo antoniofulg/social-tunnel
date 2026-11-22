@@ -4,6 +4,7 @@ import { readdirSync, readFileSync, statSync } from "node:fs";
 import net from "node:net";
 import type { Duplex } from "node:stream";
 import { loadConfig } from "../src/config";
+import { DEFAULTS } from "../src/defaults";
 import { createLogger, sanitize } from "../src/log";
 import type { State } from "../src/state";
 import { isExpectedForward, retryDelay, startTunnel, type Tunnel, type TunnelOptions } from "../src/tunnel";
@@ -687,4 +688,17 @@ test("[C108] a connection that closes before the forward is answered is one conn
   expect(t.names()).toEqual(["connecting", "disconnected/connection_lost"]);
   expect(delays).toEqual([10]);
   expect(readJson(env.statePath)).toMatchObject({ state: "disconnected", reason: "connection_lost" });
+});
+
+test("[C111] stop() waits at most the shipped 2 s, or the injected bound, for a server that never answers the cancel", async () => {
+  expect(DEFAULTS.stopWaitMs).toBe(2000);
+
+  const env = await setup();
+  const t = await tunnelTo(env, { stopWaitMs: 100 });
+  await until(() => t.names().includes("connected"));
+  env.ssh.stopReading();
+  const started = Date.now();
+  await t.tunnel.stop();
+  expect(Date.now() - started).toBeLessThan(1000);
+  expect(t.names().at(-1)).toBe("stopped");
 });

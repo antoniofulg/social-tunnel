@@ -11,6 +11,7 @@ export const DEFAULTS = {
   staleMs: 90_000,
   backoffMs: [1_000, 2_000, 4_000, 8_000, 16_000, 30_000],
   blockedRetryMs: 30_000,
+  stopWaitMs: 2_000, // how long stop() waits for the server to cancel the forward
   remotePort: 8888,
 } as const;
 
