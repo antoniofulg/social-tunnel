@@ -20,7 +20,7 @@ export interface Io {
   homedir: () => string;
   stdout: (text: string) => void;
   stderr: (text: string) => void;
-  readFile: (path: string) => Buffer;
+  readFile: (path: string | number) => Buffer;
   stat: (path: string) => { mode: number };
   resolve: Resolver;
   dial: Dialer;

@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { chmodSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { chmodSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { join, relative, resolve } from "node:path";
 import { loadKey, parseConfig, resolveConfigPath } from "../src/config";
 import { baseConfig, cli, tmp, writeConfig, writeKey } from "./helpers";
@@ -213,4 +213,32 @@ test("[C72] a missing key exits 2 with key_unreadable, and a non-private-key fil
     expect(doctor.json().error).toBeUndefined();
     expect(doctor.json().hops.find((h: any) => h.hop === "key")).toMatchObject({ ok: false, skipped: false });
   }
+});
+
+test("[C114] a key file swapped after the mode check is never loaded; one swapped after open still yields the checked file", async () => {
+  const dir = tmp();
+  // Swapped for a group-readable file between the path check and the open: refused on the descriptor's mode.
+  const checked = writeKey(dir, 0o600, "checked");
+  const swap = writeKey(dir, 0o644, "swap");
+  let reads = 0;
+  const before = loadKey(
+    checked.path,
+    { stat: (p) => { const s = statSync(p); renameSync(swap.path, checked.path); return s; }, readFile: (p) => (reads++, readFileSync(p)) },
+    "linux",
+  );
+  expect(before).toMatchObject({ ok: false, code: "key_permissions" });
+  expect(reads).toBe(0);
+
+  // Swapped between the descriptor's mode check and the read: the bytes come from the file that was checked.
+  const original = writeKey(dir, 0o600, "original");
+  const other = writeKey(dir, 0o600, "other");
+  const want = readFileSync(original.path);
+  const after = loadKey(
+    original.path,
+    { stat: statSync, readFile: (p) => (renameSync(other.path, original.path), readFileSync(p)) },
+    "linux",
+  );
+  expect(after.ok).toBe(true);
+  expect(after.ok && after.key.equals(want)).toBe(true);
+  expect(readFileSync(original.path).equals(want)).toBe(false);
 });

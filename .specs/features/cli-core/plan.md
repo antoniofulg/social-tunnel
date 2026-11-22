@@ -88,6 +88,7 @@ A command either gets a valid config or tells the user exactly what is wrong, in
 69. IF `--config` or `--domain` is given an empty value THEN the system SHALL treat it as a usage error (criterion 42) and never fall back to another config (added after deep review round 1)
 
 **Independent test:** run `social-tunnel status --json --config <fixture>` against valid, missing, malformed and bad-domain fixtures and read the exit code and JSON.
+91. WHEN `run` or `doctor` loads the key THEN the system SHALL check its mode and read it through one open file descriptor, so a file swapped in after the check is never read (added after deep review round 8; refines 6)
 
 ### S2: Only allowlisted HTTPS hosts leave through the home IP (P1)
 
@@ -216,7 +217,7 @@ The user or an agent learns which hop failed and what to do about it.
 
 | ID | Slice | Criteria | Status |
 | --- | --- | --- | --- |
-| CFG-01 | S1 | 1, 2, 3, 4, 5, 6, 55, 56, 68, 69 | Done |
+| CFG-01 | S1 | 1, 2, 3, 4, 5, 6, 55, 56, 68, 69, 91 | Done |
 | PRX-01 | S2 | 7-17, 44, 45, 46, 47, 58, 61, 66, 73, 74, 77, 78, 79 | Done |
 | TUN-01 | S3 | 18-28, 48, 49, 50, 57, 60, 62, 70, 71, 80, 81, 86, 89, 90 | Done |
 | STA-01 | S4 | 29-34, 51, 63, 84 | Done |
@@ -229,7 +230,7 @@ The user or an agent learns which hop failed and what to do about it.
 | --- | --- | --- | --- |
 | S1 | New runtime, `ssh2` dependency, config and state files | Pinned dependency in `bun.lock`; strict schema v1 with unknown keys rejected | SEC-001; criteria 2, 3, 5, 56 |
 | S2 | Forwarded channels from the server's loopback port into the home machine | Allowlist, port 443 only, IP literal and refused-range check incl. own interface prefixes, only the expected forward accepted, no local listener | SEC-002, SEC-003, SEC-004; criteria 7-12, 17, 48, 73, 77 |
-| S5 | SSH private key and server host key | Key file permission check, dedicated-key advice, no key material in output, one pinned connect path for `run` and `doctor` | SEC-005, SEC-006; criteria 6, 19, 28, 52, 54 |
+| S5 | SSH private key and server host key | Key file permission check, dedicated-key advice, no key material in output, one pinned connect path for `run` and `doctor` | SEC-005, SEC-006; criteria 6, 19, 28, 52, 54, 91 |
 | S6 | Untrusted CONNECT request head and server-supplied text | 8 KiB / 10 s head bounds, strict hostname and port grammar, post-head bytes never parsed, sanitised logs, generic refusal bodies | SEC-007, SEC-010; criteria 13, 14, 44, 45, 46, 50, 71, 84 |
 | S9 | Server-side tunnel user restrictions (configured by hand in v0.1) | `doctor` lockdown hop proves shell, sftp, local forward and other ports are refused | SEC-008; criteria 53, 59, 64, 65, 72, 75, 76, 82, 85, 87 |
 | S11 | Long-running process on the user's laptop | 256-relay cap, DNS/connect and idle timeouts, single-instance guard, stale-state detection | SEC-009; criteria 15, 16, 27, 47, 49, 51, 61, 73, 74, 78, 79, 88, 90 |
@@ -315,4 +316,4 @@ The user or an agent learns which hop failed and what to do about it.
 - Approval of criteria 78-84 (2026-11-22): Decision: "Approve 78–84 (Recommended)". Source: user answer in the coordinating Claude Code chat (AskUserQuestion). Scope: criteria 78-84 and the Surface row as written at commit 14e6a7a
 - Revision after deep review round 6 (2026-11-22): criteria 85-89 appended for the `sftp` lockdown attempt that read a granted subsystem running a hanging forced command as a silent server, for the backoff that a connection with a refused forward did not reset, and (advisory) for the `lockdown` fix that omitted `PermitListen` and `GatewayPorts no` the `doctor` dials left connecting after a timeout, and the stop wait held outside the shipped defaults. Approver: none recorded; directed by the coordinating agent and awaiting the user's approval
 - Approval of criteria 85-89 (2026-11-22): Decision: "Approve 85–89 (Recommended)". Source: user answer in the coordinating Claude Code chat (AskUserQuestion). Scope: criteria 85-89 as written at commit f110352
-- Revision after deep review round 8 (2026-11-22): criterion 90 appended for two `run` processes started at once that both passed the single-instance check. Approver: none recorded; directed by the coordinating agent and awaiting the user's approval
+- Revision after deep review round 8 (2026-11-22): criterion 90 appended for two `run` processes started at once that both passed the single-instance check, and (advisory) criterion 91 for a key file that could be swapped between its mode check and its read. Approver: none recorded; directed by the coordinating agent and awaiting the user's approval

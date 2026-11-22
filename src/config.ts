@@ -1,3 +1,4 @@
+import { closeSync, fstatSync, openSync } from "node:fs";
 import { isIP } from "node:net";
 import path from "node:path";
 import { utils } from "ssh2";
@@ -137,30 +138,39 @@ export type KeyResult =
 
 export interface KeyFs {
   stat: (p: string) => { mode: number };
-  readFile: (p: string) => Buffer;
+  readFile: (p: string | number) => Buffer;
 }
 
-// The mode is checked before the first read: a key other users can read is never loaded.
-// Messages are fixed text, so nothing from the key file can reach output.
+// The mode is checked before the first read: a key other users can read is never loaded. The
+// authoritative check and the read use one open descriptor, so the file cannot be swapped between
+// them. Messages are fixed text, so nothing from the key file can reach output.
 export function loadKey(keyPath: string, fs: KeyFs, platform: string): KeyResult {
-  let mode: number;
+  const unreadable = { ok: false, code: "key_unreadable", message: `cannot read key file ${keyPath}` } as const;
+  const exposed = {
+    ok: false,
+    code: "key_permissions",
+    message: `key file ${keyPath} is accessible by group or others`,
+  } as const;
+  const exposedMode = (mode: number) => platform !== "win32" && (mode & 0o077) !== 0;
   try {
-    mode = fs.stat(keyPath).mode;
+    if (exposedMode(fs.stat(keyPath).mode)) return exposed;
   } catch {
-    return { ok: false, code: "key_unreadable", message: `cannot read key file ${keyPath}` };
+    return unreadable;
   }
-  if (platform !== "win32" && (mode & 0o077) !== 0) {
-    return {
-      ok: false,
-      code: "key_permissions",
-      message: `key file ${keyPath} is accessible by group or others`,
-    };
+  let fd: number;
+  try {
+    fd = openSync(keyPath, "r");
+  } catch {
+    return unreadable;
   }
   let key: Buffer;
   try {
-    key = fs.readFile(keyPath);
+    if (exposedMode(fstatSync(fd).mode)) return exposed;
+    key = fs.readFile(fd);
   } catch {
-    return { ok: false, code: "key_unreadable", message: `cannot read key file ${keyPath}` };
+    return unreadable;
+  } finally {
+    closeSync(fd);
   }
   // ssh2 also parses public keys; only a private key can authenticate.
   const parsed = utils.parseKey(key);

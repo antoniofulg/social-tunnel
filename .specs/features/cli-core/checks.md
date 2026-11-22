@@ -1,12 +1,12 @@
 # CLI core checks
 
 Profile: standard
-Risk: C9, C12, C14, C15, C20, C21, C26, C34, C35, C51, C53, C58, C64, C65, C75, C76, C87, C88, C89, C96, C101, C105, C112 - allowlist, address guard, no-listener, host-key pin, single-instance claim, key leakage, channel filter and server lockdown are the safety invariants; a weak test there ships an open proxy, a MITM or a usable server account
+Risk: C9, C12, C14, C15, C20, C21, C26, C34, C35, C51, C53, C58, C64, C65, C75, C76, C87, C88, C89, C96, C101, C105, C112, C114 - allowlist, address guard, no-listener, host-key pin, single-instance claim, key leakage, channel filter and server lockdown are the safety invariants; a weak test there ships an open proxy, a MITM or a usable server account
 Build: `taskpolicy -b nice -n 10 bun run typecheck`
 Run unit: `env -u CLAUDECODE taskpolicy -b nice -n 10 bun test`
 Plan: `.specs/features/cli-core/plan.md`
 
-112 checks in 6 slices (ids C1-C113; C57 unused; C64-C69 added after verification round 1, C70-C78 after deep review round 1, C79-C84 after round 2, C85-C89 after round 4, C90-C104 after round 5, C105-C111 after round 6, C112-C113 after round 8) · 8 one-way doors · 2 open, of which 0 block
+113 checks in 6 slices (ids C1-C114; C57 unused; C64-C69 added after verification round 1, C70-C78 after deep review round 1, C79-C84 after round 2, C85-C89 after round 4, C90-C104 after round 5, C105-C111 after round 6, C112-C114 after round 8) · 8 one-way doors · 2 open, of which 0 block
 
 Test names start with the check id in brackets, so `bun test` prints `(pass) [C<n>] ...`. Each id has exactly one test. `CLAUDECODE` is unset because Bun hides per-test pass lines when it is set.
 
@@ -16,7 +16,7 @@ Seams: the proxy and tunnel take their resolver and dialer as parameters; produc
 
 ### S1 - Config loads or fails with a named field
 
-Complete: C1-C7, C60, C68, C72 - proofs green
+Complete: C1-C7, C60, C68, C72, C114 - proofs green
 
 **C1** - Config path resolves `--config` > `$SOCIAL_TUNNEL_CONFIG` > platform dir: macOS `~/Library/Application Support`, Linux `$XDG_CONFIG_HOME` then `~/.config`, Windows `%APPDATA%`, each + `social-tunnel/config.json` (CFG-01, AC 1)
 Proof: run unit | (pass) [C1]
@@ -47,6 +47,9 @@ Proof: run unit | (pass) [C68]
 
 **C72** - `run --json` with a missing key file exits 2 with `key_unreadable`; with a file of garbage, and with a 0600 file holding the public key, it exits 2 with `key_invalid`; `doctor --json` reports each as a failed `key` hop with no `error` envelope and exits 2 (CFG-01, AC 68)
 Proof: run unit | (pass) [C72]
+
+**C114** - `loadKey` given a key swapped for a 0644 file between the path check and the open returns `key_permissions` with zero reads; given a key swapped for another file between the descriptor check and the read, it returns the bytes of the file that was checked (CFG-01, AC 91)
+Proof: run unit | (pass) [C114]
 
 ### S2 - Only allowlisted HTTPS hosts leave through the home IP
 
@@ -416,7 +419,7 @@ Proof: run unit | (pass) [C77]
 | SEC-003 | Allowlisted name resolves into the home network or a reserved range | `403`, no connection | C12, C13, C14, C15, C65, C89 |
 | SEC-004 | Something on the home machine or LAN reaches the proxy without the tunnel | No listening socket exists | C20, C58, C35, C67, C101 |
 | SEC-005 | Server presents a different host key (MITM) | No auth sent, exit 13 on `run` and `doctor` | C26, C51 |
-| SEC-006 | Private key leaks through output, logs or state | No key line in any captured output | C6, C34 |
+| SEC-006 | Private key leaks through output, logs or state | No key line in any captured output | C6, C34, C114 |
 | SEC-007 | Malformed or smuggled CONNECT head | `400`/`405`/`408`, trailing bytes never parsed | C16, C17, C21, C22, C23, C37 |
 | SEC-008 | Tunnel user can open a shell, sftp or other forwards | `lockdown` hop fails, exit 14 | C53, C64, C75, C76, C84, C87, C88, C96, C105, C109 |
 | SEC-009 | Connection flood or slow client exhausts the home machine | `503` past 256 relays, timeouts close stalled sockets | C17, C18, C19, C24, C63, C69, C80, C82, C85, C86, C90, C91, C92, C93, C98, C99, C100, C110, C112, C113 |
@@ -444,7 +447,7 @@ Cost: about 110 tests in 10 files, all `bun test`; SSH tests use an in-process `
 
 ## Swept
 
-- validation: C2, C3, C4, C5, C21, C60, C68, C72
+- validation: C2, C3, C4, C5, C21, C60, C68, C72, C114
 - failure modes: C18, C27, C28, C59, C70, C71, C79, C80, C81, C85, C86, C87, C90, C91, C92, C93, C96, C97, C98, C99, C100, C105, C106, C108, C110, C111
 - idempotency: n/a - no request is retried by this tool; a reconnect re-requests the forward, covered by C28
 - authorization: C9, C10, C11, C14, C35, C53, C64, C65, C67, C75, C76, C88, C89, C101, C105
