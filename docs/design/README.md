@@ -20,7 +20,7 @@ Each concept page shows the tray icon set with an animated state sequence, the d
 | Dropdown | Native menu, one line per row | Popover with the four-stop route | Panel of tiles plus menu rows |
 | Setup and settings | Three-step assistant, tabbed settings | Route as stepper, route on top of tabs | One page of cards, one page of rows |
 | Strengths | Least to build: the native tray menu works on macOS, Windows and Linux. Vibrancy, keyboard and screen reader support come from the system. Most ownable mark. | Shows which check failed without opening anything else. Room for the full fix text. One component is tray mark, status strip and stepper. | Easiest to read at 16 px. Most visible transitions, and still calm. Room for cause, fix and a button without a diagram. |
-| Risks | Rows cannot wrap, and `doctor`'s fix strings run up to 160 characters, so each needs a short form. The four states share one outline. Native menus dim disabled rows more than the mock shows. | Custom popover: position, focus, dismissal, keyboard and VoiceOver are ours to build. Linux trays only open menus, so a menu fallback is still needed. Least legible mark at 16 px. Closest to a dashboard. | Least distinctive mark; a solid dot can read as a recording light. Same custom-window cost and Linux fallback as B. Ink buttons ignore the system accent colour. |
+| Risks | Rows cannot wrap, and `doctor`'s fix strings run to about 500 characters, so each needs a short form. The four states share one outline. Native menus dim disabled rows more than the mock shows. | Custom popover: position, focus, dismissal, keyboard and VoiceOver are ours to build. Linux trays only open menus, so a menu fallback is still needed. Least legible mark at 16 px. Closest to a dashboard. | Least distinctive mark; a solid dot can read as a recording light. Same custom-window cost and Linux fallback as B. Ink buttons ignore the system accent colour. |
 
 ## Recommendation
 
@@ -57,7 +57,7 @@ Main risk: the ring is the least distinctive mark. Use A's arch as the app icon 
 | Blocked | `blocked` + `host_key_mismatch`, exit 13 | Server key changed | red | Failing check, fix, domains paused | Review Server Key… |
 | Blocked | `doctor --domain` exit 12 | Domain refused | amber | Host that is not on the list | Add *host*… |
 
-Not drawn: `doctor` exit 14 (lock-down failed, the server allows the tunnel user more than one port). It belongs with the red Blocked row.
+Not drawn: `doctor` exit 14 (lock-down failed: the server allows the tunnel user a shell, a command, sftp, a local forward or a forward on another port). It belongs with the red Blocked row.
 
 How each concept draws the tray states, without colour:
 

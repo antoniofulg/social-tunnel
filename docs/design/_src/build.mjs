@@ -22,7 +22,7 @@ const TXT = {
     reads: { connected: 'Arch with a solid doorway', reconnecting: 'Arch broken into three dashes', lost: 'Empty arch with a slash', blocked: 'Empty arch with an exclamation mark', idle: 'Empty arch' },
     moves: { connected: 'Doorway fills from the ground up, 300 ms', reconnecting: 'Arch dims; a bright segment sweeps left to right, 1.5 s loop', lost: 'Doorway drains, the slash draws across, then one blink, 1 s', blocked: 'The mark drops into the doorway, then one blink, 1 s', idle: 'No motion' },
     strengths: ['Least to build: the native tray menu works on macOS, Windows and Linux.', 'Vibrancy, keyboard and screen reader support come from the system, not from us.', 'The arch is the most ownable mark of the three.'],
-    risks: ['Rows cannot wrap. doctor’s fix strings run up to 160 characters today, so each needs a short form of about 44.', 'All four states share one outline; the difference sits inside a 9 px doorway.', 'Native menus dim disabled rows more than this mock shows. Info rows may need to be enabled rows with no action.'],
+    risks: ['Rows cannot wrap. doctor’s fix strings run to about 500 characters today, so each needs a short form of about 44.', 'All four states share one outline; the difference sits inside a 9 px doorway.', 'Native menus dim disabled rows more than this mock shows. Info rows may need to be enabled rows with no action.'],
   },
   b: {
     lede: 'The tray mark is a route from this Mac to the server. The popover draws the same route in full, hop by hop, so a break shows where it is. Reconnecting is a row of dots walking the path.',
