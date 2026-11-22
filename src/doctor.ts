@@ -285,7 +285,7 @@ export async function runDoctor(
         if (granted.length > 0) {
           return fail(
             `the server allowed the tunnel user: ${granted.join(", ")}`,
-            `On the server, start the tunnel key's authorized_keys line with restrict,port-forwarding,permitlisten="127.0.0.1:${config.remotePort}",command="/usr/sbin/nologin" and add to sshd_config: Match User ${config.server.user} / AllowTcpForwarding remote / PermitOpen none / AllowStreamLocalForwarding no / PermitTTY no / ForceCommand /usr/sbin/nologin. permitlisten limits only remote forwards; PermitOpen none is what closes local ones.`,
+            `On the server, start the tunnel key's authorized_keys line with restrict,port-forwarding,permitlisten="127.0.0.1:${config.remotePort}",command="/usr/sbin/nologin" and add to sshd_config: Match User ${config.server.user} / AllowTcpForwarding remote / PermitListen 127.0.0.1:${config.remotePort} / PermitOpen none / AllowStreamLocalForwarding no / GatewayPorts no / PermitTTY no / ForceCommand /usr/sbin/nologin. permitlisten limits only remote forwards; PermitOpen none is what closes local ones.`,
             EXIT.lockdown,
           );
         }

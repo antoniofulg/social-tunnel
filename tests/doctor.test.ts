@@ -488,6 +488,14 @@ test("[C105] a locked-down server whose forced command hangs also for the sftp s
   expect(hop("egress")).toMatchObject({ ok: true });
 });
 
+test("[C109] the lockdown fix pins the listen port and gateway ports like the README's sshd block", async () => {
+  const env = await locked({ shell: true });
+  const { code, hop } = await doctor(env.path, seams().io);
+  expect(code).toBe(14);
+  expect(hop("lockdown").fix).toContain(`PermitListen 127.0.0.1:${env.remotePort}`);
+  expect(hop("lockdown").fix).toContain("GatewayPorts no");
+});
+
 test("[C97] a forward request the connection never answers fails the forward hop with exit 10, not as a refusal", async () => {
   const drop = (ssh: TestServer) => ssh.clients.forEach((c) => (c as unknown as { _sock: { destroy(): void } })._sock.destroy());
   const table: [RegExp, (env: () => Awaited<ReturnType<typeof setup>>) => Server][] = [

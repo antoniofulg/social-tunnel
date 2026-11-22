@@ -6,7 +6,7 @@ Build: `taskpolicy -b nice -n 10 bun run typecheck`
 Run unit: `env -u CLAUDECODE taskpolicy -b nice -n 10 bun test`
 Plan: `.specs/features/cli-core/plan.md`
 
-107 checks in 6 slices (ids C1-C108; C57 unused; C64-C69 added after verification round 1, C70-C78 after deep review round 1, C79-C84 after round 2, C85-C89 after round 4, C90-C104 after round 5, C105-C108 after round 6) · 8 one-way doors · 2 open, of which 0 block
+108 checks in 6 slices (ids C1-C109; C57 unused; C64-C69 added after verification round 1, C70-C78 after deep review round 1, C79-C84 after round 2, C85-C89 after round 4, C90-C104 after round 5, C105-C109 after round 6) · 8 one-way doors · 2 open, of which 0 block
 
 Test names start with the check id in brackets, so `bun test` prints `(pass) [C<n>] ...`. Each id has exactly one test. `CLAUDECODE` is unset because Bun hides per-test pass lines when it is set.
 
@@ -281,7 +281,7 @@ Proof: run unit | (pass) [C104]
 
 ### S5 - `doctor` names the broken hop and its fix
 
-Complete: C45-C54, C62, C64, C74-C76, C84, C87, C88, C96, C97, C105 and C34 (S3) - proofs green
+Complete: C45-C54, C62, C64, C74-C76, C84, C87, C88, C96, C97, C105, C109 and C34 (S3) - proofs green
 
 **C45** - Hops run in order `config, key, server_reachable, ssh_auth, forward, lockdown, egress`; after a `server_reachable` failure the later hops have `ok: false`, `skipped: true` and an empty `fix` (DOC-01, AC 35, 36)
 Proof: run unit | (pass) [C45]
@@ -346,6 +346,9 @@ Proof: run unit | (pass) [C97]
 **C105** - Against a locked-down server whose forced command is granted for shell, exec and the `sftp` subsystem and never prints or exits (300 ms timeout), `doctor` exits 0, `lockdown` passes, the local-forward probe reached the server and the forward on `<remotePort + 1>` was requested, and `egress` ran (DOC-01, AC 85)
 Proof: run unit | (pass) [C105]
 
+**C109** - The `lockdown` hop's fix contains `PermitListen 127.0.0.1:<remotePort>` and `GatewayPorts no` (DOC-01, AC 87)
+Proof: run unit | (pass) [C109]
+
 ### S6 - The CLI never blocks an agent
 
 Complete: C55, C56, C77 - proofs green
@@ -403,7 +406,7 @@ Proof: run unit | (pass) [C77]
 | SEC-005 | Server presents a different host key (MITM) | No auth sent, exit 13 on `run` and `doctor` | C26, C51 |
 | SEC-006 | Private key leaks through output, logs or state | No key line in any captured output | C6, C34 |
 | SEC-007 | Malformed or smuggled CONNECT head | `400`/`405`/`408`, trailing bytes never parsed | C16, C17, C21, C22, C23, C37 |
-| SEC-008 | Tunnel user can open a shell, sftp or other forwards | `lockdown` hop fails, exit 14 | C53, C64, C75, C76, C84, C87, C88, C96, C105 |
+| SEC-008 | Tunnel user can open a shell, sftp or other forwards | `lockdown` hop fails, exit 14 | C53, C64, C75, C76, C84, C87, C88, C96, C105, C109 |
 | SEC-009 | Connection flood or slow client exhausts the home machine | `503` past 256 relays, timeouts close stalled sockets | C17, C18, C19, C24, C63, C69, C80, C82, C85, C86, C90, C91, C92, C93, C98, C99, C100 |
 | SEC-010 | Server-, request- or config-supplied text carries terminal control characters or shell syntax into output a person or agent acts on | Characters stripped; printed commands quoted | C37, C74, C78, C83, C104 |
 
@@ -425,7 +428,7 @@ Evidence:
 - `src/tunnel.ts`: 6 states, 7 backoff steps -> decides
 - closest analogue in the repo: none - these modules are the first of their kind here
 
-Cost: about 107 tests in 10 files, all `bun test`; SSH tests use an in-process `ssh2` server, network tests use injected resolvers and dialers, so the suite needs no internet and no sshd.
+Cost: about 108 tests in 10 files, all `bun test`; SSH tests use an in-process `ssh2` server, network tests use injected resolvers and dialers, so the suite needs no internet and no sshd.
 
 ## Swept
 
