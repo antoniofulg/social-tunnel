@@ -1,8 +1,10 @@
 import { expect, test } from "bun:test";
+import net from "node:net";
 import { Duplex } from "node:stream";
+import { dial } from "../src/cli";
 import { DEFAULTS } from "../src/defaults";
 import { sleep, until } from "./helpers";
-import { harness, OK, PUBLIC } from "./proxy-harness";
+import { harness, OK, pair, PUBLIC } from "./proxy-harness";
 
 test("[C8] CONNECT to an allowlisted host on 443 gets 200 and relays both ways", async () => {
   for (const target of ["instagram.com:443", "www.instagram.com:443", "WWW.Instagram.COM:443", "instagram.com.:443"]) {
@@ -425,5 +427,61 @@ test("[C92] a channel that never reports its own close frees its slot when upstr
     await until(() => raw.channel.destroyed, 2000, `the channel to be closed after ${ending}`);
     expect([ending, closeEvents]).toEqual([ending, 0]);
     expect([ending, await h.connect("instagram.com:443").head()]).toEqual([ending, `${OK}\r\n\r\n`]);
+  }
+});
+
+test("[C93] a dial still pending at the connect timeout is told to stop, and the production dialer then closes its socket", async () => {
+  const signals: AbortSignal[] = [];
+  const stuck = harness({
+    connectTimeoutMs: 60,
+    dial: (_address, _port, signal) => {
+      signals.push(signal!);
+      return new Promise(() => {});
+    },
+  });
+  const channel = stuck.connect("instagram.com:443");
+  await until(() => signals.length === 1);
+  expect(signals[0]!.aborted).toBe(false);
+  expect((await channel.closed()).split("\r\n")[0]).toBe("HTTP/1.1 504 Gateway Timeout");
+  expect(signals[0]!.aborted).toBe(true);
+
+  // A dial that completes in time is never told to stop.
+  const quick = harness({
+    dial: async (_address, _port, signal) => {
+      signals.push(signal!);
+      return pair()[0];
+    },
+  });
+  expect(await quick.connect("instagram.com:443").head()).toBe(`${OK}\r\n\r\n`);
+  expect(signals[1]!.aborted).toBe(false);
+
+  // The dialer `run` uses, against a loopback listener: told to stop before the connection is up,
+  // it rejects and leaves no connection open.
+  let open = 0;
+  const server = net.createServer((socket) => {
+    open++;
+    socket.on("error", () => {});
+    socket.on("close", () => open--);
+  });
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const port = (server.address() as net.AddressInfo).port;
+  try {
+    const giveUp = new AbortController();
+    const abandoned = dial("127.0.0.1", port, giveUp.signal).then(
+      () => "connected",
+      () => "rejected",
+    );
+    giveUp.abort();
+    expect(await abandoned).toBe("rejected");
+    await sleep(100);
+    expect(open).toBe(0);
+
+    // Left alone, the same dial connects and stays open.
+    const socket = (await dial("127.0.0.1", port, new AbortController().signal)) as net.Socket;
+    await until(() => open === 1);
+    expect(socket.destroyed).toBe(false);
+    socket.destroy();
+  } finally {
+    server.close();
   }
 });

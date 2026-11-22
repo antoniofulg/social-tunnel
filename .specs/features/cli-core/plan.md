@@ -116,6 +116,7 @@ The proxy handler, given a forwarded stream, relays only allowlisted `host:443` 
 74. IF the server has not taken a refusal (`400`, `403`, `405`, `408`, `502`, `503` or `504`) within the request-head timeout of criterion 58 THEN the system SHALL close the channel anyway, and it SHALL discard bytes that arrive on a refused channel; a refused channel holds no relay slot and is bounded by this deadline instead of the cap of criterion 16 (added after deep review round 4)
 77. The embedded forms of criterion 11 SHALL also include the IPv4-translated form `::ffff:0:0:0/96` (added after deep review round 4)
 78. WHEN a relay ends because upstream closed or reset, or because the idle timeout of criterion 47 passed THEN the system SHALL free its relay slot as it closes the channel, whether or not the channel reports that close, and SHALL read and discard what the remaining side still sends so that those bytes never keep the relay open past the idle timeout; this SHALL hold on the tunnel's own SSH channels, which report a close only once they are read (added after deep review round 5; refines 16, 47 and 66)
+79. IF the outbound connection of criterion 15 has not completed within its 10 s THEN the system SHALL abandon it and close its socket, so a connection that timed out is not left connecting outside the relay cap (added after deep review round 5; refines 15)
 
 **Independent test:** feed the handler in-memory duplex streams with allowed, refused, IP-literal, private-resolving, malformed and oversized requests; assert status lines and that refused cases made no lookup or connection.
 
@@ -204,7 +205,7 @@ The user or an agent learns which hop failed and what to do about it.
 | ID | Slice | Criteria | Status |
 | --- | --- | --- | --- |
 | CFG-01 | S1 | 1, 2, 3, 4, 5, 6, 55, 56, 68, 69 | Done |
-| PRX-01 | S2 | 7-17, 44, 45, 46, 47, 58, 61, 66, 73, 74, 77, 78 | Done |
+| PRX-01 | S2 | 7-17, 44, 45, 46, 47, 58, 61, 66, 73, 74, 77, 78, 79 | Done |
 | TUN-01 | S3 | 18-28, 48, 49, 50, 57, 60, 62, 70, 71 | Done |
 | STA-01 | S4 | 29-34, 51, 63 | Done |
 | DOC-01 | S5 | 35-41, 52, 53, 54, 59, 64, 65, 67, 72, 75, 76 | Done |
@@ -298,4 +299,4 @@ The user or an agent learns which hop failed and what to do about it.
 - Revision after deep review round 2 (2026-11-21): criteria 71 and 72 appended. Approver: none recorded; directed by the coordinating agent
 - Revision after deep review round 4 (2026-11-22): criteria 73-77 appended for the round 4 defects (a channel lost during the lookup on a real SSH channel, a refusal the server never takes, a connection lost during the lockdown hop, other-port probes at the top of the port range) and the IPv4-translated address form. Approver: none recorded; directed by the coordinating agent
 - Approval of criteria 59-77 (2026-11-22): Decision: "Approve 59–77 (Recommended)". Source: user answer in the coordinating Claude Code chat (AskUserQuestion), after deep review round 5 flagged the receipt. Scope: criteria 59-77 as written at commit aec4a8f
-- Revision after deep review round 5 (2026-11-22): criterion 78 appended for the relay slot that was never freed on a real SSH channel. Approver: none recorded; directed by the coordinating agent and awaiting the user's approval
+- Revision after deep review round 5 (2026-11-22): criteria 78 and 79 appended for the relay slot that was never freed on a real SSH channel and the timed-out dial left connecting. Approver: none recorded; directed by the coordinating agent and awaiting the user's approval

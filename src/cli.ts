@@ -182,6 +182,23 @@ export async function main(argv: string[], io: Io): Promise<number> {
   }
 }
 
+// The production dialer. A dial the caller gives up on closes its socket instead of leaving it
+// connecting until the operating system's own timeout.
+export const dial: Dialer = (address, port, signal) =>
+  new Promise((resolve, reject) => {
+    const socket = net.connect({ host: address, port });
+    const giveUp = () => {
+      socket.destroy();
+      reject(new Error("dial abandoned"));
+    };
+    signal?.addEventListener("abort", giveUp, { once: true });
+    socket.once("error", reject);
+    socket.once("connect", () => {
+      signal?.removeEventListener("abort", giveUp);
+      resolve(socket);
+    });
+  });
+
 if (import.meta.main) {
   const code = await main(process.argv.slice(2), {
     env: process.env,
@@ -192,12 +209,7 @@ if (import.meta.main) {
     readFile: (path) => readFileSync(path),
     stat: (path) => statSync(path),
     resolve: async (host) => (await lookup(host, { all: true })).map((answer) => answer.address),
-    dial: (address, port) =>
-      new Promise((resolve, reject) => {
-        const socket = net.connect({ host: address, port });
-        socket.once("error", reject);
-        socket.once("connect", () => resolve(socket));
-      }),
+    dial,
     onSignal: (stop) => {
       process.on("SIGINT", stop);
       process.on("SIGTERM", stop);

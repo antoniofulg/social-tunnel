@@ -5,7 +5,8 @@ import { DEFAULTS } from "./defaults";
 import { isAllowed, normalizeHost } from "./host";
 
 export type Resolver = (host: string) => Promise<string[]>;
-export type Dialer = (address: string, port: number) => Promise<Duplex>;
+// `signal` aborts when the caller has given up on the dial; the dialer then closes what it opened.
+export type Dialer = (address: string, port: number, signal?: AbortSignal) => Promise<Duplex>;
 
 export interface ProxyOptions {
   domains: readonly string[];
@@ -152,6 +153,7 @@ export function createProxy(options: ProxyOptions): { handle: (stream: Duplex) =
       if (port !== "443" || !isAllowed(host, options.domains)) return refuse(403, host);
 
       let remote: Duplex;
+      const giveUp = new AbortController();
       try {
         const addresses = await withTimeout(options.resolve(host), connectTimeoutMs);
         if (gone()) return release();
@@ -160,8 +162,10 @@ export function createProxy(options: ProxyOptions): { handle: (stream: Duplex) =
         const address = addresses.find((a) => !isRefusedAddress(a, interfaces));
         if (address === undefined) return refuse(403, host);
         // Dial the address that was checked, never the name: a second lookup could answer differently.
-        remote = await withTimeout(options.dial(address, 443), connectTimeoutMs, (late) => late.destroy());
+        remote = await withTimeout(options.dial(address, 443, giveUp.signal), connectTimeoutMs, (late) => late.destroy());
       } catch (err) {
+        // A dial that timed out is still connecting: stop it, or its socket outlives the slot.
+        giveUp.abort();
         return refuse(err === TIMEOUT ? 504 : 502, host);
       }
       if (gone()) {
