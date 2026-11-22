@@ -8,7 +8,8 @@ import { createLogger, sanitize } from "../src/log";
 import type { State } from "../src/state";
 import { isExpectedForward, retryDelay, startTunnel, type Tunnel, type TunnelOptions } from "../src/tunnel";
 import { cli, sleep, until } from "./helpers";
-import { harness, OK } from "./proxy-harness";
+import type { ServerChannel } from "ssh2";
+import { harness, OK, PUBLIC } from "./proxy-harness";
 import { readJson, setup, startServer, type TestServer } from "./ssh-server";
 
 const tunnels: Tunnel[] = [];
@@ -348,4 +349,92 @@ test("[C83] sanitize also strips the soft hyphen, Arabic letter mark, word joine
     const text = `pay${String.fromCodePoint(code)}load`;
     expect([code, sanitize(text)]).toEqual([code, text]);
   }
+});
+
+const CONNECT = "CONNECT instagram.com:443 HTTP/1.1\r\n\r\n";
+
+// Opens a forwarded channel from the server side, the way sshd does for a connection to the remote port.
+function forwarded(env: Awaited<ReturnType<typeof setup>>): Promise<ServerChannel> {
+  return new Promise((resolve, reject) => {
+    env.ssh.clients.at(-1)!.forwardOut("127.0.0.1", env.remotePort, "127.0.0.1", 50000, (err, channel) => {
+      if (err) return reject(err);
+      channel.on("error", () => {});
+      resolve(channel);
+    });
+  });
+}
+
+test("[C85] on the tunnel's SSH channel, a channel closed or a connection lost during the DNS lookup causes no outbound connection", async () => {
+  for (const loss of ["channel closed", "connection lost", null]) {
+    const env = await setup();
+    let answer!: (addresses: string[]) => void;
+    const lookups: string[] = [];
+    const proxy = harness({
+      resolve: (host) => {
+        lookups.push(host);
+        return new Promise((resolve) => (answer = resolve));
+      },
+    });
+    const t = await tunnelTo(env, { handle: proxy.handle });
+    await until(() => t.names().includes("connected"));
+    const channel = await forwarded(env);
+    channel.write(CONNECT);
+    await until(() => lookups.length === 1);
+
+    if (loss === "channel closed") channel.close();
+    if (loss === "connection lost") env.ssh.clients.forEach((c) => (c as unknown as { _sock: net.Socket })._sock.destroy());
+    await sleep(100);
+    answer([PUBLIC]);
+    await sleep(100);
+
+    // With the channel left open the same answer is dialled and logged, so the loss is what stopped it.
+    const expected = loss === null ? { dials: 1, logs: [{ status: 200, host: "instagram.com" }] } : { dials: 0, logs: [] };
+    expect({ loss, dials: proxy.dials.length, logs: proxy.logs }).toEqual({ loss, ...expected });
+  }
+});
+
+test("[C86] a refusal the SSH peer never takes is closed once the head timeout has passed", async () => {
+  const headTimeoutMs = 300;
+  const env = await setup();
+  const proxy = harness({ relayCap: 1, headTimeoutMs });
+  const open = new Set<Duplex>();
+  const t = await tunnelTo(env, {
+    handle: (stream) => {
+      open.add(stream);
+      stream.once("close", () => open.delete(stream));
+      proxy.handle(stream);
+    },
+  });
+  await until(() => t.names().includes("connected"));
+
+  // A peer that opens every channel with a send window of zero: nothing the home side writes can leave.
+  const proto = (env.ssh.clients.at(-1) as unknown as { _protocol: { forwardedTcpip: (...args: any[]) => void } })._protocol;
+  const announce = proto.forwardedTcpip.bind(proto);
+  proto.forwardedTcpip = (id, _window, ...rest) => announce(id, 0, ...rest);
+  const delivered: Buffer[] = [];
+  const stalled = async (bytes: string) => {
+    const channel = await forwarded(env);
+    channel.on("data", (chunk: Buffer) => delivered.push(chunk));
+    if (bytes) channel.write(bytes);
+  };
+
+  // The first channel takes the only slot and sends no head (408); the second is over the cap (503).
+  const began = Date.now();
+  await stalled("");
+  await stalled("");
+  await until(() => proxy.logs.length === 1);
+  await sleep(headTimeoutMs / 3);
+  expect(open.size).toBe(2);
+  await until(() => open.size === 0, headTimeoutMs * 10, "both refused channels to close");
+  expect(Date.now() - began).toBeLessThan(headTimeoutMs * 4);
+
+  // The slot is free again; a refusal decided from the head (403) is bounded the same way.
+  await stalled("CONNECT example.com:443 HTTP/1.1\r\n\r\n");
+  await until(() => proxy.logs.length === 3);
+  expect(open.size).toBe(1);
+  await until(() => open.size === 0, headTimeoutMs * 10, "the refused channel to close");
+
+  expect(proxy.logs.map((entry) => entry.status)).toEqual([503, 408, 403]);
+  expect(Buffer.concat(delivered).length).toBe(0);
+  expect(proxy.dials).toEqual([]);
 });

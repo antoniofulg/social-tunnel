@@ -85,10 +85,23 @@ export function createProxy(options: ProxyOptions): { handle: (stream: Duplex) =
         open--;
       }
     };
+    // ssh2 holds back 'close' on a channel nobody is reading, so a paused channel that the peer
+    // closed, or whose connection dropped, is told apart by its channel state. Reading it again
+    // lets ssh2 finish the close.
+    const gone = () => {
+      if (!closed && (stream as { incoming?: { state?: string } }).incoming?.state !== "closed") return false;
+      stream.resume();
+      return true;
+    };
+    let refusalTimer: ReturnType<typeof setTimeout> | undefined;
     const refuse = (status: number, host?: string) => {
       release();
-      if (closed) return;
+      if (gone()) return;
       options.log?.({ status, host });
+      // A peer that grants no send window never takes the refusal: the channel is closed anyway
+      // once the deadline passes, and what the peer still sends is discarded, not kept.
+      refusalTimer = setTimeout(() => stream.destroy(), headTimeoutMs);
+      stream.resume();
       stream.end(refusal(status), () => stream.destroy());
     };
     const headTimer = setTimeout(() => {
@@ -100,6 +113,7 @@ export function createProxy(options: ProxyOptions): { handle: (stream: Duplex) =
     stream.once("close", () => {
       closed = true;
       clearTimeout(headTimer);
+      clearTimeout(refusalTimer);
       release();
     });
     if (!holdsSlot) {
@@ -140,7 +154,7 @@ export function createProxy(options: ProxyOptions): { handle: (stream: Duplex) =
       let remote: Duplex;
       try {
         const addresses = await withTimeout(options.resolve(host), connectTimeoutMs);
-        if (closed) return;
+        if (gone()) return release();
         if (addresses.length === 0) return refuse(502, host);
         const interfaces = options.interfaces?.();
         const address = addresses.find((a) => !isRefusedAddress(a, interfaces));
@@ -150,7 +164,10 @@ export function createProxy(options: ProxyOptions): { handle: (stream: Duplex) =
       } catch (err) {
         return refuse(err === TIMEOUT ? 504 : 502, host);
       }
-      if (closed) return remote.destroy();
+      if (gone()) {
+        release();
+        return remote.destroy();
+      }
       options.log?.({ status: 200, host });
 
       const idleTimer = setTimeout(() => {
