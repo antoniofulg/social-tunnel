@@ -18,7 +18,7 @@ export interface ServerOptions {
   shell?: boolean;
   pty?: boolean;
   exec?: boolean;
-  // Grants shell and exec requests but runs only its own command, like `command="/bin/false"`.
+  // Grants shell, exec and subsystem requests but runs only its own command, like `command="/bin/false"`.
   // "hangs": that command never prints and never exits, like `command="sleep infinity"`.
   forced?: boolean | "hangs";
   sftp?: boolean;
@@ -170,7 +170,10 @@ export async function startServer(options: ServerOptions): Promise<TestServer> {
           channel.exit(0);
           channel.end();
         });
-        session.on("sftp", (ok, no) => (options.sftp ? ok() : no?.()));
+        // sshd grants the subsystem request and runs the forced command in place of sftp-server,
+        // so the channel never speaks SFTP. ssh2 emits "subsystem" only when no "sftp" listener exists.
+        if (options.forced) session.on("subsystem", (ok) => forcedCommand(ok()));
+        else session.on("sftp", (ok, no) => (options.sftp ? ok() : no?.()));
       });
       client.on("tcpip", (accept, reject, info) => {
         t.localForwards.push({ destIP: info.destIP, destPort: info.destPort });

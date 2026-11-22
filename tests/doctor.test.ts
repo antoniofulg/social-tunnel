@@ -476,6 +476,18 @@ test("[C96] a server that stops answering during the lockdown hop fails the hop 
   expect(hanging.hop("lockdown")).toMatchObject({ ok: true, skipped: false });
 });
 
+test("[C105] a locked-down server whose forced command hangs also for the sftp subsystem passes every lockdown probe with exit 0", async () => {
+  // Like sshd with command="sleep infinity": shell, exec and sftp are granted, and nothing ever answers.
+  const env = await locked({ forced: "hangs" });
+  const { code, hop } = await doctor(env.path, { ...seams().io, connectTimeoutMs: 300 });
+  expect(code).toBe(0);
+  expect(hop("lockdown")).toMatchObject({ ok: true, skipped: false });
+  // The probes after sftp still ran: the local forward and the forward on another port.
+  expect(env.ssh.localForwards).toEqual([{ destIP: "127.0.0.1", destPort: env.ssh.port }]);
+  expect(env.ssh.requests.filter((r) => r.name === "tcpip-forward").map((r) => r.bindPort)).toContain(env.remotePort + 1);
+  expect(hop("egress")).toMatchObject({ ok: true });
+});
+
 test("[C97] a forward request the connection never answers fails the forward hop with exit 10, not as a refusal", async () => {
   const drop = (ssh: TestServer) => ssh.clients.forEach((c) => (c as unknown as { _sock: { destroy(): void } })._sock.destroy());
   const table: [RegExp, (env: () => Awaited<ReturnType<typeof setup>>) => Server][] = [

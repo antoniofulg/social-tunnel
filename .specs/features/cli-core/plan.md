@@ -194,6 +194,7 @@ The user or an agent learns which hop failed and what to do about it.
 76. WHEN `<remotePort + 2>` is above 65535 THEN the remote-forward attempts of criteria 53 and 65 SHALL use `<remotePort - 1>` and then `<remotePort - 2>` (added after deep review round 4; refines 53 and 65)
 82. IF the server leaves a `lockdown` attempt unanswered for the 10 s of criterion 58 while the connection stays open, and no attempt was allowed before that THEN the hop SHALL fail with exit 10, a detail saying the server did not answer and a fix saying to run `doctor` again; an unanswered attempt SHALL NOT count as refused. A shell or `exec` request the server granted whose command prints nothing in that time still counts as refused (added after deep review round 5; refines 41, 53, 59 and 75)
 83. IF the SSH connection closes, or the server gives no answer within the 10 s of criterion 58, while the `forward` hop's request of criterion 38 is pending THEN the hop SHALL fail with exit 10, a detail naming the closed or silent connection and a fix saying to run `doctor` again, and SHALL NOT report a refused forward (added after deep review round 5; refines 38 and 41)
+85. WHEN the `sftp` attempt of criterion 53 is granted THEN the system SHALL count it as allowed only when the channel answers an SFTP `INIT` with an SFTP `VERSION` within the 10 s of criterion 58; a granted subsystem whose forced command runs instead and sends no `VERSION` SHALL count as refused, not as an unanswered attempt of criterion 82, and the later attempts SHALL still run (added after deep review round 6; refines 53 and 82)
 
 **Independent test:** run `doctor --json` against the in-process test server with a good setup, a wrong host key, a refused forward and an unlisted `--domain`; assert hop list and exit code.
 
@@ -214,7 +215,7 @@ The user or an agent learns which hop failed and what to do about it.
 | PRX-01 | S2 | 7-17, 44, 45, 46, 47, 58, 61, 66, 73, 74, 77, 78, 79 | Done |
 | TUN-01 | S3 | 18-28, 48, 49, 50, 57, 60, 62, 70, 71, 80, 81 | Done |
 | STA-01 | S4 | 29-34, 51, 63, 84 | Done |
-| DOC-01 | S5 | 35-41, 52, 53, 54, 59, 64, 65, 67, 72, 75, 76, 82, 83 | Done |
+| DOC-01 | S5 | 35-41, 52, 53, 54, 59, 64, 65, 67, 72, 75, 76, 82, 83, 85 | Done |
 | CLI-01 | S6 | 42, 43 | Done |
 
 ## Security Surfaces
@@ -225,7 +226,7 @@ The user or an agent learns which hop failed and what to do about it.
 | S2 | Forwarded channels from the server's loopback port into the home machine | Allowlist, port 443 only, IP literal and refused-range check incl. own interface prefixes, only the expected forward accepted, no local listener | SEC-002, SEC-003, SEC-004; criteria 7-12, 17, 48, 73, 77 |
 | S5 | SSH private key and server host key | Key file permission check, dedicated-key advice, no key material in output, one pinned connect path for `run` and `doctor` | SEC-005, SEC-006; criteria 6, 19, 28, 52, 54 |
 | S6 | Untrusted CONNECT request head and server-supplied text | 8 KiB / 10 s head bounds, strict hostname and port grammar, post-head bytes never parsed, sanitised logs, generic refusal bodies | SEC-007, SEC-010; criteria 13, 14, 44, 45, 46, 50, 71, 84 |
-| S9 | Server-side tunnel user restrictions (configured by hand in v0.1) | `doctor` lockdown hop proves shell, sftp, local forward and other ports are refused | SEC-008; criteria 53, 59, 64, 65, 72, 75, 76, 82 |
+| S9 | Server-side tunnel user restrictions (configured by hand in v0.1) | `doctor` lockdown hop proves shell, sftp, local forward and other ports are refused | SEC-008; criteria 53, 59, 64, 65, 72, 75, 76, 82, 85 |
 | S11 | Long-running process on the user's laptop | 256-relay cap, DNS/connect and idle timeouts, single-instance guard, stale-state detection | SEC-009; criteria 15, 16, 27, 47, 49, 51, 61, 73, 74, 78, 79 |
 
 ## Out of scope
@@ -307,3 +308,4 @@ The user or an agent learns which hop failed and what to do about it.
 - Approval of criteria 59-77 (2026-11-22): Decision: "Approve 59–77 (Recommended)". Source: user answer in the coordinating Claude Code chat (AskUserQuestion), after deep review round 5 flagged the receipt. Scope: criteria 59-77 as written at commit aec4a8f
 - Revision after deep review round 5 (2026-11-22): criteria 78-84 and one Surface row appended for the relay slot that was never freed on a real SSH channel, the timed-out dial left connecting, the host key mismatch that a late stop overwrote, the `since` that restarted on every blocked retry, the `doctor` hops that read an unanswered request as a refusal, and (hardening) `--json` strings that skipped the sanitiser. Approver: none recorded; directed by the coordinating agent and awaiting the user's approval
 - Approval of criteria 78-84 (2026-11-22): Decision: "Approve 78–84 (Recommended)". Source: user answer in the coordinating Claude Code chat (AskUserQuestion). Scope: criteria 78-84 and the Surface row as written at commit 14e6a7a
+- Revision after deep review round 6 (2026-11-22): criterion 85 appended for the `sftp` lockdown attempt that read a granted subsystem running a hanging forced command as a silent server. Approver: none recorded; directed by the coordinating agent and awaiting the user's approval

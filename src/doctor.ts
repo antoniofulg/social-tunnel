@@ -27,6 +27,9 @@ export interface DoctorDeps extends KeyFs {
 
 // RFC 4254 channel open failure reason 2.
 const CONNECT_FAILED = 2;
+// SFTP packet types (draft-ietf-secsh-filexfer-02).
+const SFTP_INIT = 1;
+const SFTP_VERSION = 2;
 
 // Quotes a path for a POSIX shell, so a suggested command works with spaces and runs nothing else.
 function shellQuote(text: string): string {
@@ -221,7 +224,26 @@ export async function runDoctor(
               }),
           ],
           ["exec", (answer, heard) => c.exec(command, (_err, channel) => ran(channel, answer, heard))],
-          ["sftp", (answer) => c.sftp((err, sftp) => (sftp?.end(), answer(!err)))],
+          [
+            "sftp",
+            // A granted subsystem may run a forced command instead of sftp-server, so it counts only
+            // when the channel answers SSH_FXP_INIT (version 3) with SSH_FXP_VERSION. Silence after
+            // the grant is a refusal, like a forced command on the shell and exec probes.
+            (answer, heard) =>
+              c.subsys("sftp", (err, channel) => {
+                heard();
+                if (err) return answer(false);
+                let reply = Buffer.alloc(0);
+                channel.on("data", (chunk: Buffer) => {
+                  reply = Buffer.concat([reply, chunk]);
+                  if (reply.length < 5) return;
+                  channel.close();
+                  answer(reply[4] === SFTP_VERSION);
+                });
+                channel.on("close", () => answer(false));
+                channel.write(Buffer.from([0, 0, 0, 5, SFTP_INIT, 0, 0, 0, 3]));
+              }),
+          ],
           [
             "local forward",
             // Aimed at the server's own SSH port, which is known to accept connections. A server
