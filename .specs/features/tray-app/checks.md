@@ -449,6 +449,12 @@ Append-only notes on approved rows; the rows above stay as approved.
   guardrail. On first open C62 calls `doctor` even when connected. A native C56 walk needs a
   separately authorized isolated fixture or a revised live-doctor guardrail; do not treat the
   fake-window proof as the on-screen close.
+- C78/C79 (Landing 15, user-approved): macOS uses the same pinned `auto-launch` LaunchAgent
+  backend directly. The isolated proof calls the production `MacLogin` adapter and inspects
+  `ProgramArguments.0` in the resulting plist, including after a launcher alias is retargeted.
+  Other desktop targets retain the Tauri wrapper. No new webview permission.
+- C11/C56/C82 (user-approved): a disposable bundle copy with a no-network sidecar may provide
+  native tray and Settings evidence. It cannot prove the original installed/live-tunnel C82.
 
 ## Handoff
 
@@ -465,6 +471,8 @@ Append-only notes on approved rows; the rows above stay as approved.
 - Remediation returned successfully at `778bd9fa9a`; the rebuilt unsigned app replaced the previous local copy and was not launched. Focused installer, login, permission and bundle proofs passed. The existing external PID and start time, process count, and plist hash again matched before and after; Open at Login stayed off. Follow-up risk verification of the fixes is pending; the native and aggregate gates remain open.
 - Orca accepted the follow-up risk verification: Task `task_21f30a79e6bb`, Dispatch `ctx_5ef6d1848eac`, state `ready`, scope `1811eeb81e..778bd9fa9a`.
 - Recheck `ctx_5ef6d1848eac` at `778bd9fa9a`: C80/C81 passed within the documented launch race. C78 failed: the guard resolves the executable at toggle time, while `tauri-plugin-autostart` 2.7.0 stores its canonical path at setup. A launcher alias retargeted between those calls can satisfy the guard while the backend still points to the build. The pinned wrapper offers no target getter or setter. Next decision: approve using the same `auto-launch` LaunchAgent backend directly on macOS with an explicit target, or retain the plugin requirement and leave C78 open. The tray stays closed and Open at Login off.
+- User approved both proposed changes in the OMP chat: explicit macOS LaunchAgent program via `auto-launch`, and fixture-only native tray/Settings proof (not a live C82 pass). See plan Approval and Landing 15. Orca can reach the display again. OMP S4 follow-up at `157e1a185b` is pending dispatch; preserve the original live-system restrictions.
+- Orca accepted the approved C78 fix and isolated native proof: Task `task_521eedfa125c`, Dispatch `ctx_ddcb01816822`, state `ready`.
 
 ### S4 recovery proof
 
@@ -521,3 +529,42 @@ process, plist SHA-256 `86a4a528b4f23c8c1845bd3f0ab4f9b05162ce32a40903ae0fed66a4
 The tray executable was closed and the tray login plist and launchd job were absent both times.
 Installed executable SHA-256: `db404940a0dc29d53277de25dfb75a22e4699aebe5161affef3b2b8cf3c2c6fc`;
 sidecar: `d36fe1bcdce756464afde7b1d1483f8a322ffdde1a63e463940217269e93d753`.
+
+### S4 explicit login program and native fixture proof
+
+Implementation: `main` at `157e1a185b` plus the fix in the commit that adds this record.
+The macOS adapter resolves the startup program once. It passes that canonical installed path
+to `auto-launch` 0.6.0 and refuses enable if it is noncanonical, missing, or unsafe in that
+backend's unescaped XML. Disable/read-back do not depend on the program path.
+
+| Check | Result | Command and evidence |
+| --- | --- | --- |
+| C78/C79 | Pass, isolated | From `app/src-tauri/`: gated `CARGO_BUILD_JOBS=2 taskpolicy -b nice -n 10 cargo test --locked -j 2 --test login --test login_agent -- --test-threads=1`: 4 fake tests and 1 real-backend test passed. Under temporary HOME, a launcher alias resolved to the build at setup and redirected to the install still refused; the inverse wrote the exact canonical installed executable to `ProgramArguments.0`. Direct dev/build/copied paths refused. Substituting a symlink at the installed path made enable fail while read-back stayed on, and disable through a rejected adapter removed only the tray plist. The external plist hash was unchanged before, during and after. Never toggled real Open at Login. |
+| C5/C10, static | Pass, scoped | Gated `cargo test --locked -j 2 --test policy tray_c5_ -- --test-threads=1` (1 pass), C10 source policy, gated `cargo clippy --locked -j 2 --lib --test login --test login_agent -- -D warnings`, `validate_checks.py tray-app` and conventional commit validator passed. No new plugin grant. |
+| C75–C77, local replacement | Pass | Gated `CARGO_BUILD_JOBS=2 taskpolicy -b nice -n 10 bunx tauri build --bundles app --no-sign --no-binary-patching -- --locked` from `app/`; `env -u CI -u CLAUDECODE taskpolicy -b nice -n 10 bun test ./bun-tests/bundle.test.ts` (3 pass). Confirmed the prior app was closed, the packaged read-only status matched the external PID, and login was off before `app/scripts/install-local.sh`. `diff -qr` matched the approved installed path to the rebuilt bundle. |
+| Native fixture: Beacon/menu | Observed | Direct background launch of PID `89844`; text vnode verified against the fixture binary with `lsof`, and `lsappinfo` reported `UIElement`. System Events found exactly one `AXMenuExtra`. A PID-directed input opened its native menu; AX read `Connected`, `Managed outside the app (pid 424242).`, and no `Reconnect`. The visible Beacon was cropped to its exact 36×24 px item on macOS 27.2.1: [`s4-fixture-beacon.png`](captures/s4-fixture-beacon.png). Menu rectangle was transient; no menu image retained. |
+| Native fixture: Settings / C56 | Partial, not a pass | The Settings action produced one local fixture `doctor`, and Orca observed a `social-tunnel` window once. Waiting for `All checks OK.` then failed with `wait_timeout` / `window_not_found`; System Events subsequently reported zero windows and repeated background menu attempts returned `-1719` (`Invalid index`) or an empty menu rectangle. No stable route, Server fingerprint, explicit close/reopen, or native Quit was verified. AX and screenshot permissions were granted; no settings changes or requests for extra permission. The fixture alone was terminated by its verified PID and its temporary workspace removed. |
+| Original live C82 / full WTK `ui` | Not run | No live launch, live doctor, real login toggle, root full suite, or aggregate proof. The fixture is not live-tunnel evidence. |
+
+The fixture's app executable and Info.plist matched the rebuilt bundle byte for byte. Only the
+copied sidecar was replaced; a clean per-process environment used temporary `HOME`, the synthetic
+`SOCIAL_TUNNEL_CONFIG` and fixture root. The replacement only reads two local files and appends
+verb events. Preflight compared both JSON outputs byte for byte and verified `run --json` exited
+64 without output; malformed arguments were rejected. During the actual fixture run:
+**137 status, 1 doctor, 0 run, 0 unknown**.
+
+| Fixture evidence (ignored local artifacts) | SHA-256 |
+| --- | --- |
+| [No-network sidecar](captures/s4-fixture-sidecar.sh) | `0422e13778194f352b572e25696554feeb576e92dd5dc9f8b9ac95f9d9bb291c` |
+| [Status input](captures/s4-fixture-status.json) | `57837c89bf245d06f79f80d11cc10d005975c2b22b4a625041015b7b19c62cce` |
+| [Doctor input](captures/s4-fixture-doctor.json) | `06790271beb30f83f940a51960a68df63e96e594fd7813482aa60b002302cd53` |
+| [Actual run events](captures/s4-fixture-events.log) | `2d7460bae13e78b4c5dbbd673e469baf6fbf78d38587421c1eb0338099006135` |
+| [Beacon capture](captures/s4-fixture-beacon.png) | `bad92832d5c0377254e062d99ac84ef119788e190c45d538234830eaae247a6d` |
+
+Before/after read-only external evidence: PID `19886`, start `Sun Nov 22 13:07:58 2026`,
+one matching process, plist SHA-256
+`86a4a528b4f23c8c1845bd3f0ab4f9b05162ce32a40903ae0fed66a448d99b5e`. No tunnel or VPS
+interaction beyond local read-only status. Installed app and fixture were both closed after the
+walk; the tray login plist and job were absent. Reinstalled app executable (also fixture app)
+SHA-256 `d626ed341421288ceb16ddc63889ffaae3d7c84e2962f0fa739940989d091fa7`; installed
+sidecar SHA-256 `d36fe1bcdce756464afde7b1d1483f8a322ffdde1a63e463940217269e93d753`.

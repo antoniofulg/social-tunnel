@@ -334,14 +334,17 @@ async fn set_open_at_login(app: AppHandle, enabled: bool) -> Result<bool, String
 }
 
 pub fn run() {
-    tauri::Builder::default()
-        .plugin(tauri_plugin_clipboard_manager::init())
-        .plugin(login::plugin())
+    let builder = tauri::Builder::default().plugin(tauri_plugin_clipboard_manager::init());
+    #[cfg(not(target_os = "macos"))]
+    let builder = builder.plugin(login::plugin());
+    builder
         .invoke_handler(tauri::generate_handler![get_snapshot, run_check, copy_fix, set_open_at_login])
         .setup(|app| {
             #[cfg(target_os = "macos")]
             app.set_activation_policy(tauri::ActivationPolicy::Accessory);
             let exe = std::env::current_exe()?;
+            #[cfg(target_os = "macos")]
+            app.manage(login::MacLogin::new(app.path().home_dir().ok().as_deref(), &exe));
             let program = sidecar::sidecar_path(&exe);
             app.manage(AppState {
                 core: Mutex::new(Core {

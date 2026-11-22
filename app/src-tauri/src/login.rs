@@ -1,5 +1,7 @@
-//! Open at Login through `tauri-plugin-autostart` as a LaunchAgent (plan criterion 78, Landing 7).
+//! Open at Login through the platform backend (plan criterion 78, Landing 15 on macOS).
 
+#[cfg(target_os = "macos")]
+use auto_launch::{AutoLaunch, MacOSLaunchMode};
 #[cfg(target_os = "macos")]
 use std::path::Path;
 
@@ -7,7 +9,7 @@ use std::path::Path;
 /// `tech.antoniofulg.social-tunnel`: a login item under that label would overwrite its plist.
 pub const LABEL: &str = "tech.antoniofulg.social-tunnel.tray";
 
-/// The login-item operations the app needs; the app's is the autostart plugin, tests use a fake.
+/// The login-item operations shared by the native menu and Settings.
 pub trait LoginItem {
     fn enable(&self) -> Result<(), String>;
     fn disable(&self) -> Result<(), String>;
@@ -25,43 +27,89 @@ pub fn read(item: &dyn LoginItem) -> bool {
     item.is_enabled().unwrap_or(false)
 }
 
-/// Only register the canonical path the plugin will put in the macOS login plist.
+/// Keep the startup-resolved program in the backend, not the launch alias.
 #[cfg(target_os = "macos")]
-pub fn enable_installed(
-    home: &Path,
-    executable: &Path,
-    enable: impl FnOnce() -> Result<(), String>,
-) -> Result<(), String> {
-    let home = home.canonicalize().map_err(|_| "autostart_failed")?;
-    let executable = executable.canonicalize().map_err(|_| "autostart_failed")?;
-    if executable != home.join("Applications/social-tunnel.app/Contents/MacOS/social-tunnel-app") {
-        return Err("autostart_failed".into());
+pub struct MacLogin(AutoLaunch);
+
+#[cfg(target_os = "macos")]
+impl MacLogin {
+    pub fn new(home: Option<&Path>, executable: &Path) -> Self {
+        let program = (|| {
+            let installed = home?.canonicalize().ok()?
+                .join("Applications/social-tunnel.app/Contents/MacOS/social-tunnel-app");
+            let canonical = executable.canonicalize().ok()?;
+            if canonical != installed {
+                return None;
+            }
+            // The pinned LaunchAgent backend interpolates its program into XML without escaping.
+            let program = canonical.to_str()?;
+            if program.chars().any(|c| c.is_control() || matches!(c, '&' | '<' | '>' | '\u{fffe}' | '\u{ffff}')) {
+                return None;
+            }
+            Some(canonical)
+        })();
+        // Disable/read-back depend only on the label, even outside the installed app.
+        Self(AutoLaunch::new(
+            LABEL,
+            program.as_deref().and_then(Path::to_str).unwrap_or(""),
+            MacOSLaunchMode::LaunchAgent,
+            &[] as &[&str],
+            &[] as &[&str],
+            "",
+        ))
     }
-    enable()
 }
 
+#[cfg(target_os = "macos")]
+impl LoginItem for MacLogin {
+    fn enable(&self) -> Result<(), String> {
+        let program = Path::new(self.0.get_app_path());
+        // Refuse a replacement symlink or removed installation without resolving the launch alias again.
+        if !program.is_absolute() || !program.canonicalize().is_ok_and(|p| p == program) {
+            return Err("autostart_failed".into());
+        }
+        self.0.enable().map_err(|e| e.to_string())
+    }
+
+    fn disable(&self) -> Result<(), String> {
+        self.0.disable().map_err(|e| e.to_string())
+    }
+
+    fn is_enabled(&self) -> Result<bool, String> {
+        self.0.is_enabled().map_err(|e| e.to_string())
+    }
+}
+
+#[cfg(not(target_os = "macos"))]
 pub fn plugin<R: tauri::Runtime>() -> tauri::plugin::TauriPlugin<R> {
-    let builder = tauri_plugin_autostart::Builder::new().app_name(LABEL);
-    #[cfg(target_os = "macos")]
-    let builder = builder.macos_launcher(tauri_plugin_autostart::MacosLauncher::LaunchAgent);
-    builder.build()
+    tauri_plugin_autostart::Builder::new().app_name(LABEL).build()
 }
 
 pub struct Autostart<'a, R: tauri::Runtime>(pub &'a tauri::AppHandle<R>);
 
+#[cfg(target_os = "macos")]
+impl<R: tauri::Runtime> LoginItem for Autostart<'_, R> {
+    fn enable(&self) -> Result<(), String> {
+        use tauri::Manager;
+        self.0.state::<MacLogin>().enable()
+    }
+
+    fn disable(&self) -> Result<(), String> {
+        use tauri::Manager;
+        self.0.state::<MacLogin>().disable()
+    }
+
+    fn is_enabled(&self) -> Result<bool, String> {
+        use tauri::Manager;
+        self.0.state::<MacLogin>().is_enabled()
+    }
+}
+
+#[cfg(not(target_os = "macos"))]
 impl<R: tauri::Runtime> LoginItem for Autostart<'_, R> {
     fn enable(&self) -> Result<(), String> {
         use tauri_plugin_autostart::ManagerExt;
-        let enable = || self.0.autolaunch().enable().map_err(|e| e.to_string());
-        #[cfg(target_os = "macos")]
-        {
-            use tauri::Manager;
-            let home = self.0.path().home_dir().map_err(|_| "autostart_failed")?;
-            let executable = std::env::current_exe().map_err(|_| "autostart_failed")?;
-            enable_installed(&home, &executable, enable)
-        }
-        #[cfg(not(target_os = "macos"))]
-        enable()
+        self.0.autolaunch().enable().map_err(|e| e.to_string())
     }
     fn disable(&self) -> Result<(), String> {
         use tauri_plugin_autostart::ManagerExt;
