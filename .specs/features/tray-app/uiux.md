@@ -28,6 +28,7 @@
 | Route summary line | `All checks OK. Home IP …` | `All checks OK.` | no home IP | position and `Check Again` kept |
 | Window chrome | mock traffic lights | real macOS title bar | OS | title `social-tunnel` |
 | Setup | three-step assistant | read-only Set Up view with README steps | setup assistant out of scope | AC 68 |
+| `Check Again` placement (resolved in S3 build, coordinator decision 2026-11-22) | B places it beside the route summary | one `Check Again` at the end of the Status tab, right-aligned | Composition above; one button per C61 | AC 61 |
 
 ## Screens
 
