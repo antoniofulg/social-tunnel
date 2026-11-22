@@ -485,3 +485,34 @@ test("[C93] a dial still pending at the connect timeout is told to stop, and the
     server.close();
   }
 });
+
+test("[C99] a connection that completes after its dial timed out is closed and never relayed", async () => {
+  let connected!: (remote: Duplex) => void;
+  const h = harness({ connectTimeoutMs: 40, dial: () => new Promise((resolve) => (connected = resolve)) });
+  expect(await h.status("instagram.com:443")).toBe("HTTP/1.1 504 Gateway Timeout");
+
+  const [near, far] = pair();
+  const received: Buffer[] = [];
+  far.on("data", (chunk) => received.push(chunk));
+  connected(near);
+  await until(() => near.destroyed, 2000, "the late connection to be closed");
+  expect(Buffer.concat(received).length).toBe(0);
+  expect(h.logs).toEqual([{ status: 504, host: "instagram.com" }]);
+});
+
+test("[C100] a refused channel that is still open holds no relay slot", async () => {
+  const headTimeoutMs = 300;
+  const h = harness({ relayCap: 1, headTimeoutMs });
+  // The peer takes nothing, so the refusal cannot leave and the channel stays open until the deadline.
+  const raw = rawChannel();
+  raw.stall();
+  h.handle(raw.channel);
+  raw.channel.push("GET http://instagram.com/ HTTP/1.1\r\n\r\n");
+  await until(() => h.logs.length === 1);
+  expect(h.logs).toEqual([{ status: 405, host: undefined }]);
+
+  expect(raw.channel.destroyed).toBe(false);
+  expect(await h.connect("instagram.com:443").head()).toBe(`${OK}\r\n\r\n`);
+  expect(raw.channel.destroyed).toBe(false);
+  await until(() => raw.channel.destroyed, headTimeoutMs * 5, "the refused channel to close at its deadline");
+});

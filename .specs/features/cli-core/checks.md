@@ -1,12 +1,12 @@
 # CLI core checks
 
 Profile: standard
-Risk: C9, C12, C14, C15, C20, C21, C26, C34, C35, C51, C53, C58, C64, C65, C75, C76, C87, C88, C89, C96 - allowlist, address guard, no-listener, host-key pin, key leakage, channel filter and server lockdown are the safety invariants; a weak test there ships an open proxy, a MITM or a usable server account
+Risk: C9, C12, C14, C15, C20, C21, C26, C34, C35, C51, C53, C58, C64, C65, C75, C76, C87, C88, C89, C96, C101 - allowlist, address guard, no-listener, host-key pin, key leakage, channel filter and server lockdown are the safety invariants; a weak test there ships an open proxy, a MITM or a usable server account
 Build: `taskpolicy -b nice -n 10 bun run typecheck`
 Run unit: `env -u CLAUDECODE taskpolicy -b nice -n 10 bun test`
 Plan: `.specs/features/cli-core/plan.md`
 
-96 checks in 6 slices (ids C1-C97; C57 unused; C64-C69 added after verification round 1, C70-C78 after deep review round 1, C79-C84 after round 2, C85-C89 after round 4, C90-C97 after round 5) · 8 one-way doors · 2 open, of which 0 block
+102 checks in 6 slices (ids C1-C103; C57 unused; C64-C69 added after verification round 1, C70-C78 after deep review round 1, C79-C84 after round 2, C85-C89 after round 4, C90-C103 after round 5) · 8 one-way doors · 2 open, of which 0 block
 
 Test names start with the check id in brackets, so `bun test` prints `(pass) [C<n>] ...`. Each id has exactly one test. `CLAUDECODE` is unset because Bun hides per-test pass lines when it is set.
 
@@ -50,7 +50,7 @@ Proof: run unit | (pass) [C72]
 
 ### S2 - Only allowlisted HTTPS hosts leave through the home IP
 
-Complete: C8-C24, C63, C65, C69, C70, C79-C82, C85, C86, C89-C93 - proofs green; C58 needs the S3 `run` and is marked there
+Complete: C8-C24, C63, C65, C69, C70, C79-C82, C85, C86, C89-C93, C98-C100 - proofs green; C58 needs the S3 `run` and is marked there
 
 **C8** - With `instagram.com` allowlisted, `CONNECT instagram.com:443`, `www.instagram.com:443`, `WWW.Instagram.COM:443` and `instagram.com.:443` each get `HTTP/1.1 200 Connection Established` and bytes flow both ways (PRX-01, AC 7)
 Proof: run unit | (pass) [C8]
@@ -151,9 +151,18 @@ Proof: run unit | (pass) [C92]
 **C93** - A dial still pending at the connect timeout gets `504` and its abort signal is raised then, not before; a dial that completes is never aborted; the production dialer, aborted before its loopback connection is up, rejects and leaves zero open connections at the listener, and left alone connects (PRX-01, AC 79)
 Proof: run unit | (pass) [C93]
 
+**C98** - Through the in-process tunnel with relay cap 1, on a real `ssh2` channel: when the server closes the forwarded channel, and separately when the SSH connection is destroyed, while the outbound connection is pending, the connection that then completes is closed and no request is logged; the next forwarded CONNECT gets `200` (PRX-01, AC 73)
+Proof: run unit | (pass) [C98]
+
+**C99** - A connection that completes after its dial timed out with `504` is closed, receives zero bytes, and the only logged request is the `504` (PRX-01, AC 73)
+Proof: run unit | (pass) [C99]
+
+**C100** - With relay cap 1 and a peer that takes nothing, a channel refused with `405` is still open when the next CONNECT gets `200`, and is closed once the 300 ms head timeout has passed (PRX-01, AC 74)
+Proof: run unit | (pass) [C100]
+
 ### S3 - `run` holds the tunnel open and reports every state change
 
-Complete: C25-C33, C35-C37, C59, C61, C66, C67, C71, C78, C83, C94, C95 and C58 (S2) - proofs green; C34 covers two `doctor` paths and is marked with S5
+Complete: C25-C33, C35-C37, C59, C61, C66, C67, C71, C78, C83, C94, C95, C101-C103 and C58 (S2) - proofs green; C34 covers two `doctor` paths and is marked with S5
 
 **C25** - Against an in-process SSH server, the tunnel authenticates with the key, requests `tcpip-forward` on `127.0.0.1:<remotePort>`, and `state.json` goes `connecting` -> `connected` (TUN-01, AC 18, 20)
 Proof: run unit | (pass) [C25]
@@ -220,6 +229,15 @@ Proof: run unit | (pass) [C94]
 
 **C95** - With a server that refuses the forward and a 60 ms blocked retry, the second and third `blocked`/`port_blocked` writes carry the first one's `since` while `retryAt` increases each time, and `status --json` exits 11 with that `since` (TUN-01, AC 81)
 Proof: run unit | (pass) [C95]
+
+**C101** - With `ssh2` made to register forwards for `127.0.0.1:<remotePort + 1>` and `0.0.0.0:<remotePort>` that the tunnel never requested, the server's forwarded connections for both reach the tunnel's handler and are rejected, each with the log line `rejected a forwarded connection for an unexpected address`, and never reach the proxy; the expected forward is accepted with no such line (TUN-01, AC 48)
+Proof: run unit | (pass) [C101]
+
+**C102** - With a server that refuses the forward and a 60 ms blocked retry, the server receives at least three `tcpip-forward` requests on at least three connections while every state written after `connecting` is `blocked`/`port_blocked` (TUN-01, AC 21)
+Proof: run unit | (pass) [C102]
+
+**C103** - `stop()` while a blocked retry is pending calls the retry's cancel function once and writes `stopped`; running the retry callback afterwards opens no SSH connection and leaves the state `stopped` (TUN-01, AC 26)
+Proof: run unit | (pass) [C103]
 
 ### S4 - `status` answers in one call
 
@@ -352,11 +370,11 @@ Proof: run unit | (pass) [C77]
 | lockdown attempts (6) | shell C53 · shell without PTY C64, C75 · exec C64, C75 · sftp C53 · local forward C53, C76 · other remote port C53, C76, C88 | - |
 | `--json` reason and error codes (12) | `host_key_mismatch` C26 · `port_blocked` C27 · `connection_lost` C28 · `auth_failed` C71 · `stale` C44 · `config_changed` C73 · `config_invalid` C2 · `key_permissions` C6 · `key_unreadable` C72 · `key_invalid` C72 · `already_running` C33 · `internal` C56 | - |
 | key-leak paths (5) | connected run C34 · auth refused C34 · malformed key C34 · doctor pass C34 · doctor ssh_auth fail C34 | - |
-| shutdown signals (2) | SIGTERM C32 · SIGINT C32 | - |
+| shutdown paths (3) | SIGTERM C32 · SIGINT C32 · pending retry cancelled C103 | - |
 | backoff steps (7) | 1 s C29 · 2 s C29 · 4 s C29 · 8 s C29 · 16 s C29 · 30 s cap C29 · reset C29 | - |
 | startup assembly (2) | CLI subprocess C26, C32, C58 · in-process harness C25 | - |
 
-- Claims naming an outcome, interface or response shape: C2, C8-C19, C21-C23, C26, C32, C38-C44, C50-C53, C55, C58, C61, C62, C64-C66, C68-C77, C85-C88, C90, C94, C96, C97 - each has a proof that crosses the boundary it names
+- Claims naming an outcome, interface or response shape: C2, C8-C19, C21-C23, C26, C32, C38-C44, C50-C53, C55, C58, C61, C62, C64-C66, C68-C77, C85-C88, C90, C94, C96-C100 - each has a proof that crosses the boundary it names
 - No other check claims more than the cases its proof enumerates
 
 ## Security cases
@@ -366,12 +384,12 @@ Proof: run unit | (pass) [C77]
 | SEC-001 | Config smuggles a secret field or an unpinned host key | Config rejected naming the field | C5, C60 |
 | SEC-002 | Server process asks the proxy for a non-allowlisted host, port or IP literal | `403`, no lookup, no connection | C9, C10, C11 |
 | SEC-003 | Allowlisted name resolves into the home network or a reserved range | `403`, no connection | C12, C13, C14, C15, C65, C89 |
-| SEC-004 | Something on the home machine or LAN reaches the proxy without the tunnel | No listening socket exists | C20, C58, C35, C67 |
+| SEC-004 | Something on the home machine or LAN reaches the proxy without the tunnel | No listening socket exists | C20, C58, C35, C67, C101 |
 | SEC-005 | Server presents a different host key (MITM) | No auth sent, exit 13 on `run` and `doctor` | C26, C51 |
 | SEC-006 | Private key leaks through output, logs or state | No key line in any captured output | C6, C34 |
 | SEC-007 | Malformed or smuggled CONNECT head | `400`/`405`/`408`, trailing bytes never parsed | C16, C17, C21, C22, C23, C37 |
 | SEC-008 | Tunnel user can open a shell, sftp or other forwards | `lockdown` hop fails, exit 14 | C53, C64, C75, C76, C84, C87, C88, C96 |
-| SEC-009 | Connection flood or slow client exhausts the home machine | `503` past 256 relays, timeouts close stalled sockets | C17, C18, C19, C24, C63, C69, C80, C82, C85, C86, C90, C91, C92, C93 |
+| SEC-009 | Connection flood or slow client exhausts the home machine | `503` past 256 relays, timeouts close stalled sockets | C17, C18, C19, C24, C63, C69, C80, C82, C85, C86, C90, C91, C92, C93, C98, C99, C100 |
 | SEC-010 | Server-, request- or config-supplied text carries terminal control characters or shell syntax into output a person or agent acts on | Characters stripped; printed commands quoted | C37, C74, C78, C83 |
 
 ## Test policy
@@ -392,18 +410,18 @@ Evidence:
 - `src/tunnel.ts` (planned): 6 states, 7 backoff steps -> decides
 - closest analogue in the repo: none - first code in the repository
 
-Cost: about 96 tests in 10 files, all `bun test`; SSH tests use an in-process `ssh2` server, network tests use injected resolvers and dialers, so the suite needs no internet and no sshd.
+Cost: about 102 tests in 10 files, all `bun test`; SSH tests use an in-process `ssh2` server, network tests use injected resolvers and dialers, so the suite needs no internet and no sshd.
 
 ## Swept
 
 - validation: C2, C3, C4, C5, C21, C60, C68, C72
-- failure modes: C18, C27, C28, C59, C70, C71, C79, C80, C81, C85, C86, C87, C90, C91, C92, C93, C96, C97
+- failure modes: C18, C27, C28, C59, C70, C71, C79, C80, C81, C85, C86, C87, C90, C91, C92, C93, C96, C97, C98, C99, C100
 - idempotency: n/a - no request is retried by this tool; a reconnect re-requests the forward, covered by C28
-- authorization: C9, C10, C11, C14, C35, C53, C64, C65, C67, C75, C76, C88, C89
-- concurrency: C19, C33, C66, C69, C90, C92
+- authorization: C9, C10, C11, C14, C35, C53, C64, C65, C67, C75, C76, C88, C89, C101
+- concurrency: C19, C33, C66, C69, C90, C92, C100
 - data lifecycle: C31, C44 - `state.json` is replaced atomically and goes stale after 90 s
 - dependency failure: C18, C28, C49, C93
-- state transitions: C25, C26, C27, C28, C32, C94, C95
+- state transitions: C25, C26, C27, C28, C32, C94, C95, C102, C103
 - observability: C37, C43, C61, C73, C77, C78, C95 - state and hop results are the observable surface; no metrics in v0.1
 - deploy compatibility: n/a - first release; schema `version: 1` in config and state allows later migration
 - performance budget: C19, C24, C63, C86 - relay cap and idle timeout bound memory and sockets; no throughput target in v0.1

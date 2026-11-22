@@ -8,8 +8,8 @@ import { createLogger, sanitize } from "../src/log";
 import type { State } from "../src/state";
 import { isExpectedForward, retryDelay, startTunnel, type Tunnel, type TunnelOptions } from "../src/tunnel";
 import { cli, sleep, until } from "./helpers";
-import type { ServerChannel } from "ssh2";
-import { harness, OK, PUBLIC } from "./proxy-harness";
+import { Client, type ServerChannel } from "ssh2";
+import { harness, OK, pair, PUBLIC } from "./proxy-harness";
 import { readJson, setup, startServer, type TestServer } from "./ssh-server";
 
 const tunnels: Tunnel[] = [];
@@ -527,4 +527,108 @@ test("[C95] since stays at the first refusal while a blocked port is retried, an
   const status = await cli(["status", "--json", "--config", env.path]);
   expect(status.code).toBe(11);
   expect(status.json().since).toBe(first!.since);
+});
+
+test("[C98] on the tunnel's SSH channel, a connection that completes after the channel was lost is closed, logs no 200 and leaves the slot free", async () => {
+  for (const loss of ["channel closed", "connection lost"]) {
+    const env = await setup();
+    let connected!: (remote: Duplex) => void;
+    let dials = 0;
+    const proxy = harness({
+      relayCap: 1,
+      dial: () => {
+        dials++;
+        return new Promise((resolve) => (connected = resolve));
+      },
+    });
+    const t = await tunnelTo(env, { handle: proxy.handle });
+    await until(() => t.names().includes("connected"));
+    const channel = await forwarded(env);
+    channel.write(CONNECT);
+    await until(() => dials === 1);
+
+    if (loss === "channel closed") channel.close();
+    else env.ssh.clients.forEach((c) => (c as unknown as { _sock: net.Socket })._sock.destroy());
+    await sleep(100);
+    const [late] = pair();
+    connected(late);
+    await until(() => late.destroyed, 2000, `the late connection to be closed after ${loss}`);
+    expect([loss, proxy.logs]).toEqual([loss, []]);
+
+    // The only slot is free: the next channel (on the new connection, after a loss) is relayed.
+    await until(() => t.names().at(-1) === "connected");
+    const next = await forwarded(env);
+    let received = "";
+    next.on("data", (chunk: Buffer) => (received += chunk.toString("latin1")));
+    next.write(CONNECT);
+    await until(() => dials === 2, 5000, `the next dial after ${loss}`);
+    connected(pair()[0]);
+    await until(() => received.includes("\r\n\r\n"));
+    expect([loss, received]).toEqual([loss, `${OK}\r\n\r\n`]);
+    expect(proxy.logs).toEqual([{ status: 200, host: "instagram.com" }]);
+  }
+});
+
+test("[C101] a mismatched forwarded connection that ssh2 itself lets through is rejected by the tunnel's own filter", async () => {
+  // ssh2 drops forwards it did not register, so the tunnel's filter is never reached through it.
+  // Here ssh2 is made to register two forwards the tunnel never asked for, as a regression in that
+  // check would: the server's announcements for them now reach the tunnel's handler.
+  const forwardIn = Client.prototype.forwardIn;
+  Client.prototype.forwardIn = function (this: Client, address: string, port: number, done) {
+    return forwardIn.call(this, address, port, (err: Error | undefined, real: number) => {
+      const registered = (this as unknown as { _forwarding: Record<string, number> })._forwarding;
+      registered[`127.0.0.1:${port + 1}`] = port + 1;
+      registered[`0.0.0.0:${port}`] = port;
+      done?.(err, real);
+    });
+  } as typeof forwardIn;
+  try {
+    const env = await setup();
+    const messages: string[] = [];
+    const t = await tunnelTo(env, { log: (message) => void messages.push(message) });
+    await until(() => t.names().includes("connected"));
+    const rejections = () => messages.filter((m) => m === "rejected a forwarded connection for an unexpected address").length;
+
+    expect(await env.ssh.announce("127.0.0.1", env.remotePort + 1)).toBe(false);
+    expect(rejections()).toBe(1);
+    expect(await env.ssh.announce("0.0.0.0", env.remotePort)).toBe(false);
+    expect(rejections()).toBe(2);
+    expect(t.handled.length).toBe(0);
+
+    expect(await env.ssh.announce("127.0.0.1", env.remotePort)).toBe(true);
+    await until(() => t.handled.length === 1);
+    expect(rejections()).toBe(2);
+  } finally {
+    Client.prototype.forwardIn = forwardIn;
+  }
+});
+
+test("[C102] a blocked port is retried against the server while state.json stays blocked/port_blocked", async () => {
+  const env = await setup({ forward: () => false });
+  const t = await tunnelTo(env, { blockedRetryMs: 60 });
+  await until(() => env.ssh.requests.filter((r) => r.name === "tcpip-forward").length >= 3);
+  await until(() => t.names().length >= 4);
+
+  // Each retry opened a new SSH connection and asked again, and no write left the blocked state.
+  expect(env.ssh.clients.length).toBeGreaterThanOrEqual(3);
+  expect(t.names()[0]).toBe("connecting");
+  expect([...new Set(t.names().slice(1))]).toEqual(["blocked/port_blocked"]);
+});
+
+test("[C103] stop() cancels the pending retry, and a retry that fires anyway opens no connection", async () => {
+  const env = await setup({ forward: () => false });
+  const pending: (() => void)[] = [];
+  let cancelled = 0;
+  const t = await tunnelTo(env, { schedule: (fn) => (pending.push(fn), () => cancelled++) });
+  await until(() => t.names().includes("blocked/port_blocked"));
+  expect([pending.length, cancelled]).toEqual([1, 0]);
+
+  await t.tunnel.stop();
+  expect(cancelled).toBe(1);
+  expect(t.names()).toEqual(["connecting", "blocked/port_blocked", "stopped"]);
+
+  pending[0]!();
+  await sleep(150);
+  expect(env.ssh.clients.length).toBe(1);
+  expect(t.names().at(-1)).toBe("stopped");
 });
