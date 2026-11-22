@@ -130,14 +130,18 @@ export async function main(argv: string[], io: Io): Promise<number> {
       const { exit, ...fields } = view;
       const server = { host: config.server.host, port: config.server.port };
       if (args.json) {
+        // user, hostKey, keyPath and allowlist are additive for the tray app (tray-app door 1);
+        // the key path is shown, never the key.
         print({
           ok: exit === EXIT.ok,
           command: "status",
           configPath,
           ...fields,
-          server,
+          server: { ...server, user: config.server.user, hostKey: config.server.hostKey },
           remotePort: config.remotePort,
           domains: config.domains.length,
+          keyPath: config.keyPath,
+          allowlist: config.domains,
         });
       } else {
         io.stdout(
