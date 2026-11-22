@@ -193,8 +193,10 @@ export function startTunnel(options: TunnelOptions): Tunnel {
       const kind = err instanceof ConnectError ? err.kind : "unreachable";
       log?.("connection failed", { reason: kind, detail: err instanceof Error ? err.message : undefined });
       if (kind === "host_key_mismatch") {
-        // Never retried: a changed host key needs a person to look at it.
+        // Never retried: a changed host key needs a person to look at it. The tunnel is over, so a
+        // later stop() must not replace this state: `status` keeps reporting it (criterion 33).
         set("blocked", "host_key_mismatch");
+        stopping = true;
         return end();
       }
       return retry("disconnected", kind === "auth_failed" ? "auth_failed" : "connection_lost", retryDelay(failures++, options.backoffMs));

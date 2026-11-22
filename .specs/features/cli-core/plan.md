@@ -144,6 +144,7 @@ The home machine keeps a reverse tunnel to the server and records connected, los
 62. IF the server refuses the key THEN the system SHALL write state `disconnected` with reason `auth_failed` and the next `retryAt`, and retry with the delays of criterion 23 (added after deep review round 1; records behaviour shipped in S3)
 70. The control characters of criterion 50 SHALL include zero-width and bidirectional format characters (U+200B-U+200F, U+2028-U+202E, U+2066-U+2069, U+FEFF) (added after deep review round 1)
 71. The characters of criterion 70 SHALL also include U+00AD, U+061C, U+2060-U+2069 and the tag characters U+E0000-U+E007F (added after deep review round 2)
+80. WHEN `run` has ended on the host key mismatch of criterion 19 THEN a SIGINT or SIGTERM that arrives before the process is gone SHALL leave `state.json` at `blocked` with reason `host_key_mismatch`, so `status` keeps exiting 13 (added after deep review round 5; refines 19, 26 and 33)
 28. The system SHALL write no private key material and no passphrase to stdout, stderr, `state.json` or `--json` output
 
 **Independent test:** start `run` against an in-process `ssh2` test server; kill the server, watch `state.json` go `connected` -> `disconnected` -> `reconnecting` -> `connected`; present a wrong host key and see exit 13.
@@ -206,7 +207,7 @@ The user or an agent learns which hop failed and what to do about it.
 | --- | --- | --- | --- |
 | CFG-01 | S1 | 1, 2, 3, 4, 5, 6, 55, 56, 68, 69 | Done |
 | PRX-01 | S2 | 7-17, 44, 45, 46, 47, 58, 61, 66, 73, 74, 77, 78, 79 | Done |
-| TUN-01 | S3 | 18-28, 48, 49, 50, 57, 60, 62, 70, 71 | Done |
+| TUN-01 | S3 | 18-28, 48, 49, 50, 57, 60, 62, 70, 71, 80 | Done |
 | STA-01 | S4 | 29-34, 51, 63 | Done |
 | DOC-01 | S5 | 35-41, 52, 53, 54, 59, 64, 65, 67, 72, 75, 76 | Done |
 | CLI-01 | S6 | 42, 43 | Done |
@@ -299,4 +300,4 @@ The user or an agent learns which hop failed and what to do about it.
 - Revision after deep review round 2 (2026-11-21): criteria 71 and 72 appended. Approver: none recorded; directed by the coordinating agent
 - Revision after deep review round 4 (2026-11-22): criteria 73-77 appended for the round 4 defects (a channel lost during the lookup on a real SSH channel, a refusal the server never takes, a connection lost during the lockdown hop, other-port probes at the top of the port range) and the IPv4-translated address form. Approver: none recorded; directed by the coordinating agent
 - Approval of criteria 59-77 (2026-11-22): Decision: "Approve 59–77 (Recommended)". Source: user answer in the coordinating Claude Code chat (AskUserQuestion), after deep review round 5 flagged the receipt. Scope: criteria 59-77 as written at commit aec4a8f
-- Revision after deep review round 5 (2026-11-22): criteria 78 and 79 appended for the relay slot that was never freed on a real SSH channel and the timed-out dial left connecting. Approver: none recorded; directed by the coordinating agent and awaiting the user's approval
+- Revision after deep review round 5 (2026-11-22): criteria 78-80 appended for the relay slot that was never freed on a real SSH channel, the timed-out dial left connecting and the host key mismatch that a late stop overwrote. Approver: none recorded; directed by the coordinating agent and awaiting the user's approval

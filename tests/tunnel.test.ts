@@ -495,3 +495,17 @@ test("[C90] on the tunnel's SSH channel, a relay ended by an upstream reset, an 
     }
   }
 }, 60_000);
+
+test("[C94] stop() after a host key mismatch leaves blocked/host_key_mismatch in state.json and status at exit 13", async () => {
+  const env = await setup({}, (c) => (c.server.hostKey = "SHA256:" + "B".repeat(43)));
+  const t = await tunnelTo(env);
+  expect(await t.tunnel.done).toEqual({ state: "blocked", reason: "host_key_mismatch" });
+
+  // What a SIGTERM delivered while `run` is on its way out does.
+  await t.tunnel.stop();
+  expect(t.names()).toEqual(["connecting", "blocked/host_key_mismatch"]);
+  expect(readJson(env.statePath)).toMatchObject({ state: "blocked", reason: "host_key_mismatch" });
+  const status = await cli(["status", "--json", "--config", env.path]);
+  expect(status.code).toBe(13);
+  expect(status.json()).toMatchObject({ state: "blocked", reason: "host_key_mismatch" });
+});
