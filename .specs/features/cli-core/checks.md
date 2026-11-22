@@ -6,7 +6,7 @@ Build: `taskpolicy -b nice -n 10 bun run typecheck`
 Run unit: `env -u CLAUDECODE taskpolicy -b nice -n 10 bun test`
 Plan: `.specs/features/cli-core/plan.md`
 
-102 checks in 6 slices (ids C1-C103; C57 unused; C64-C69 added after verification round 1, C70-C78 after deep review round 1, C79-C84 after round 2, C85-C89 after round 4, C90-C103 after round 5) · 8 one-way doors · 2 open, of which 0 block
+103 checks in 6 slices (ids C1-C104; C57 unused; C64-C69 added after verification round 1, C70-C78 after deep review round 1, C79-C84 after round 2, C85-C89 after round 4, C90-C104 after round 5) · 8 one-way doors · 2 open, of which 0 block
 
 Test names start with the check id in brackets, so `bun test` prints `(pass) [C<n>] ...`. Each id has exactly one test. `CLAUDECODE` is unset because Bun hides per-test pass lines when it is set.
 
@@ -241,7 +241,7 @@ Proof: run unit | (pass) [C103]
 
 ### S4 - `status` answers in one call
 
-Complete: C38-C44, C73 - proofs green
+Complete: C38-C44, C73, C104 - proofs green
 
 **C38** - Live pid + `connected` exits 0 with `state`, `since`, `server.host`, `remotePort`, `domains` count (STA-01, AC 29)
 Proof: run unit | (pass) [C38]
@@ -266,6 +266,9 @@ Proof: run unit | (pass) [C44]
 
 **C73** - With a live `connected` state.json naming another `remotePort`, server host or server port than the config, `status --json` exits 10 with `stopped`/`config_changed`, and the `doctor` `forward` hop sends `tcpip-forward` then `cancel-tcpip-forward` for the config's port (STA-01, DOC-01, AC 63)
 Proof: run unit | (pass) [C73]
+
+**C104** - With U+009B, U+202E and U+200B placed in an unknown config key, in `reason` and `since` of `state.json`, and in a domain entry, the stdout of `status --json` (both cases) and `doctor --json` holds none of those characters, and the parsed `error.field`, `error.message`, `reason` and `since` are the text without them (STA-01, AC 84)
+Proof: run unit | (pass) [C104]
 
 ### S5 - `doctor` names the broken hop and its fix
 
@@ -374,7 +377,7 @@ Proof: run unit | (pass) [C77]
 | backoff steps (7) | 1 s C29 · 2 s C29 · 4 s C29 · 8 s C29 · 16 s C29 · 30 s cap C29 · reset C29 | - |
 | startup assembly (2) | CLI subprocess C26, C32, C58 · in-process harness C25 | - |
 
-- Claims naming an outcome, interface or response shape: C2, C8-C19, C21-C23, C26, C32, C38-C44, C50-C53, C55, C58, C61, C62, C64-C66, C68-C77, C85-C88, C90, C94, C96-C100 - each has a proof that crosses the boundary it names
+- Claims naming an outcome, interface or response shape: C2, C8-C19, C21-C23, C26, C32, C38-C44, C50-C53, C55, C58, C61, C62, C64-C66, C68-C77, C85-C88, C90, C94, C96-C100, C104 - each has a proof that crosses the boundary it names
 - No other check claims more than the cases its proof enumerates
 
 ## Security cases
@@ -390,7 +393,7 @@ Proof: run unit | (pass) [C77]
 | SEC-007 | Malformed or smuggled CONNECT head | `400`/`405`/`408`, trailing bytes never parsed | C16, C17, C21, C22, C23, C37 |
 | SEC-008 | Tunnel user can open a shell, sftp or other forwards | `lockdown` hop fails, exit 14 | C53, C64, C75, C76, C84, C87, C88, C96 |
 | SEC-009 | Connection flood or slow client exhausts the home machine | `503` past 256 relays, timeouts close stalled sockets | C17, C18, C19, C24, C63, C69, C80, C82, C85, C86, C90, C91, C92, C93, C98, C99, C100 |
-| SEC-010 | Server-, request- or config-supplied text carries terminal control characters or shell syntax into output a person or agent acts on | Characters stripped; printed commands quoted | C37, C74, C78, C83 |
+| SEC-010 | Server-, request- or config-supplied text carries terminal control characters or shell syntax into output a person or agent acts on | Characters stripped; printed commands quoted | C37, C74, C78, C83, C104 |
 
 ## Test policy
 
@@ -410,7 +413,7 @@ Evidence:
 - `src/tunnel.ts` (planned): 6 states, 7 backoff steps -> decides
 - closest analogue in the repo: none - first code in the repository
 
-Cost: about 102 tests in 10 files, all `bun test`; SSH tests use an in-process `ssh2` server, network tests use injected resolvers and dialers, so the suite needs no internet and no sshd.
+Cost: about 103 tests in 10 files, all `bun test`; SSH tests use an in-process `ssh2` server, network tests use injected resolvers and dialers, so the suite needs no internet and no sshd.
 
 ## Swept
 
@@ -422,6 +425,6 @@ Cost: about 102 tests in 10 files, all `bun test`; SSH tests use an in-process `
 - data lifecycle: C31, C44 - `state.json` is replaced atomically and goes stale after 90 s
 - dependency failure: C18, C28, C49, C93
 - state transitions: C25, C26, C27, C28, C32, C94, C95, C102, C103
-- observability: C37, C43, C61, C73, C77, C78, C95 - state and hop results are the observable surface; no metrics in v0.1
+- observability: C37, C43, C61, C73, C77, C78, C95, C104 - state and hop results are the observable surface; no metrics in v0.1
 - deploy compatibility: n/a - first release; schema `version: 1` in config and state allows later migration
 - performance budget: C19, C24, C63, C86 - relay cap and idle timeout bound memory and sockets; no throughput target in v0.1

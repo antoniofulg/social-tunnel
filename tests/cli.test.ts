@@ -96,3 +96,44 @@ test("[C77] status and doctor without --json print readable lines with control c
   expect(lines[2]).toBe(`     fix: Run: chmod 600 '${loose.keyPath}'`);
   expect(lines.slice(3)).toEqual(["server_reachable", "ssh_auth", "forward", "lockdown", "egress"].map((hop) => `skip ${hop}: skipped`));
 });
+
+test("[C104] --json output strips control, bidi and zero-width characters from file-supplied strings", async () => {
+  const hidden = "\u009b\u202e\u200b";
+  const raw = /[\x00-\x1f\x7f-\x9f\u200b-\u200f\u2028-\u202e]/;
+
+  // An unknown config key reaches error.field and error.message.
+  const badKey = writeConfig((c) => (c[`pass${hidden}word`] = 1));
+  const invalid = await cli(["status", "--json", "--config", badKey.path]);
+  expect(invalid.code).toBe(2);
+  expect(invalid.stdout.slice(0, -1)).not.toMatch(raw);
+  expect(invalid.json().error).toEqual({ code: "config_invalid", field: "password", message: 'unknown key "password"' });
+
+  // A state.json field reaches the status object.
+  const files = writeConfig();
+  const now = new Date().toISOString();
+  writeFileSync(
+    files.statePath,
+    JSON.stringify({
+      version: 1,
+      pid: process.pid,
+      state: "disconnected",
+      reason: `connection_lost${hidden}`,
+      since: `${now}${hidden}`,
+      retryAt: null,
+      server: { host: "127.0.0.1", port: 22 },
+      remotePort: 8888,
+      updatedAt: now,
+    }),
+  );
+  const status = await cli(["status", "--json", "--config", files.path]);
+  expect(status.code).toBe(10);
+  expect(status.stdout.slice(0, -1)).not.toMatch(raw);
+  expect(status.json()).toMatchObject({ state: "disconnected", reason: "connection_lost", since: now });
+
+  // A rejected domain entry reaches the doctor hop's detail.
+  const badDomain = writeConfig((c) => (c.domains = [`insta${hidden}gram`]));
+  const doctor = await cli(["doctor", "--json", "--config", badDomain.path]);
+  expect(doctor.code).toBe(2);
+  expect(doctor.stdout.slice(0, -1)).not.toMatch(raw);
+  expect(doctor.json().hops[0].detail).toContain("instagram");
+});

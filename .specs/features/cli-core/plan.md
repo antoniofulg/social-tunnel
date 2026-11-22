@@ -165,6 +165,7 @@ An agent or the tray learns the tunnel state and acts on the exit code.
 51. IF `state.json` names a live pid and its `updatedAt` is older than 90 s THEN `status` SHALL report state `stopped` with reason `stale` and exit 10
 63. IF a live `state.json` names a `server` or `remotePort` other than the loaded config's THEN `status` SHALL report state `stopped` with reason `config_changed` and exit 10, and the `doctor` `forward` hop SHALL request the forward itself instead of trusting that run (added after deep review round 1)
 34. WHEN any command gets `--json` THEN the system SHALL write exactly one JSON object and a newline to stdout and nothing else
+84. The system SHALL strip the characters of criteria 50, 70 and 71 from every string value of the `--json` object on stdout, as it does from text output (added after deep review round 5; hardening, extends 50)
 
 **Independent test:** write fixture `state.json` files for each state and pid case; run `status --json` and assert exit code and fields.
 
@@ -212,7 +213,7 @@ The user or an agent learns which hop failed and what to do about it.
 | CFG-01 | S1 | 1, 2, 3, 4, 5, 6, 55, 56, 68, 69 | Done |
 | PRX-01 | S2 | 7-17, 44, 45, 46, 47, 58, 61, 66, 73, 74, 77, 78, 79 | Done |
 | TUN-01 | S3 | 18-28, 48, 49, 50, 57, 60, 62, 70, 71, 80, 81 | Done |
-| STA-01 | S4 | 29-34, 51, 63 | Done |
+| STA-01 | S4 | 29-34, 51, 63, 84 | Done |
 | DOC-01 | S5 | 35-41, 52, 53, 54, 59, 64, 65, 67, 72, 75, 76, 82, 83 | Done |
 | CLI-01 | S6 | 42, 43 | Done |
 
@@ -304,4 +305,4 @@ The user or an agent learns which hop failed and what to do about it.
 - Revision after deep review round 2 (2026-11-21): criteria 71 and 72 appended. Approver: none recorded; directed by the coordinating agent
 - Revision after deep review round 4 (2026-11-22): criteria 73-77 appended for the round 4 defects (a channel lost during the lookup on a real SSH channel, a refusal the server never takes, a connection lost during the lockdown hop, other-port probes at the top of the port range) and the IPv4-translated address form. Approver: none recorded; directed by the coordinating agent
 - Approval of criteria 59-77 (2026-11-22): Decision: "Approve 59–77 (Recommended)". Source: user answer in the coordinating Claude Code chat (AskUserQuestion), after deep review round 5 flagged the receipt. Scope: criteria 59-77 as written at commit aec4a8f
-- Revision after deep review round 5 (2026-11-22): criteria 78-83 and one Surface row appended for the relay slot that was never freed on a real SSH channel, the timed-out dial left connecting the host key mismatch that a late stop overwrote the `since` that restarted on every blocked retry, and the `doctor` hops that read an unanswered request as a refusal. Approver: none recorded; directed by the coordinating agent and awaiting the user's approval
+- Revision after deep review round 5 (2026-11-22): criteria 78-84 and one Surface row appended for the relay slot that was never freed on a real SSH channel, the timed-out dial left connecting the host key mismatch that a late stop overwrote the `since` that restarted on every blocked retry, the `doctor` hops that read an unanswered request as a refusal, and (hardening) `--json` strings that skipped the sanitiser. Approver: none recorded; directed by the coordinating agent and awaiting the user's approval

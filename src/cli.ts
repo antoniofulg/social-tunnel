@@ -92,7 +92,10 @@ export async function main(argv: string[], io: Io): Promise<number> {
     return EXIT.usage;
   }
 
-  const print = (value: unknown) => io.stdout(JSON.stringify(value) + "\n");
+  // File-supplied text (config keys and entries, state.json fields, paths) reaches the agent or app
+  // that parses the object: string values get the same stripping as text output.
+  const print = (value: unknown) =>
+    io.stdout(JSON.stringify(value, (_key, v) => (typeof v === "string" ? sanitize(v) : v)) + "\n");
   const fail = (exit: number, code: string, message: string, field?: string): number => {
     if (args.json) print({ ok: false, command: args.verb, error: { code, message, field } });
     else io.stderr(`error: ${sanitize(message)}\n`);
