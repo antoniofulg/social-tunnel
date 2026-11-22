@@ -77,6 +77,7 @@ const REFUSED = [
 const EMBEDDED = [
   { range: cidr("::/96")!, at: 12 },
   { range: cidr("::ffff:0:0/96")!, at: 12 },
+  { range: cidr("::ffff:0:0:0/96")!, at: 12 },
   { range: cidr("64:ff9b::/96")!, at: 12 },
   { range: cidr("2002::/16")!, at: 2 },
 ];

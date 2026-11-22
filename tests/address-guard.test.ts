@@ -63,3 +63,13 @@ test("[C13] the address guard refuses addresses inside a prefix of a local inter
   expect(isRefusedAddress("2a03:2880:1:2::99", none)).toBe(false);
   expect(isRefusedAddress("203.0.113.200", none)).toBe(false);
 });
+
+test("[C89] the address guard judges an IPv4-translated address (::ffff:0:a.b.c.d) by its IPv4 address", () => {
+  for (const address of ["::ffff:0:127.0.0.1", "::ffff:0:7f00:1", "::ffff:0:10.0.0.1", "::ffff:0:192.168.1.1", "::ffff:0:169.254.169.254"]) {
+    expect([address, isRefusedAddress(address, none)]).toEqual([address, true]);
+  }
+  expect(isRefusedAddress("::ffff:0:157.240.1.1", none)).toBe(false);
+  // The interface prefixes apply to the embedded address too.
+  expect(isRefusedAddress("::ffff:0:203.0.113.200", { en0: [{ cidr: "203.0.113.7/24" }] })).toBe(true);
+  expect(isRefusedAddress("::ffff:0:203.0.114.1", { en0: [{ cidr: "203.0.113.7/24" }] })).toBe(false);
+});
