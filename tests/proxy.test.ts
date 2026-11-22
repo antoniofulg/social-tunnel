@@ -159,6 +159,30 @@ test("[C21] malformed hosts and ports get 400", async () => {
   expect(await harness().connect(`${name253}:443`).head()).toBe(`${OK}\r\n\r\n`);
 });
 
+test("[C122] a head is judged by size, request line, method, IP literal, grammar, then port and allowlist", async () => {
+  const head = (line: string) => `${line}\r\nHost: x\r\n\r\n`;
+  const rows: [string, string][] = [
+    // Request-line grammar before the method of criterion 13.
+    [head("GET /"), "HTTP/1.1 400 Bad Request"],
+    [head("GET / HTTP/2"), "HTTP/1.1 400 Bad Request"],
+    // The method before the host grammar of criterion 44.
+    [head("GET insta_gram.com:443 HTTP/1.1"), "HTTP/1.1 405 Method Not Allowed"],
+    // An IP literal is refused by criterion 10 whatever its port string.
+    [head("CONNECT 157.240.1.1:+443 HTTP/1.1"), "HTTP/1.1 403 Forbidden"],
+    [head("CONNECT [2a03:2880::1]:0443 HTTP/1.1"), "HTTP/1.1 403 Forbidden"],
+    // Host and port grammar before the port rule of criterion 9 and the allowlist of criterion 8.
+    [head("CONNECT insta_gram.com:80 HTTP/1.1"), "HTTP/1.1 400 Bad Request"],
+    [head("CONNECT example.org:+443 HTTP/1.1"), "HTTP/1.1 400 Bad Request"],
+    [head("CONNECT example.org:80 HTTP/1.1"), "HTTP/1.1 403 Forbidden"],
+  ];
+  for (const [raw, want] of rows) {
+    const h = harness();
+    expect([raw, (await h.open(raw).closed()).split("\r\n")[0]]).toEqual([raw, want]);
+    expect(h.lookups).toEqual([]);
+    expect(h.dials).toEqual([]);
+  }
+});
+
 test("[C22] bytes sent with the head reach upstream untouched and are never answered", async () => {
   const head = "CONNECT instagram.com:443 HTTP/1.1\r\nHost: instagram.com:443\r\n\r\n";
   const clientHello = Buffer.from([0x16, 0x03, 0x01, 0x00, 0x05, 0x01, 0x00, 0x00, 0x01, 0x00, 0x0d, 0x0a, 0x0d, 0x0a, 0xff]);

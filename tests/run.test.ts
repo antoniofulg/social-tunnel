@@ -1,5 +1,5 @@
 import { afterEach, expect, test } from "bun:test";
-import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { cli, sleep, spawnCli, testIo } from "./helpers";
 import { main } from "../src/cli";
@@ -268,4 +268,43 @@ test("[C120] a fresh run.lock naming a live pid refuses even when that pid's sta
     expect(env.ssh.clients.length).toBe(0);
     expect(existsSync(lock)).toBe(true);
   }
+}, 30_000);
+
+test("[C124] a live-pid run.lock unrefreshed past the stale threshold is taken over, and a run.lock.takeover over 10 s old is cleared", async () => {
+  const env = await setup({}, (config) => (config.server.hostKey = "SHA256:" + "A".repeat(43)));
+  servers.push(env.ssh);
+  const lock = join(env.path, "..", "run.lock");
+  const takeover = `${lock}.takeover`;
+  const age = (path: string, ms: number) => {
+    const then = new Date(Date.now() - ms);
+    utimesSync(path, then, then);
+  };
+
+  // A live pid whose lock was last refreshed 91 s ago: the pid may have been reused (criterion 93).
+  writeFileSync(lock, `${process.ppid}\n`);
+  age(lock, 91_000);
+  const stale = await cli(["run", "--json", "--config", env.path]);
+  // It got past the claim and reached the server, where the wrong host key pin ends it.
+  expect(stale.code).toBe(13);
+  expect(env.ssh.clients.length).toBe(1);
+  expect(existsSync(lock)).toBe(false);
+
+  // A dead-pid lock with a takeover file a live pid left 11 s ago: the file is cleared (criterion 92).
+  const dead = Bun.spawnSync(["true"]).pid;
+  writeFileSync(lock, `${dead}\n`);
+  writeFileSync(takeover, `${process.ppid}\n`);
+  age(takeover, 11_000);
+  const cleared = await cli(["run", "--json", "--config", env.path]);
+  expect(cleared.code).toBe(13);
+  expect(env.ssh.clients.length).toBe(2);
+  expect(existsSync(takeover)).toBe(false);
+
+  // The same takeover file still fresh: another run is replacing the lock, so this one refuses.
+  writeFileSync(lock, `${dead}\n`);
+  writeFileSync(takeover, `${process.ppid}\n`);
+  const busy = await cli(["run", "--json", "--config", env.path]);
+  expect(busy.code).toBe(2);
+  expect(busy.json().error.code).toBe("already_running");
+  expect(env.ssh.clients.length).toBe(2);
+  rmSync(takeover, { force: true });
 }, 30_000);

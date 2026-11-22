@@ -125,3 +125,33 @@ test("[C44] a live pid whose updatedAt is older than 90 s reports stopped/stale 
   expect(evaluateStatus(exactly, alive, at)).toMatchObject({ state: "connected", exit: 0 });
   expect(evaluateStatus(over, alive, at)).toMatchObject({ state: "stopped", reason: "stale", exit: 10 });
 });
+
+test("[C121] status applies host key mismatch, then dead pid or stopped, then stale, then the live state", async () => {
+  const at = Date.parse("2026-11-21T12:00:00.000Z");
+  const dead = await deadPid();
+  const alive = (pid: number) => pid !== dead;
+  const fresh = new Date(at - 1_000).toISOString();
+  const stale = new Date(at - 91_000).toISOString();
+  const blocked = { state: "blocked", reason: "port_blocked", retryAt: "2026-11-21T12:00:30.000Z" } as const;
+  const lost = { state: "disconnected", reason: "connection_lost", retryAt: "2026-11-21T12:00:04.000Z" } as const;
+  const mismatch = { state: "blocked", reason: "host_key_mismatch" } as const;
+  const rows: [string, Partial<State>, { state: string; reason: string | null; exit: number }][] = [
+    ["dead pid, port_blocked", { ...blocked, pid: dead, updatedAt: fresh }, { state: "stopped", reason: null, exit: 10 }],
+    ["stale live pid, port_blocked", { ...blocked, updatedAt: stale }, { state: "stopped", reason: "stale", exit: 10 }],
+    ["fresh live pid, port_blocked", { ...blocked, updatedAt: fresh }, { state: "blocked", reason: "port_blocked", exit: 11 }],
+    ["dead pid, disconnected", { ...lost, pid: dead, updatedAt: fresh }, { state: "stopped", reason: null, exit: 10 }],
+    ["stale live pid, disconnected", { ...lost, updatedAt: stale }, { state: "stopped", reason: "stale", exit: 10 }],
+    ["dead pid and stale, host key mismatch", { ...mismatch, pid: dead, updatedAt: stale }, { state: "blocked", reason: "host_key_mismatch", exit: 13 }],
+  ];
+  for (const [name, patch, want] of rows) {
+    const view = evaluateStatus(stateFile(patch), alive, at);
+    expect([name, { state: view.state, reason: view.reason, exit: view.exit }]).toEqual([name, want]);
+    if (want.exit === 10) expect([name, view.retryAt]).toEqual([name, null]);
+  }
+
+  // The same divergent rows through the CLI.
+  const dp = await status(stateFile({ ...blocked, pid: dead }));
+  expect([dp.code, dp.body.state]).toEqual([10, "stopped"]);
+  const sp = await status(stateFile({ ...blocked, updatedAt: new Date(Date.now() - 91_000).toISOString() }));
+  expect([sp.code, sp.body.state, sp.body.reason]).toEqual([10, "stopped", "stale"]);
+});

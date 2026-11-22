@@ -278,6 +278,24 @@ test("[C54] keyPath ~/.ssh/id_ed25519 passes the key hop with advice to use a de
   expect(dedicated.hop("key").detail).not.toMatch(/dedicated key/);
 });
 
+test("[C123] a personal ~/.ssh/id_* key that is group-readable or not a key fails the key hop with exit 2, no advice", async () => {
+  for (const [mode, content] of [[0o644, null], [0o600, "not a key\n"]] as const) {
+    const home = tmp();
+    mkdirSync(join(home, ".ssh"), { mode: 0o700 });
+    const env = await locked({}, (c) => (c.keyPath = "~/.ssh/id_ed25519"));
+    const key = join(home, ".ssh", "id_ed25519");
+    if (content === null) copyFileSync(env.keyPath, key);
+    else writeFileSync(key, content);
+    chmodSync(key, mode);
+
+    const result = await doctor(env.path, { ...seams().io, homedir: () => home });
+    expect([mode, result.code]).toEqual([mode, 2]);
+    expect(result.hop("key")).toMatchObject({ ok: false, skipped: false });
+    expect(result.hop("key").detail).not.toMatch(/dedicated key/);
+    expect(result.hop("server_reachable")).toMatchObject({ skipped: true });
+  }
+});
+
 test("[C64] the lockdown hop fails for a shell without a PTY and for exec, and passes a forced command", async () => {
   const names = ["shell", "exec", "sftp", "local forward", "remote forward"];
   const table: [Server, string | null][] = [
