@@ -63,4 +63,12 @@ describe("surface", () => {
       unmount();
     }
   });
+
+  it("[tray-app C71] gives the settings window a transparent webview with an OS window effect", () => {
+    const conf = JSON.parse(readFileSync(join(import.meta.dirname, "..", "src-tauri", "tauri.conf.json"), "utf8"));
+    const window = conf.app.windows.find((w: { label: string }) => w.label === "settings");
+    expect(window.transparent).toBe(true);
+    expect(window.windowEffects.effects.length).toBeGreaterThan(0);
+    expect(conf.app.macOSPrivateApi).toBe(true);
+  });
 });
