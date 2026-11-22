@@ -41,6 +41,7 @@ test("[C2] status and run exit 2 with a config_invalid envelope for missing, non
       expect(body).toEqual({
         ok: false,
         command: verb,
+        configPath: path,
         error: { code: "config_invalid", field, message: expect.any(String) },
       });
       expect(body.error.message.length).toBeGreaterThan(0);

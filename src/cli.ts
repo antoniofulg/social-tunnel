@@ -99,8 +99,8 @@ export async function main(argv: string[], io: Io): Promise<number> {
   // that parses the object: string values get the same stripping as text output.
   const print = (value: unknown) =>
     io.stdout(JSON.stringify(value, (_key, v) => (typeof v === "string" ? sanitize(v) : v)) + "\n");
-  const fail = (exit: number, code: string, message: string, field?: string): number => {
-    if (args.json) print({ ok: false, command: args.verb, error: { code, message, field } });
+  const fail = (exit: number, code: string, message: string, field?: string, configPath?: string): number => {
+    if (args.json) print({ ok: false, command: args.verb, configPath, error: { code, message, field } });
     else io.stderr(`error: ${sanitize(message)}\n`);
     return exit;
   };
@@ -122,7 +122,8 @@ export async function main(argv: string[], io: Io): Promise<number> {
     }
 
     const loaded = loadConfig(configPath, io.readFile, io.homedir);
-    if (!loaded.ok) return fail(EXIT.usage, "config_invalid", loaded.message, loaded.field);
+    // The path it resolved tells a tray app "not set up" (no file there) from a broken config.
+    if (!loaded.ok) return fail(EXIT.usage, "config_invalid", loaded.message, loaded.field, configPath);
     const config = loaded.config;
 
     if (args.verb === "status") {

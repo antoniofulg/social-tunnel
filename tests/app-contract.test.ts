@@ -47,3 +47,22 @@ test("[tray-app C1] status --json adds server.user, server.hostKey, keyPath and 
   expect(down.code).toBe(10);
   expect(down.json()).toMatchObject({ domains: 1, keyPath: stopped.keyPath, allowlist: ["instagram.com"] });
 });
+
+test("[tray-app C2] a missing or non-JSON config exits 2 with config_invalid and the absolute configPath it resolved", async () => {
+  const { path: valid } = writeConfig();
+  const dir = valid.slice(0, valid.lastIndexOf("/"));
+  const missing = `${dir}/missing.json`;
+  const notJson = `${dir}/not-json.json`;
+  writeFileSync(notJson, "{ nope");
+  for (const verb of ["status", "run"]) {
+    for (const path of [missing, notJson]) {
+      const result = await cli([verb, "--json", "--config", path]);
+      expect(result.code).toBe(2);
+      const body = result.json();
+      expect([verb, path, body.ok, body.command, body.error.code, body.configPath]).toEqual([verb, path, false, verb, "config_invalid", path]);
+    }
+  }
+  // Through $SOCIAL_TUNNEL_CONFIG too: the path is the resolved one, absolute.
+  const viaEnv = await cli(["status", "--json"], { env: { SOCIAL_TUNNEL_CONFIG: missing } });
+  expect(viaEnv.json().configPath).toBe(missing);
+});

@@ -21,7 +21,7 @@ Complete: C1-C7, C60, C68, C72, C114 - proofs green
 **C1** - Config path resolves `--config` > `$SOCIAL_TUNNEL_CONFIG` > platform dir: macOS `~/Library/Application Support`, Linux `$XDG_CONFIG_HOME` then `~/.config`, Windows `%APPDATA%`, each + `social-tunnel/config.json` (CFG-01, AC 1)
 Proof: run unit | (pass) [C1]
 
-**C2** - For both `status --json` and `run --json`: missing, non-JSON and schema-invalid config each exit 2 with `{"ok":false,"command":<verb>,"error":{"code":"config_invalid","field":...}}` (CFG-01, AC 2)
+**C2** - For both `status --json` and `run --json`: missing, non-JSON and schema-invalid config each exit 2 with `{"ok":false,"command":<verb>,"configPath":<resolved path>,"error":{"code":"config_invalid","field":...}}` (CFG-01, AC 2, 104)
 Proof: run unit | (pass) [C2]
 
 **C3** - Domain entries `instagram`, `https://instagram.com`, `instagram.com:443`, `instagram.com/x`, `*.instagram.com`, `1.2.3.4`, `[::1]`, `::1` are each rejected naming the entry (CFG-01, AC 3)
