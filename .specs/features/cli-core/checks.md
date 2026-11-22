@@ -6,7 +6,7 @@ Build: `taskpolicy -b nice -n 10 bun run typecheck`
 Run unit: `env -u CLAUDECODE taskpolicy -b nice -n 10 bun test`
 Plan: `.specs/features/cli-core/plan.md`
 
-93 checks in 6 slices (ids C1-C94; C57 unused; C64-C69 added after verification round 1, C70-C78 after deep review round 1, C79-C84 after round 2, C85-C89 after round 4, C90-C94 after round 5) · 8 one-way doors · 2 open, of which 0 block
+94 checks in 6 slices (ids C1-C95; C57 unused; C64-C69 added after verification round 1, C70-C78 after deep review round 1, C79-C84 after round 2, C85-C89 after round 4, C90-C95 after round 5) · 8 one-way doors · 2 open, of which 0 block
 
 Test names start with the check id in brackets, so `bun test` prints `(pass) [C<n>] ...`. Each id has exactly one test. `CLAUDECODE` is unset because Bun hides per-test pass lines when it is set.
 
@@ -153,7 +153,7 @@ Proof: run unit | (pass) [C93]
 
 ### S3 - `run` holds the tunnel open and reports every state change
 
-Complete: C25-C33, C35-C37, C59, C61, C66, C67, C71, C78, C83, C94 and C58 (S2) - proofs green; C34 covers two `doctor` paths and is marked with S5
+Complete: C25-C33, C35-C37, C59, C61, C66, C67, C71, C78, C83, C94, C95 and C58 (S2) - proofs green; C34 covers two `doctor` paths and is marked with S5
 
 **C25** - Against an in-process SSH server, the tunnel authenticates with the key, requests `tcpip-forward` on `127.0.0.1:<remotePort>`, and `state.json` goes `connecting` -> `connected` (TUN-01, AC 18, 20)
 Proof: run unit | (pass) [C25]
@@ -217,6 +217,9 @@ Proof: run unit | (pass) [C83]
 
 **C94** - Against a server whose host key differs from the pin, the tunnel ends with `blocked`/`host_key_mismatch`; a `stop()` after that writes no further state, `state.json` still holds `blocked`/`host_key_mismatch` and `status --json` exits 13 (TUN-01, AC 80)
 Proof: run unit | (pass) [C94]
+
+**C95** - With a server that refuses the forward and a 60 ms blocked retry, the second and third `blocked`/`port_blocked` writes carry the first one's `since` while `retryAt` increases each time, and `status --json` exits 11 with that `since` (TUN-01, AC 81)
+Proof: run unit | (pass) [C95]
 
 ### S4 - `status` answers in one call
 
@@ -383,7 +386,7 @@ Evidence:
 - `src/tunnel.ts` (planned): 6 states, 7 backoff steps -> decides
 - closest analogue in the repo: none - first code in the repository
 
-Cost: about 93 tests in 10 files, all `bun test`; SSH tests use an in-process `ssh2` server, network tests use injected resolvers and dialers, so the suite needs no internet and no sshd.
+Cost: about 94 tests in 10 files, all `bun test`; SSH tests use an in-process `ssh2` server, network tests use injected resolvers and dialers, so the suite needs no internet and no sshd.
 
 ## Swept
 
@@ -394,7 +397,7 @@ Cost: about 93 tests in 10 files, all `bun test`; SSH tests use an in-process `s
 - concurrency: C19, C33, C66, C69, C90, C92
 - data lifecycle: C31, C44 - `state.json` is replaced atomically and goes stale after 90 s
 - dependency failure: C18, C28, C49, C93
-- state transitions: C25, C26, C27, C28, C32, C94
-- observability: C37, C43, C61, C73, C77, C78 - state and hop results are the observable surface; no metrics in v0.1
+- state transitions: C25, C26, C27, C28, C32, C94, C95
+- observability: C37, C43, C61, C73, C77, C78, C95 - state and hop results are the observable surface; no metrics in v0.1
 - deploy compatibility: n/a - first release; schema `version: 1` in config and state allows later migration
 - performance budget: C19, C24, C63, C86 - relay cap and idle timeout bound memory and sockets; no throughput target in v0.1

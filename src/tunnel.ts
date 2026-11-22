@@ -146,12 +146,14 @@ export function startTunnel(options: TunnelOptions): Tunnel {
   const set = (state: TunnelState, reason: string | null = null, retryInMs?: number) => {
     const now = Date.now();
     const stamp = new Date(now).toISOString();
+    // `since` is when this state and reason began: a retry that lands in them again keeps it.
+    const same = current?.state === state && current.reason === reason;
     current = {
       version: 1,
       pid: process.pid,
       state,
       reason,
-      since: stamp,
+      since: same ? current.since : stamp,
       retryAt: retryInMs === undefined ? null : new Date(now + retryInMs).toISOString(),
       server: { host: config.server.host, port: config.server.port },
       remotePort,

@@ -509,3 +509,22 @@ test("[C94] stop() after a host key mismatch leaves blocked/host_key_mismatch in
   expect(status.code).toBe(13);
   expect(status.json()).toMatchObject({ state: "blocked", reason: "host_key_mismatch" });
 });
+
+test("[C95] since stays at the first refusal while a blocked port is retried, and retryAt moves on", async () => {
+  const blockedRetryMs = 60;
+  const env = await setup({ forward: () => false });
+  const t = await tunnelTo(env, { blockedRetryMs });
+  const blocked = () => t.states.filter((s) => s.state === "blocked");
+  await until(() => blocked().length >= 3);
+
+  const [first, second, third] = blocked();
+  expect(Date.parse(first!.retryAt!) - Date.parse(first!.since)).toBe(blockedRetryMs);
+  expect([second!.since, third!.since]).toEqual([first!.since, first!.since]);
+  expect(Date.parse(second!.retryAt!)).toBeGreaterThan(Date.parse(first!.retryAt!));
+  expect(Date.parse(third!.retryAt!)).toBeGreaterThan(Date.parse(second!.retryAt!));
+  expect(Date.parse(third!.updatedAt)).toBeGreaterThan(Date.parse(first!.since));
+
+  const status = await cli(["status", "--json", "--config", env.path]);
+  expect(status.code).toBe(11);
+  expect(status.json().since).toBe(first!.since);
+});
