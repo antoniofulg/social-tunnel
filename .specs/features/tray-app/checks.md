@@ -1,7 +1,7 @@
 # Tray app checks
 
 Profile: ui
-Risk: C5, C6, C7, C8, C9, C10, C14, C23, C24, C36, C38, C39, C41, C44, C46, C47, C48, C54, C73, C79, C82 - the webview boundary, the sidecar argv allowlist and path, file access, the states that must stop retrying, and every rule that keeps the app off the user's own LaunchAgent run; a weak test there ships a webview that starts processes, a key on screen, or a killed tunnel
+Risk: C5, C6, C7, C8, C9, C10, C14, C23, C24, C36, C38, C39, C41, C44, C46, C47, C48, C54, C73, C79, C82, C83, C84, C85 - the webview boundary, the sidecar argv allowlist and path, file access, the states that must stop retrying, and every rule that keeps the app off the user's own LaunchAgent run; a weak test there ships a webview that starts processes, a key on screen, or a killed tunnel
 Build: `taskpolicy -b nice -n 10 bun run typecheck && (test ! -d app || (cd app && taskpolicy -b nice -n 10 bunx tsc --noEmit && cd src-tauri && taskpolicy -b nice -n 10 cargo clippy -j 2 --all-targets -- -D warnings))`
 Run cli: `env -u CLAUDECODE taskpolicy -b nice -n 10 bun test tests/app-contract.test.ts tests/install-local.test.ts`
 Run sidecar: `taskpolicy -b nice -n 10 bun run build:sidecar && cd app && env -u CLAUDECODE taskpolicy -b nice -n 10 bun test ./bun-tests/sidecar-compiled.test.ts`
@@ -13,7 +13,7 @@ Run smoke: `app/scripts/smoke-installed.sh`
 Plan: `.specs/features/tray-app/plan.md`
 UI contract: `.specs/features/tray-app/uiux.md`
 
-82 checks in 4 slices (C<n> proves plan criterion n) · 9 one-way doors · 3 open, of which 1 blocks (threat model before S1 build)
+85 checks in 4 slices (C<n> proves plan criterion n) · 9 one-way doors · 2 open, of which 0 block
 
 Root `bun test` (cli-core's `Run unit`) must keep collecting only `tests/`: the Bun tests that need a
 built sidecar or bundle live in `app/bun-tests/`, and app Vitest files live in `app/src` and
@@ -149,6 +149,9 @@ Proof: run rust | tray_c34_ ok
 **C35** - Three identical polls cause one menu build and one `snapshot` event; a fourth poll with a changed `retryAt` causes a second (TRAY-01, AC 35)
 Proof: run rust | tray_c35_ ok
 
+**C84** - The Settings window's navigation policy denies `https://example.com/` and `file:///etc/hosts`, allows the app's own origin, and its new-window handler denies every request (SAFE-01, AC 84)
+Proof: run rust | tray_c84_ ok
+
 ### S2 - The app runs or watches the tunnel, and its actions work
 
 **C36** - Status with `state` `connected` and pid 4242 while the app has no child yields zero spawns, no `Reconnect` entry and the row `Managed outside the app (pid 4242).` (SUP-01, AC 36)
@@ -207,6 +210,12 @@ Proof: run rust | tray_c53_ ok
 
 **C54** - `copy_fix("nope")`, `copy_fix("egress")` on a passed hop and `copy_fix` with no doctor result each return `no_fix` and make zero clipboard writes (SUP-01, AC 54)
 Proof: run rust | tray_c54_ ok
+
+**C83** - With a fake runner whose child has exited and been observed, Reconnect and Quit make zero signal calls; with a live child, the signal goes through its handle and the signal log names its pid (SUP-01, AC 83)
+Proof: run rust | tray_c83_ ok
+
+**C85** - `copy_fix` on a failing hop whose `fix` holds `\n`, `\r`, `\x1b` or `\x7f` returns `no_fix` and makes zero clipboard writes; a fix with quotes and `=` still copies (SUP-01, AC 85)
+Proof: run rust | tray_c85_ ok
 
 ### S3 - Settings shows the route, the server and the domains
 
@@ -327,7 +336,7 @@ Proof: run smoke | PASS [tray-app C82] quit
 | config-failure `configPath` (2 verbs) | status C2 · run C2 | - |
 | `get_snapshot` outcomes (2) | ok C55, C57 · `status_unreadable` C13, C64 | - |
 | `run_check` outcomes (3) | ok C49, C61 · `busy` C49 · `timeout` C51 | - |
-| `copy_fix` outcomes (2) | ok C52, C60 · `no_fix` C54 | - |
+| `copy_fix` outcomes (2) | ok C52, C60 · `no_fix` C54, C85 | - |
 | `set_open_at_login` outcomes (2) | ok C67, C78 · `autostart_failed` C78 | - |
 | `snapshot` event (1) | emitted on change C35, C69 | - |
 | `build:sidecar` outcomes (1) | built C3, C4 | - |
@@ -343,12 +352,12 @@ Proof: run smoke | PASS [tray-app C82] quit
 | ID | Abuse case | Expected | Checks |
 | --- | --- | --- | --- |
 | SEC-001 | Script running in the webview starts a process, passes its own arguments, or reads a file | No plugin permission to do so; only four typed commands; argv only from the allowlist | C5, C6, C7, C10 |
-| SEC-002 | Remote content loads into the webview (script, style, font, frame) | CSP blocks it; the built page references no remote URL | C9, C74 |
+| SEC-002 | Remote content loads into the webview (script, style, font, frame) or the window navigates away | CSP blocks it; the built page references no remote URL; navigation outside the app and new windows refused | C9, C74, C84 |
 | SEC-003 | A `social-tunnel` earlier on `PATH` replaces the bundled sidecar | The app runs only the binary next to its own executable | C8, C75 |
 | SEC-004 | The SSH private key is read by the app or shown in Settings | The app's Rust source has no file read; Settings shows path and fingerprint only | C10, C65 |
-| SEC-005 | The app stops, signals or duplicates a run it did not start (the user's LaunchAgent) | External run watched only; signals only to own children; `already_running` stops the app's attempt | C36, C38, C47, C82 |
+| SEC-005 | The app stops, signals or duplicates a run it did not start (the user's LaunchAgent) | External run watched only; signals only to own live children, never to a reaped pid; `already_running` stops the app's attempt | C36, C38, C47, C82, C83 |
 | SEC-006 | Config- or server-supplied text injects markup into Settings or forges menu rows | Text rendered as text; rows cut at 60 characters | C30, C73 |
-| SEC-007 | The webview places arbitrary text on the clipboard for the user to paste into a terminal | `copy_fix` takes a hop name and copies only doctor's own `fix` | C52, C54 |
+| SEC-007 | The webview places arbitrary text on the clipboard for the user to paste into a terminal | `copy_fix` takes a hop name and copies only doctor's own `fix`, never one holding a control character | C52, C54, C85 |
 | SEC-008 | The login item overwrites or edits the user's LaunchAgent plist | Different label; plist hash unchanged | C78, C79 |
 | SEC-009 | A child that floods its pipes stalls and the tunnel stops relaying | Pipes read continuously | C48 |
 
@@ -380,7 +389,7 @@ and 3 smoke-script runs on the installed app.
 - validation: C7, C13, C30, C54
 - failure modes: C13, C38, C39, C40, C41, C42, C51, C81
 - idempotency: C35, C37, C49, C55 - a repeated poll, spawn decision, check or Settings open does nothing twice
-- authorization: C5, C6, C8, C9, C47, C54 - the webview reaches four commands only; the app signals only its own children
+- authorization: C5, C6, C8, C9, C47, C54, C83, C84, C85 - the webview reaches four commands only; the app signals only its own children
 - concurrency: C12, C38, C49, C61 - one status and one doctor in flight; `run.lock` settles a start race with the LaunchAgent (C38); a second app instance only watches the first one's child (C36)
 - data lifecycle: C10, C78 - the app stores nothing; the login item is removed when switched off
 - dependency failure: C13, C18, C42, C51 - sidecar unreadable or hung, tunnel down, child crashing

@@ -128,6 +128,7 @@ Launch the app: one menu bar icon, no Dock icon, and a native menu whose title a
 33. WHILE the tray shows Reconnecting and Reduce Motion is on, the app SHALL show frame 0 and run no frame timer
 34. WHEN the tray leaves Reconnecting THEN the app SHALL stop the frame timer and show the new state's single image
 35. WHEN a poll yields the same menu model as the one shown THEN the app SHALL not rebuild the menu
+84. IF the Settings webview tries to navigate to a URL outside the app's own origin or to open a new window THEN the app SHALL refuse it and the window SHALL keep its current page
 
 **Independent test:** with a temp config pointing at an in-process test server, launch `tauri dev`; the menu
 bar shows one icon and no Dock icon; stopping the test server moves the menu from `Connected` to
@@ -159,6 +160,8 @@ Reconnect and Quit do what they say.
 52. WHEN the user chooses Copy Fix THEN the clipboard SHALL hold, byte for byte, the `fix` of the first failing hop of the latest doctor result
 53. WHILE no doctor result holds a failing hop with a non-empty `fix`, the app SHALL show Copy Fix disabled
 54. IF `copy_fix` is invoked with a hop not in the latest doctor result or a hop with no fix THEN it SHALL leave the clipboard unchanged and return `no_fix`
+83. The app SHALL signal a child only through that child's live process handle, and SHALL send no signal to its pid once the app has observed the child's exit
+85. IF the `fix` that Copy Fix would copy holds a control character (U+0000-U+001F or U+007F-U+009F) THEN `copy_fix` SHALL leave the clipboard unchanged and return `no_fix`
 
 **Independent test:** run the supervisor tests against a fake sidecar script that exits with each code and
 traps SIGTERM; then, on this Mac with the LaunchAgent live, open the app and see `Managed outside the app`
@@ -219,9 +222,9 @@ toggle Open at Login twice, quit, and compare the LaunchAgent pid and plist hash
 | ID | Slice | Criteria | Status |
 | --- | --- | --- | --- |
 | SIDE-01 | S1 | 1, 2, 3, 4 | Pending |
-| SAFE-01 | S1 | 5, 6, 7, 8, 9, 10 | Pending |
+| SAFE-01 | S1 | 5, 6, 7, 8, 9, 10, 84 | Pending |
 | TRAY-01 | S1 | 11-35 | Pending |
-| SUP-01 | S2 | 36-54 | Pending |
+| SUP-01 | S2 | 36-54, 83, 85 | Pending |
 | SET-01 | S3 | 55-74 | Pending |
 | PKG-01 | S4 | 75-82 | Pending |
 
@@ -230,10 +233,10 @@ toggle Open at Login twice, quit, and compare the LaunchAgent pid and plist hash
 | ID | Surface | Control | Requirements |
 | --- | --- | --- | --- |
 | S1 | New runtime (Tauri, React, Vite) and dependencies; the CLI compiled into the bundle | Pinned lockfiles (`app/bun.lock`, `Cargo.lock`); sidecar built from this repo's `src/cli.ts`; started only from the bundle path | SEC-003; criteria 3, 8, 75 |
-| S2 | Webview -> Rust IPC boundary | No plugin permissions in the webview; four typed commands; strict CSP; no remote content | SEC-001, SEC-002, SEC-007; criteria 5, 9, 54, 74 |
+| S2 | Webview -> Rust IPC boundary | No plugin permissions in the webview; four typed commands; strict CSP; no remote content | SEC-001, SEC-002, SEC-007; criteria 5, 9, 54, 74, 84 |
 | S5 | SSH key path and pinned host key shown in Settings | The app never reads a file, so it never holds key material; only the path and the public fingerprint are shown | SEC-004; criteria 10, 65 |
-| S6 | CLI-, config- and server-supplied text into menu rows, Settings and the clipboard; argv to the sidecar | Text rendered as text; rows cut at 60 characters; argv from a typed allowlist; clipboard only from doctor's own `fix` | SEC-005, SEC-006, SEC-007; criteria 6, 7, 30, 52, 54, 73 |
-| S11 | Child processes, signals, login item; the user's live LaunchAgent run | Signals only to own children; external runs watched; one run per config directory (`run.lock`); login-item label apart from the user's LaunchAgent; pipes drained | SEC-005, SEC-008, SEC-009; criteria 36, 38, 47, 48, 78, 79, 82 |
+| S6 | CLI-, config- and server-supplied text into menu rows, Settings and the clipboard; argv to the sidecar | Text rendered as text; rows cut at 60 characters; argv from a typed allowlist; clipboard only from doctor's own `fix` | SEC-005, SEC-006, SEC-007; criteria 6, 7, 30, 52, 54, 73, 85 |
+| S11 | Child processes, signals, login item; the user's live LaunchAgent run | Signals only to own children; external runs watched; one run per config directory (`run.lock`); login-item label apart from the user's LaunchAgent; pipes drained | SEC-005, SEC-008, SEC-009; criteria 36, 38, 47, 48, 78, 79, 82, 83 |
 
 ## Out of scope
 
@@ -264,7 +267,7 @@ toggle Open at Login twice, quit, and compare the LaunchAgent pid and plist hash
 
 | # | Kind | Question | Until answered |
 | --- | --- | --- | --- |
-| 1 | blocks | A scoped threat model (`.specs/features/tray-app/threat-model.md`, skill `security-threat-model`) for the sidecar, IPC and login-item boundaries is required by AGENTS.md before building | S1 build does not start; plan and checks stand |
+| 1 | answered | A scoped threat model (`.specs/features/tray-app/threat-model.md`, skill `security-threat-model`) for the sidecar, IPC and login-item boundaries is required by AGENTS.md before building | Answered: [threat-model.md](threat-model.md) (T13-T28); its three gaps became criteria 83-85 |
 | 2 | open | Once the app opens at login, retire the hand-written LaunchAgent? With both on, whichever starts second gets `already_running`; launchd then restarts its `run` every 30 s (log noise only) | The app watches the LaunchAgent run; nothing is changed on the machine |
 | 3 | open | Add a "test a host" field to Settings › Domains in a later slice? | No UI sends `--domain` in v0.2; criterion 26 covers a result that has one |
 
@@ -309,3 +312,4 @@ toggle Open at Login twice, quit, and compare the LaunchAgent pid and plist hash
 - Date: 2026-11-22
 - Reviewed revision: the user did not read this plan; criteria approved under the standing delegation at the commit that adds this file
 - Scope: build S1-S4 with tests and local commits only, including the additive CLI changes of doors 1-2 and a local copy to `~/Applications`; no push, signing, publishing, server changes, or changes to the user's LaunchAgent
+- Threat model amendment: criteria 83-85 (signal only through a live child handle, block webview navigation and new windows, refuse a control character in a copied fix) added from [threat-model.md](threat-model.md) T21, T14, T25 and approved under the user's standing delegation of 2026-11-22 ("Vou me ausentar...": approve criteria without asking); the user did not read them
