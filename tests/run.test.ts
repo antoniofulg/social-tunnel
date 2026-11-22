@@ -226,3 +226,17 @@ test("[C117] a live connected run whose state.json is gone keeps its run.lock pa
     await runA;
   }
 }, 30_000);
+
+test("[C119] an empty or corrupt run.lock names no live run: run takes it over at once", async () => {
+  const env = await setup({}, (config) => (config.server.hostKey = "SHA256:" + "A".repeat(43)));
+  servers.push(env.ssh);
+  const lock = join(env.path, "..", "run.lock");
+  for (const [index, content] of ["", "garbage\n", "0\n"].entries()) {
+    writeFileSync(lock, content);
+    const started = await cli(["run", "--json", "--config", env.path]);
+    // It got past the claim and reached the server, where the wrong host key pin ends it.
+    expect(started.code).toBe(13);
+    expect(env.ssh.clients.length).toBe(index + 1);
+    expect(existsSync(lock)).toBe(false);
+  }
+}, 30_000);

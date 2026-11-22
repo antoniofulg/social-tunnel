@@ -170,7 +170,8 @@ export async function main(argv: string[], io: Io): Promise<number> {
     // A running holder refreshes its lock on every heartbeat, so only a dead pid or a lock left
     // unrefreshed past the stale threshold is taken over; state.json plays no part (criterion 93).
     const staleMs = io.staleMs ?? DEFAULTS.staleMs;
-    const holder = claimRun(lock, (pid, ageMs) => pidAlive(pid) && ageMs <= staleMs);
+    // A lock is published only once its pid is written, so pid 0 (empty or corrupt) names no run.
+    const holder = claimRun(lock, (pid, ageMs) => pid > 0 && pidAlive(pid) && ageMs <= staleMs);
     if (holder !== null) {
       return fail(
         EXIT.usage,

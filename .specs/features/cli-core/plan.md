@@ -155,6 +155,7 @@ The home machine keeps a reverse tunnel to the server and records connected, los
 92. WHEN several `run` processes find the same leftover `run.lock` that criterion 90 allows them to take over THEN only the one that first creates `run.lock.takeover` exclusively SHALL replace the lock, and only if `run.lock` is still the file it judged; exactly one of them SHALL connect and the others SHALL exit 2 with `already_running`; a `run.lock.takeover` older than 10 s SHALL be cleared (added after deep review round 8; refines 90)
 93. WHILE `run` holds its `run.lock` THEN it SHALL refresh the lock's modification time on every heartbeat of criterion 49 that rewrites `state.json`, and a `run.lock` SHALL be taken over only when its pid is dead or the lock has not been refreshed within the stale threshold of criterion 58; a missing or unreadable `state.json` SHALL never make a lock eligible (added after deep review round 9; refines 90)
 95. WHEN a text-mode log line (without `--json`) carries a field value that is empty or contains whitespace, `=`, `"` or `\` THEN the system SHALL print that value as a double-quoted JSON string, so server-supplied text cannot read as another field (added after deep review round 9; refines 50)
+96. IF `run.lock` holds no positive pid (empty, non-numeric or `0`) THEN `run` SHALL treat it as naming no live run and take it over at once, because a lock is published only after its pid is written (added after deep review round 10; refines 90 and 93)
 28. The system SHALL write no private key material and no passphrase to stdout, stderr, `state.json` or `--json` output
 
 **Independent test:** start `run` against an in-process `ssh2` test server; kill the server, watch `state.json` go `connected` -> `disconnected` -> `reconnecting` -> `connected`; present a wrong host key and see exit 13.
@@ -223,7 +224,7 @@ The user or an agent learns which hop failed and what to do about it.
 | --- | --- | --- | --- |
 | CFG-01 | S1 | 1, 2, 3, 4, 5, 6, 55, 56, 68, 69, 91 | Done |
 | PRX-01 | S2 | 7-17, 44, 45, 46, 47, 58, 61, 66, 73, 74, 77, 78, 79, 94 | Done |
-| TUN-01 | S3 | 18-28, 48, 49, 50, 57, 60, 62, 70, 71, 80, 81, 86, 89, 90, 92, 93, 95 | Done |
+| TUN-01 | S3 | 18-28, 48, 49, 50, 57, 60, 62, 70, 71, 80, 81, 86, 89, 90, 92, 93, 95, 96 | Done |
 | STA-01 | S4 | 29-34, 51, 63, 84 | Done |
 | DOC-01 | S5 | 35-41, 52, 53, 54, 59, 64, 65, 67, 72, 75, 76, 82, 83, 85, 87, 88 | Done |
 | CLI-01 | S6 | 42, 43 | Done |
@@ -323,3 +324,4 @@ The user or an agent learns which hop failed and what to do about it.
 - Revision after deep review round 8 (2026-11-22): criteria 90 and 92 appended for two `run` processes started at once that both passed the single-instance check and could then race to take over one leftover lock, and (advisory) criterion 91 for a key file that could be swapped between its mode check and its read.
 - Approval of criteria 90-92 (2026-11-22): Decision: "Approve 90–92 (Recommended)", plus the user's standing delegation to proceed without asking for approval of fix-round criteria. Source: user in the coordinating chat, 2026-11-22, as relayed by the coordinating agent
 - Revision after deep review round 9 (2026-11-22): criteria 93-95 appended: 93 for a live `run` whose `run.lock` was never refreshed, so a second `run` took it over once `state.json` was missing and the lock was older than 90 s, and 94 to settle that a well-formed port other than 443 gets `403` (criterion 9) while only a malformed port gets `400` (criterion 44), and (advisory) 95 to quote text-mode log values so a server banner cannot forge a field; criterion 91 moved above S1's independent-test line, text unchanged. Approved under the user's standing delegation to proceed without asking for approval of fix-round criteria. Source: user in the coordinating chat, 2026-11-22
+- Revision after deep review round 10 (2026-11-22): criterion 96 appended for an empty or corrupt `run.lock` read as pid 0, which `run` treated as a live holder for up to 90 s. Approved under the user's standing delegation to proceed without asking for approval of fix-round criteria. Source: user in the coordinating chat, 2026-11-22
