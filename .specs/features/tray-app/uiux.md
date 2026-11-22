@@ -44,7 +44,7 @@
 - **New or changed:** new
 - **Story:** know what broke and act on it (S1, S2)
 - **Entry points:** click the tray mark
-- **States:** Not set up · Connected · Connected, managed outside · Reconnecting… · Disconnected (with doctor rows) · Disconnected (status unreadable) · Blocked at the server · Server key changed · Server allows too much · Run Check in progress
+- **States:** 13 layouts: Not set up, and each of Connected, Reconnecting…, Disconnected, Blocked at the server, Server key changed, Server allows too much with ownership owned-or-none (`Reconnect` shown) or external (`Managed outside the app` row, no `Reconnect`); modifiers: doctor hop rows, status unreadable, stale, config changed, Run Check in progress
 - **Viewports:** OS-drawn; captured at its natural size in light and dark
 
 ### Settings - `Status` tab
@@ -80,7 +80,7 @@ Menu (native), per state; `<…>` comes from the CLI:
 | State | Rows, in order |
 | --- | --- |
 | Not set up | `Not set up` · `Nothing is routed yet.` · — · `Set Up…` · — · `Quit social-tunnel` ⌘Q |
-| Connected | `Connected` · [`Managed outside the app (pid <pid>).`] · — · `Through home` · `<domain>`… · — · `Run Check` · [`Reconnect`] · `Settings…` ⌘, · `Open at Login` · — · `Quit social-tunnel` ⌘Q |
+| Connected | `Connected` · [`Managed outside the app (pid <pid>).`] · — · `Through home` · `<domain>` (at most 10) · [`<n> more in Settings`] · — · `Run Check` · [`Reconnect`] · `Settings…` ⌘, · `Open at Login` · — · `Quit social-tunnel` ⌘Q |
 | Reconnecting | `Reconnecting…` · `Next try in <n> s.` or `Trying now.` · [managed row] · `<n> domains paused. Nothing goes direct.` · — · `Run Check` · [`Reconnect`] · `Settings…` · `Open at Login` · — · `Quit social-tunnel` |
 | Disconnected | `Disconnected` · [two hop rows] · [`The tunnel stopped reporting.` / `The running tunnel uses an older config.` / `Can't read the tunnel status.`] · [managed row] · paused row · — · `Run Check` · [`Reconnect`] · `Settings…` · `Open at Login` · — · Quit |
 | Blocked, port | `Blocked at the server` · `Tunnel port: the server refused port <remotePort>` · `Fix: free port <remotePort>, allow it for the key` · paused row · — · `Copy Fix` · `Run Check` · … |
@@ -88,7 +88,13 @@ Menu (native), per state; `<…>` comes from the CLI:
 | Blocked, lock-down | `Server allows too much` · `Lock-down: the tunnel user can do more than forward` · `Fix: restrict the tunnel user on the server` · paused row · — · `Copy Fix` · `Run Check` · … |
 | Checking | `Run Check` row reads `Checking…`, disabled |
 
-Short hop rows (Disconnected, AC 27), 11 hop-and-exit pairs:
+`[Reconnect]` is shown in every layout except Not set up and external ownership. The paused row reads
+`1 domain paused. Nothing goes direct.` when n is 1 and uses the last readable count when status is
+unreadable (omitted if none was ever readable).
+
+Short hop rows, 11 hop-and-exit pairs. Under Disconnected (AC 27) only the 7 pairs with exit 2 or
+10 can appear; `ssh_auth`/13, `forward`/11 and `lockdown`/14 are the rows of the Blocked layouts
+(AC 23-25); `domain`/12 is unreachable in v0.2 (no call sends `--domain`, AC 26) and kept for later:
 
 | Hop, exit | Row 1 | Row 2 |
 | --- | --- | --- |
@@ -109,7 +115,7 @@ Settings: window title `social-tunnel`; stops `This Mac`, `Server`, `Tunnel port
 `Server reachable`, `SSH sign-in`, `Tunnel port`, `Lock-down`, `Internet from this Mac`; words `OK`,
 `Failed`, `Skipped`, `Refused`, `Key changed`, `Not checked`, `Checking…`; buttons `Check Again`,
 `Copy Fix`; summary `All checks OK.`; Server labels `Server`, `SSH port`, `Tunnel user`, `Server key`,
-`Key file`, `Tunnel port`; Domains heading `<n> domains use home internet`; General
+`Key file`, `Tunnel port`; Domains heading `<n> domains use home internet` (`1 domain uses home internet`); General
 `Open at login`; Set Up steps per AC 68; error `Can't read the tunnel status.`; note (Server and
 Set Up) `You sign in to each site yourself in the server's browser. social-tunnel never sees passwords or codes.`
 

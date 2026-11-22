@@ -78,6 +78,8 @@ changes and live in `Surface` and `Landing`.
 | 7. Login item | `tauri-plugin-autostart`, `MacosLauncher::LaunchAgent`, label not `tech.antoniofulg.social-tunnel` | `MacosLauncher::AppleScript`: asks for Automation access to System Events on first use |
 | 8. App dependencies | `app/package.json` (Bun): `react@19`, `react-dom@19`, `vite`, `@vitejs/plugin-react`, `tailwindcss@4`, `@tailwindcss/vite`, `@tauri-apps/api@2`, `@tauri-apps/cli@2`, `vitest`, `@testing-library/react`; crate: `tauri@2` (`tray-icon`, `macos-private-api`), `tauri-plugin-shell` (Rust side only), `tauri-plugin-autostart`, `tauri-plugin-clipboard-manager` (Rust side only), `serde`, `serde_json` | Native Swift/AppKit app: no Windows or Linux path; AGENTS.md fixes Tauri v2 + React + Vite + Tailwind v4 |
 | 9. Window vibrancy | `app.macOSPrivateApi: true`; Settings window `transparent: true` with `windowEffects` from the OS (`NSVisualEffectView`) | CSS `backdrop-filter` only: blurs web content, not the desktop (design README open question 2). Closes Mac App Store distribution |
+| 10. Root test discovery (added after criteria review) | root `bunfig.toml`: `[test]` / `root = "tests"` (checked on Bun 1.4.4: root `bun test` collects only `tests/`; `cd app && bun test ./bun-tests/<file>` still runs and prints `(pass)`) | `bun test tests/` in scripts only: a bare `bun test` (README, cli-core `Run unit`) would still collect `app/bun-tests/` and `app/src/**/*.test.tsx` |
+| 11. CSP behaviour harness (added after criteria review) | app dev dependency `@playwright/test` with its WebKit browser, used only by `Run dist` | Asserting the CSP string alone: jsdom enforces no CSP, so an inline `style` attribute blocked in WKWebView would pass every test |
 
 - Nothing else in this change is hard to reverse
 
@@ -93,7 +95,7 @@ Launch the app: one menu bar icon, no Dock icon, and a native menu whose title a
 
 **Acceptance Criteria**
 
-1. WHEN `status --json` succeeds THEN the CLI SHALL also print `server.user`, `server.hostKey`, `keyPath` (absolute) and `allowlist` (the normalized domains in config order), keeping every existing field with its current value and type and `domains` as the count
+1. WHEN `status --json` succeeds THEN the CLI SHALL also print `server.user`, `server.hostKey`, `keyPath` (absolute) and `allowlist` (the normalized domains in config order), keeping every existing field with its current value and type (including `configPath`, which success output already carries) and `domains` as the count
 2. WHEN `status --json` or `run --json` exits 2 with `error.code` `config_invalid` THEN the CLI SHALL also print the absolute top-level `configPath` it resolved, with `ok`, `command` and `error` unchanged
 3. WHEN `bun run build:sidecar` runs THEN it SHALL write `app/src-tauri/binaries/social-tunnel-<host target triple>` compiled by `bun build --compile` from `src/cli.ts`, and that binary SHALL print the `package.json` version for `--version` with exit 0
 4. WHEN the compiled sidecar runs `run --json` against an in-process `ssh2` test server with a pinned host key THEN `status --json` from the same binary SHALL report `"state":"connected"` with exit 0 within 10 s
@@ -105,10 +107,10 @@ Launch the app: one menu bar icon, no Dock icon, and a native menu whose title a
 10. The app's Rust source under `app/src-tauri/src` SHALL contain no filesystem read, write or open call (`std::fs::`, `File::open`, `File::create`, `OpenOptions`, `tokio::fs`) other than one `try_exists` on the `configPath` of criterion 2
 11. WHEN the app starts on macOS THEN it SHALL set `ActivationPolicy::Accessory` and create exactly one tray icon
 12. WHILE the app runs it SHALL call `status --json` every 2 s with at most one call in flight, skipping a tick that finds the previous call still running
-13. IF a `status` call runs past 10 s, exits with a code outside 0, 2, 10, 11 and 13, or prints stdout that is not one JSON object or exceeds 1 MiB THEN the app SHALL kill the call if it still runs and show Disconnected with the row `Can't read the tunnel status.`
+13. IF a `status` call runs past 10 s, prints stdout that is not one JSON object or exceeds 1 MiB, or gives a result that criterion 90 rejects THEN the app SHALL kill the call if it still runs and show Disconnected with the row `Can't read the tunnel status.`
 14. WHEN status exits 2 with `config_invalid` and no file exists at its `configPath` THEN the tray SHALL show the not-set-up mark and the menu SHALL hold exactly `Not set up`, `Nothing is routed yet.`, a separator, `Set Up…`, a separator and `Quit social-tunnel` (⌘Q)
 15. WHEN status exits 2 with `config_invalid` and a file exists at its `configPath` THEN the tray SHALL show the disconnected mark with the title `Disconnected`
-16. WHEN status exits 0 with `state` `connected` THEN the tray SHALL show the connected mark and the menu SHALL show `Connected`, a separator, the label `Through home` and one row per `allowlist` entry in order
+16. WHEN status exits 0 with `state` `connected` THEN the tray SHALL show the connected mark and the menu SHALL show `Connected`, a separator, the label `Through home` and one row per `allowlist` entry in order, at most 10, followed by the row `<n> more in Settings` when more remain
 17. WHILE status reports `connecting`, `reconnecting`, or `disconnected` with reason `connection_lost`, for less than 60 s since the app last saw `connected` or first saw this run not connected, the tray SHALL show the reconnecting mark with the title `Reconnecting…` and the row `Next try in <n> s.` (n = ceil((retryAt - now) / 1 s)), or `Trying now.` when `retryAt` is null or past
 18. WHEN the condition of criterion 17 reaches 60 s THEN the tray SHALL show the disconnected mark with the title `Disconnected`
 19. WHEN status reports `disconnected` with reason `auth_failed` THEN the tray SHALL show the disconnected mark with the title `Disconnected` at once, whatever the elapsed time
@@ -117,17 +119,20 @@ Launch the app: one menu bar icon, no Dock icon, and a native menu whose title a
 22. WHEN status reports `stopped` with reason `config_changed` THEN the menu SHALL add the row `The running tunnel uses an older config.`
 23. WHEN status exits 11 with `blocked` and `port_blocked` THEN the tray SHALL show the blocked mark and the menu SHALL show `Blocked at the server`, `Tunnel port: the server refused port <remotePort>`, `Fix: free port <remotePort>, allow it for the key` and the action `Copy Fix`
 24. WHEN status exits 13 THEN the tray SHALL show the blocked mark and the menu SHALL show `Server key changed`, `Server: host key does not match the saved one`, `Fix: do not connect until you know why` and the action `Review Server Key…`
-25. WHEN the latest doctor result exits 14 THEN the tray SHALL show the blocked mark and the menu SHALL show `Server allows too much`, `Lock-down: the tunnel user can do more than forward`, `Fix: restrict the tunnel user on the server` and `Copy Fix`, whatever status reports, until a later doctor result exits with another code
-26. WHEN the latest doctor result exits 12 THEN the tray SHALL keep the mark and menu title that status gives
-27. WHILE the tray shows Disconnected and a doctor result exists, the menu SHALL show the two short rows of its first failing hop from the app's map of 11 hop-and-exit pairs in uiux.md
-28. WHILE the tray shows Reconnecting, Disconnected or Blocked, the menu SHALL show `<domains> domains paused. Nothing goes direct.`, and WHILE it shows Connected or Not set up the menu SHALL omit that row
-29. The menu SHALL end, in every state except Not set up, with in order: the state's action row if any, `Run Check`, `Reconnect` when shown, `Settings…` (⌘,), `Open at Login` with a checkmark when on, a separator and `Quit social-tunnel` (⌘Q)
+25. WHILE status exits 0, 10 or 11 and the current doctor result (criterion 87) exits 14, the tray SHALL show the blocked mark and the menu SHALL show `Server allows too much`, `Lock-down: the tunnel user can do more than forward`, `Fix: restrict the tunnel user on the server` and `Copy Fix`; status exit 2, status exit 13 and an unreadable status SHALL take precedence over it
+26. The app SHALL pass `--domain` in no v0.2 sidecar call, so no doctor result it holds exits 12
+27. WHILE the tray shows Disconnected, the menu SHALL show the two short rows of the current doctor result's first failing hop from the hop-and-exit map in uiux.md, and SHALL show no hop rows when no doctor result is current or the current one has no failing hop
+28. WHILE the tray shows Reconnecting, Disconnected or Blocked, the menu SHALL show `<n> domains paused. Nothing goes direct.` (`1 domain paused. Nothing goes direct.` when n is 1), n being `domains` from the latest readable status, and SHALL omit the row when no status was ever readable; WHILE it shows Connected or Not set up the menu SHALL omit that row
+29. The menu SHALL end, in every state except Not set up, with in order: the state's action row if any, `Run Check`, `Reconnect` unless the run is external (criterion 36), `Settings…` (⌘,), `Open at Login` with a checkmark when on, a separator and `Quit social-tunnel` (⌘Q)
 30. IF a menu row built from CLI text is longer than 60 characters THEN the app SHALL cut it to 59 characters plus `…`
 31. The app SHALL ship one template image per tray state (not set up, connected, disconnected, blocked, and reconnecting as 8 frames) at 18×18 and 36×36 px, drawn from concept C's marks, with every pixel's RGB at 0, and SHALL set each as a template image
 32. WHILE the tray shows Reconnecting and Reduce Motion is off, the app SHALL cycle the 8 reconnecting frames at 150 ms each
 33. WHILE the tray shows Reconnecting and Reduce Motion is on, the app SHALL show frame 0 and run no frame timer
 34. WHEN the tray leaves Reconnecting THEN the app SHALL stop the frame timer and show the new state's single image
 35. WHEN a poll yields the same menu model as the one shown THEN the app SHALL not rebuild the menu
+86. The root `bunfig.toml` SHALL set `[test] root = "tests"`, so root `bun test` runs no test file under `app/`
+87. The app SHALL count a doctor result as current only while it started after the latest change of status `state`, `reason` or exit code and less than 10 minutes ago; the tray and menu SHALL use only a current result, and Settings SHALL show the latest one
+90. The app SHALL accept a status result as readable only when exit code and fields agree with this table, and SHALL treat every other result as unreadable (criterion 13): exit 0 with `ok` true and `state` `connected`; exit 10 with `ok` false and `state` one of `connecting`, `reconnecting`, `disconnected`, `stopped`; exit 11 with `state` `blocked` and `reason` `port_blocked`; exit 13 with `state` `blocked` and `reason` `host_key_mismatch`; exit 2 with `error.code` `config_invalid` and a string `configPath`; and for exits 0, 10, 11 and 13, `reason` null or a string, `pid` null or a positive integer, `retryAt` null or an ISO time, `server.host` a string, `server.port`, `remotePort` and `domains` integers, `allowlist` an array of strings
 84. IF the Settings webview tries to navigate to a URL outside the app's own origin or to open a new window THEN the app SHALL refuse it and the window SHALL keep its current page
 
 **Independent test:** with a temp config pointing at an in-process test server, launch `tauri dev`; the menu
@@ -141,9 +146,9 @@ Reconnect and Quit do what they say.
 
 **Acceptance Criteria**
 
-36. WHEN status shows a live run (`pid` not null, `state` not `stopped`) whose pid is not the app's child THEN the app SHALL start no `run`, hide `Reconnect`, and show the row `Managed outside the app (pid <pid>).`
-37. WHEN status shows no live run, its config exists and is valid, and status did not exit 13 THEN the app SHALL spawn exactly one `run --json` child
-38. IF the app's child exits 2 with `error.code` `already_running` THEN the app SHALL not restart it and SHALL watch the live run per criterion 36
+36. WHEN status shows a non-null `pid` that is not the app's child, whatever its `state` (including `stopped` with `stale` or `config_changed`), THEN the app SHALL start no `run`, hide `Reconnect`, and show the row `Managed outside the app (pid <pid>).`
+37. WHEN status exits 10 with `pid` null and the app has no child and no pending restart THEN the app SHALL spawn exactly one `run --json` child
+38. IF the app's child exits 2 with `error.code` `already_running` THEN the app SHALL not restart it at once, SHALL watch the live run per criterion 36, and SHALL spawn again only after the backoff of criterion 42 once a later status shows `pid` null
 39. IF the app's child exits 13 THEN the app SHALL not restart it
 40. IF the app's child exits 2 with any other `error.code` THEN the app SHALL not restart it and SHALL run `doctor --json` once
 41. IF the app's child exits 0 without the app having signalled it THEN the app SHALL not restart it
@@ -153,14 +158,15 @@ Reconnect and Quit do what they say.
 45. WHEN the user chooses Reconnect while the app has no child and watches no external run THEN the app SHALL cancel any pending restart and spawn one `run --json` at once
 46. WHEN the user quits THEN the app SHALL kill running `status` and `doctor` calls, send SIGTERM to its own child, wait up to 5 s, send SIGKILL if the child still runs, and then exit
 47. The app SHALL send no signal to any pid other than those of processes it spawned
-48. WHILE a child runs, the app SHALL read and discard its stdout and stderr as they arrive, so a child that writes 1 MiB to stderr keeps running
+48. WHILE a child runs, the app SHALL drain its stdout and stderr as they arrive, discarding stderr and keeping only the last 64 KiB of stdout, and SHALL classify the child's exit by the last JSON-object line of that kept stdout, so a child that writes 1 MiB to stderr keeps running and its final JSON is still read
 49. WHEN the user chooses Run Check THEN the app SHALL run `doctor --json` once and show that row as `Checking…`, disabled, until it ends, and a Run Check while one runs SHALL start no second doctor
-50. WHEN the tray enters Disconnected or Blocked THEN the app SHALL run `doctor --json` unless a doctor run started within the last 30 s
+50. WHEN a poll leaves the tray in Disconnected or Blocked, judged after that poll's spawn decision (criterion 37) and the 5 s grace of criterion 20, THEN the app SHALL run `doctor --json` unless a doctor run started within the last 30 s
 51. IF a doctor call runs past 120 s THEN the app SHALL kill it and keep the previous doctor result
 52. WHEN the user chooses Copy Fix THEN the clipboard SHALL hold, byte for byte, the `fix` of the first failing hop of the latest doctor result
 53. WHILE no doctor result holds a failing hop with a non-empty `fix`, the app SHALL show Copy Fix disabled
 54. IF `copy_fix` is invoked with a hop not in the latest doctor result or a hop with no fix THEN it SHALL leave the clipboard unchanged and return `no_fix`
 83. The app SHALL signal a child only through that child's live process handle, and SHALL send no signal to its pid once the app has observed the child's exit
+88. WHILE the tray shows Blocked from a doctor result that exited 14, the app SHALL run `doctor --json` again every 10 minutes
 85. IF the `fix` that Copy Fix would copy holds a control character (U+0000-U+001F or U+007F-U+009F) THEN `copy_fix` SHALL leave the clipboard unchanged and return `no_fix`
 
 **Independent test:** run the supervisor tests against a fake sidecar script that exits with each code and
@@ -185,7 +191,7 @@ tabs, all read-only except Open at login.
 63. WHILE no snapshot has arrived, the Status tab SHALL show the stop names and tab labels with the word `Checking…`
 64. WHILE the snapshot says the status is unreadable, the Status tab SHALL show `Can't read the tunnel status.` and every stop `Not checked`
 65. The Server tab SHALL show host, SSH port, tunnel user, host key fingerprint, key path and tunnel port from the snapshot, and SHALL hold no field with the key file's content
-66. The Domains tab SHALL list every `allowlist` entry in config order under `<n> domains use home internet`, with no add, remove or edit control
+66. The Domains tab SHALL list every `allowlist` entry in config order under `<n> domains use home internet` (`1 domain uses home internet` when n is 1), with no add, remove or edit control
 67. The General tab SHALL show an `Open at login` checkbox whose state comes from the snapshot and whose change calls `set_open_at_login`
 68. WHEN the user chooses Set Up… THEN Settings SHALL open a Set Up view with the README quick-start steps titled `1. Create a dedicated key on this Mac`, `2. Prepare the server (once, as root)`, `3. Write the config on this Mac`, `4. Check every hop`, the `configPath` from status in step 3, and a `Check Again` button
 69. WHEN a status call succeeds while the Set Up view is shown THEN Settings SHALL switch to the Status tab
@@ -194,6 +200,7 @@ tabs, all read-only except Open at login.
 72. The Settings page SHALL follow the system appearance with the light and dark values of the design README token table
 73. The Settings page SHALL render CLI-supplied text (hosts, paths, domains, details, fixes) as text only, so a domain value `<img src=x onerror=alert(1)>` shows those characters and adds no element
 74. The built frontend in `app/dist` SHALL reference no `http://` or `https://` resource
+89. WHEN the built Settings page loads in WebKit under the CSP of `tauri.conf.json` with stubbed IPC THEN it SHALL raise zero `securitypolicyviolation` events across the four tabs and the Set Up view, and no rendered element SHALL carry a `style` attribute
 
 **Independent test:** `bunx vitest run` over the Settings components with fixture snapshots for each state,
 then open Settings in `tauri dev` and walk the four tabs with the keyboard.
@@ -221,11 +228,11 @@ toggle Open at Login twice, quit, and compare the LaunchAgent pid and plist hash
 
 | ID | Slice | Criteria | Status |
 | --- | --- | --- | --- |
-| SIDE-01 | S1 | 1, 2, 3, 4 | Pending |
+| SIDE-01 | S1 | 1, 2, 3, 4, 86 | Pending |
 | SAFE-01 | S1 | 5, 6, 7, 8, 9, 10, 84 | Pending |
-| TRAY-01 | S1 | 11-35 | Pending |
-| SUP-01 | S2 | 36-54, 83, 85 | Pending |
-| SET-01 | S3 | 55-74 | Pending |
+| TRAY-01 | S1 | 11-35, 87, 90 | Pending |
+| SUP-01 | S2 | 36-54, 83, 85, 88 | Pending |
+| SET-01 | S3 | 55-74, 89 | Pending |
 | PKG-01 | S4 | 75-82 | Pending |
 
 ## Security Surfaces
@@ -233,7 +240,7 @@ toggle Open at Login twice, quit, and compare the LaunchAgent pid and plist hash
 | ID | Surface | Control | Requirements |
 | --- | --- | --- | --- |
 | S1 | New runtime (Tauri, React, Vite) and dependencies; the CLI compiled into the bundle | Pinned lockfiles (`app/bun.lock`, `Cargo.lock`); sidecar built from this repo's `src/cli.ts`; started only from the bundle path | SEC-003; criteria 3, 8, 75 |
-| S2 | Webview -> Rust IPC boundary | No plugin permissions in the webview; four typed commands; strict CSP; no remote content | SEC-001, SEC-002, SEC-007; criteria 5, 9, 54, 74, 84 |
+| S2 | Webview -> Rust IPC boundary | No plugin permissions in the webview; four typed commands; strict CSP; no remote content | SEC-001, SEC-002, SEC-007; criteria 5, 9, 54, 74, 84, 89 |
 | S5 | SSH key path and pinned host key shown in Settings | The app never reads a file, so it never holds key material; only the path and the public fingerprint are shown | SEC-004; criteria 10, 65 |
 | S6 | CLI-, config- and server-supplied text into menu rows, Settings and the clipboard; argv to the sidecar | Text rendered as text; rows cut at 60 characters; argv from a typed allowlist; clipboard only from doctor's own `fix` | SEC-005, SEC-006, SEC-007; criteria 6, 7, 30, 52, 54, 73, 85 |
 | S11 | Child processes, signals, login item; the user's live LaunchAgent run | Signals only to own children; external runs watched; one run per config directory (`run.lock`); login-item label apart from the user's LaunchAgent; pipes drained | SEC-005, SEC-008, SEC-009; criteria 36, 38, 47, 48, 78, 79, 82, 83 |
@@ -258,18 +265,20 @@ toggle Open at Login twice, quit, and compare the LaunchAgent pid and plist hash
 | Assumption | Chosen default | Rationale | Confirmed? |
 | --- | --- | --- | --- |
 | Where the 60 s reconnecting limit is measured | from the app's last `connected` poll, or from the first poll that saw this run not connected | `status` restarts `since` on every disconnected/reconnecting switch, so only the app can see total downtime | y - user delegated |
+| When Reconnecting turns Disconnected (design open question 4) | after 60 s of downtime | The backoff tries at 1, 2, 4, 8 and 16 s (31 s) and then waits 30 s, so 60 s is about five failed tries | y - user delegated |
+| How long a doctor result stays current | until status `state`, `reason` or exit changes, at most 10 minutes; lock-down alarms re-check every 10 minutes | A result from before a status change describes another situation; 10 minutes bounds both a stale alarm and doctor's SSH probes | y - user delegated |
 | Settings accent colour | system accent colour (concept A) | Native menu and macOS controls already follow it; design open question 9 | y - user delegated |
 | Settings window size | 640×520 pt, not resizable | Fits the route strip and the longest fix text (lock-down, about 500 characters) wrapped | y - user delegated |
 | Settings copy for the Check button | `Check Again` (concept B) in Settings; `Run Check` in the menu (decided) | Keeps both sources' words where they appear | y - user delegated |
 | Child stderr | read and discarded; the app keeps no log in v0.2 | `Logs` is out of scope; nothing new to redact (invariant 5) | y - user delegated |
 
-**Open questions:**
+**Open questions:** none - all resolved or logged above; the answered ones stay below for the record.
 
 | # | Kind | Question | Until answered |
 | --- | --- | --- | --- |
 | 1 | answered | A scoped threat model (`.specs/features/tray-app/threat-model.md`, skill `security-threat-model`) for the sidecar, IPC and login-item boundaries is required by AGENTS.md before building | Answered: [threat-model.md](threat-model.md) (T13-T28); its three gaps became criteria 83-85 |
-| 2 | open | Once the app opens at login, retire the hand-written LaunchAgent? With both on, whichever starts second gets `already_running`; launchd then restarts its `run` every 30 s (log noise only) | The app watches the LaunchAgent run; nothing is changed on the machine |
-| 3 | open | Add a "test a host" field to Settings › Domains in a later slice? | No UI sends `--domain` in v0.2; criterion 26 covers a result that has one |
+| 2 | answered | Once the app opens at login, retire the hand-written LaunchAgent? | Answered 2026-11-22 (coordinator): keep it; the app watches an external run. Retiring it is the user's call later - non-blocking follow-up. With both on, whichever starts second gets `already_running` and launchd restarts its `run` every 30 s (log noise only) |
+| 3 | answered | Add a "test a host" field to Settings › Domains? | Answered 2026-11-22 (coordinator): stays out of v0.2 (Out of scope); criterion 26 keeps every v0.2 call free of `--domain` |
 
 ## Observable
 
@@ -313,3 +322,4 @@ toggle Open at Login twice, quit, and compare the LaunchAgent pid and plist hash
 - Reviewed revision: the user did not read this plan; criteria approved under the standing delegation at the commit that adds this file
 - Scope: build S1-S4 with tests and local commits only, including the additive CLI changes of doors 1-2 and a local copy to `~/Applications`; no push, signing, publishing, server changes, or changes to the user's LaunchAgent
 - Threat model amendment: criteria 83-85 (signal only through a live child handle, block webview navigation and new windows, refuse a control character in a copied fix) added from [threat-model.md](threat-model.md) T21, T14, T25 and approved under the user's standing delegation of 2026-11-22 ("Vou me ausentar...": approve criteria without asking); the user did not read them
+- Revision after criteria review (2026-11-22): fixed every finding of the fresh criteria reviewer before build. Criteria 1, 13, 16, 25-29, 36-38, 48, 50 and 66 clarified; 86 (root `bun test` isolation, Landing 10), 87 (current doctor result), 88 (lock-down re-check), 89 (CSP behaviour in WebKit, Landing 11) and 90 (status validity table) added; open questions 2 and 3 answered by the coordinator. No capability added or removed. Approved under the user's standing delegation of 2026-11-22 to approve criteria without asking; the user did not read this revision

@@ -1,23 +1,25 @@
 # Tray app checks
 
 Profile: ui
-Risk: C5, C6, C7, C8, C9, C10, C14, C23, C24, C36, C38, C39, C41, C44, C46, C47, C48, C54, C73, C79, C82, C83, C84, C85 - the webview boundary, the sidecar argv allowlist and path, file access, the states that must stop retrying, and every rule that keeps the app off the user's own LaunchAgent run; a weak test there ships a webview that starts processes, a key on screen, or a killed tunnel
+Risk: C5, C6, C7, C8, C9, C10, C13, C14, C25, C36, C86, C87, C89, C90, C23, C24, C36, C38, C39, C41, C44, C46, C47, C48, C54, C73, C79, C82, C83, C84, C85 - the webview boundary, the sidecar argv allowlist and path, file access, the states that must stop retrying, and every rule that keeps the app off the user's own LaunchAgent run; a weak test there ships a webview that starts processes, a key on screen, or a killed tunnel
 Build: `taskpolicy -b nice -n 10 bun run typecheck && (test ! -d app || (cd app && taskpolicy -b nice -n 10 bunx tsc --noEmit && cd src-tauri && taskpolicy -b nice -n 10 cargo clippy -j 2 --all-targets -- -D warnings))`
 Run cli: `env -u CLAUDECODE taskpolicy -b nice -n 10 bun test tests/app-contract.test.ts tests/install-local.test.ts`
 Run sidecar: `taskpolicy -b nice -n 10 bun run build:sidecar && cd app && env -u CLAUDECODE taskpolicy -b nice -n 10 bun test ./bun-tests/sidecar-compiled.test.ts`
 Run rust: `cd app/src-tauri && taskpolicy -b nice -n 10 cargo test -j 2 -- --test-threads=2`
 Run ui: `cd app && taskpolicy -b nice -n 10 bunx vitest run src --reporter=verbose --maxWorkers=2`
-Run dist: `cd app && taskpolicy -b nice -n 10 bunx vite build && taskpolicy -b nice -n 10 bunx vitest run tests/dist --reporter=verbose`
+Run dist: `cd app && taskpolicy -b nice -n 10 bunx vite build && taskpolicy -b nice -n 10 bunx vitest run tests/dist --reporter=verbose && taskpolicy -b nice -n 10 bunx playwright test --project=webkit --workers=1 --reporter=list`
 Run bundle: `cd app && CARGO_BUILD_JOBS=2 taskpolicy -b nice -n 10 bunx tauri build --bundles app && env -u CLAUDECODE taskpolicy -b nice -n 10 bun test ./bun-tests/bundle.test.ts`
 Run smoke: `app/scripts/smoke-installed.sh`
 Plan: `.specs/features/tray-app/plan.md`
 UI contract: `.specs/features/tray-app/uiux.md`
 
-85 checks in 4 slices (C<n> proves plan criterion n) · 9 one-way doors · 2 open, of which 0 block
+90 checks in 4 slices (C<n> proves plan criterion n) · 11 one-way doors · 0 open (questions 2 and 3 answered; retiring the user's LaunchAgent is a non-blocking follow-up)
 
-Root `bun test` (cli-core's `Run unit`) must keep collecting only `tests/`: the Bun tests that need a
-built sidecar or bundle live in `app/bun-tests/`, and app Vitest files live in `app/src` and
-`app/tests`, so neither runs under cli-core's suite.
+Root `bun test` (cli-core's `Run unit`) collects only `tests/` through `bunfig.toml` `[test] root = "tests"`
+(plan Landing 10, C86): the Bun tests that need a built sidecar or bundle live in `app/bun-tests/`,
+and app Vitest files live in `app/src` and `app/tests`, so neither runs under cli-core's suite. Checked
+on Bun 1.4.4 on 2026-11-22: with that bunfig, root `bun test` ran only `tests/`, and
+`cd app && env -u CLAUDECODE bun test ./bun-tests/<file>` printed `(pass) [tray-app C<n>] ...`.
 
 Test names carry the feature and check id so they never match cli-core's `[C<n>]` lines: Bun and
 Vitest tests are named `[tray-app C<n>] ...`, Rust tests `tray_c<n>_...` (cargo prints
@@ -44,7 +46,7 @@ captures, recorded in `verification.md`; the affected checks stay unproven until
 
 ### S1 - The tray shows the live tunnel state
 
-**C1** - `status --json` on a valid config prints `server.user`, `server.hostKey`, absolute `keyPath` and `allowlist` equal to the normalized config domains in order, and every field of cli-core C7/C30 with an unchanged value and type, `domains` a number (SIDE-01, AC 1)
+**C1** - `status --json` on a valid config prints `server.user`, `server.hostKey`, absolute `keyPath` and `allowlist` equal to the normalized config domains in order, and every field of cli-core C7/C30 with an unchanged value and type, `configPath` unchanged and `domains` a number (SIDE-01, AC 1)
 Proof: run cli | (pass) [tray-app C1]
 
 **C2** - With a missing config and with a non-JSON config, `status --json` and `run --json` each exit 2 with `error.code` `config_invalid` and a top-level `configPath` equal to the absolute path they resolved (SIDE-01, AC 2)
@@ -56,7 +58,7 @@ Proof: run sidecar | (pass) [tray-app C3]
 **C4** - The compiled sidecar's `run --json` against an in-process `ssh2` server with the pinned host key makes the same binary's `status --json` print `"state":"connected"` and exit 0 within 10 s (SIDE-01, AC 4)
 Proof: run sidecar | (pass) [tray-app C4]
 
-**C5** - Every capability file under `app/src-tauri/capabilities/` holds no permission starting with any of the 9 forbidden prefixes, and the union of permissions equals the expected set: core event listen/unlisten plus `get_snapshot`, `run_check`, `copy_fix`, `set_open_at_login` (SAFE-01, AC 5)
+**C5** - Every capability file under `app/src-tauri/capabilities/` holds no permission starting with any of the 9 forbidden prefixes; the union of permissions equals core event listen/unlisten plus `allow-get-snapshot`, `allow-run-check`, `allow-copy-fix`, `allow-set-open-at-login`; and because Tauri v2 lets the webview call any registered command unless an app manifest is set, `build.rs` sets `AppManifest::commands` to exactly those 4 names and `generate_handler!` registers exactly those 4 (SAFE-01, AC 5)
 Proof: run rust | tray_c5_ ok
 
 **C6** - The argv builder returns exactly `["status","--json"]`, `["doctor","--json"]`, `["doctor","--json","--domain","instagram.com"]`, `["run","--json"]`, and each with `"--config","/abs/config.json"` appended, for its 4 call kinds (SAFE-01, AC 6)
@@ -71,16 +73,16 @@ Proof: run rust | tray_c8_ ok
 **C9** - `tauri.conf.json` has the exact CSP string of AC 9, `withGlobalTauri` false, `frontendDist` `../dist`, and no capability carries a `remote` key (SAFE-01, AC 9)
 Proof: run rust | tray_c9_ ok
 
-**C10** - `app/src-tauri/src` holds no `std::fs::`, `fs::read`, `fs::write`, `File::open`, `File::create`, `OpenOptions` or `tokio::fs`, and exactly one `try_exists` (SAFE-01, AC 10)
-Proof: `! grep -rnE 'std::fs::|fs::read|fs::write|File::open|File::create|OpenOptions|tokio::fs' app/src-tauri/src && test "$(grep -rn 'try_exists' app/src-tauri/src | wc -l | tr -d ' ')" = 1`
+**C10** - `app/src-tauri/src` holds no `fs::` path (so no `use std::fs;` then `fs::metadata`, `fs::read_dir`, `fs::copy`, `fs::remove_file`), no `std::fs`, `read_dir`, `metadata(`, `include_str!`, `include_bytes!`, `File::`, `OpenOptions` or `tokio::fs` (tray images come from `tauri::include_image!`), and exactly one line calling `.try_exists(` that is not a comment (SAFE-01, AC 10)
+Proof: `! grep -rnE '\bfs::|std::fs\b|read_dir|metadata\(|include_str!|include_bytes!|File::|OpenOptions|tokio::fs' app/src-tauri/src && test "$(grep -rhE '^[^/]*\.try_exists\(' app/src-tauri/src | wc -l | tr -d ' ')" = 1`
 
 **C11** - The installed app runs as a UI element (`lsappinfo` `ApplicationType` = `UIElement`) with exactly one menu bar extra (TRAY-01, AC 11)
 Proof: run smoke | PASS [tray-app C11]
 
-**C12** - With a fake runner whose status call takes 5 s and a fake clock advanced 10 s, the poller starts exactly 2 calls with never 2 in flight; with an instant runner it starts 5 calls in 10 s (TRAY-01, AC 12)
+**C12** - With ticks at 0, 2, 4, 6, 8 and 10 s of fake time: an instant runner gets 6 calls; a runner whose call takes 5 s gets calls at 0 and 6 s only, never 2 in flight (TRAY-01, AC 12)
 Proof: run rust | tray_c12_ ok
 
-**C13** - A status call that hangs past 10 s (killed), exits 1, exits 14, prints `not json`, prints two objects, or prints 1 MiB + 1 byte each yields Disconnected with the row `Can't read the tunnel status.` (TRAY-01, AC 13)
+**C13** - A status call that hangs past 10 s (killed), prints `not json`, prints two objects, prints 1 MiB + 1 byte, or gives a result C90 rejects each yields Disconnected with the row `Can't read the tunnel status.` (TRAY-01, AC 13)
 Proof: run rust | tray_c13_ ok
 
 **C14** - Status exit 2 `config_invalid` with a `configPath` that does not exist yields the not-set-up image and exactly the 6 menu entries of AC 14 (TRAY-01, AC 14)
@@ -89,7 +91,7 @@ Proof: run rust | tray_c14_ ok
 **C15** - Status exit 2 `config_invalid` with an existing `configPath` yields the disconnected image and title `Disconnected` (TRAY-01, AC 15)
 Proof: run rust | tray_c15_ ok
 
-**C16** - Status exit 0 `connected` with allowlist `[instagram.com, facebook.com, threads.net]` yields the connected image and rows `Connected`, separator, `Through home`, the 3 domains in that order (TRAY-01, AC 16)
+**C16** - Status exit 0 `connected` with allowlist `[instagram.com, facebook.com, threads.net]` yields the connected image and rows `Connected`, separator, `Through home`, the 3 domains in that order; an allowlist of 12 shows the first 10 then `2 more in Settings` (TRAY-01, AC 16)
 Proof: run rust | tray_c16_ ok
 
 **C17** - `connecting`, `reconnecting`, and `disconnected`/`connection_lost` at 59 s of downtime each yield `Reconnecting…`; retryAt now+7.2 s gives `Next try in 8 s.`, retryAt null and retryAt in the past give `Trying now.` (TRAY-01, AC 17)
@@ -113,22 +115,22 @@ Proof: run rust | tray_c22_ ok
 **C23** - Status exit 11 `blocked`/`port_blocked` with `remotePort` 8888 yields the blocked image and rows `Blocked at the server`, `Tunnel port: the server refused port 8888`, `Fix: free port 8888, allow it for the key`, then action `Copy Fix` (TRAY-01, AC 23)
 Proof: run rust | tray_c23_ ok
 
-**C24** - Status exit 13 yields the blocked image and rows `Server key changed`, `Server: host key does not match the saved one`, `Fix: do not connect until you know why`, then action `Review Server Key…` (TRAY-01, AC 24)
+**C24** - Status exit 13 yields the blocked image and rows `Server key changed`, `Server: host key does not match the saved one`, `Fix: do not connect until you know why`, then action `Review Server Key…`, also when the current doctor result exits 14 (precedence over AC 25) (TRAY-01, AC 24)
 Proof: run rust | tray_c24_ ok
 
-**C25** - A doctor result with exit 14 and status `connected` yields the blocked image and `Server allows too much` rows with `Copy Fix`; a later doctor result with exit 0 returns to `Connected` (TRAY-01, AC 25)
+**C25** - Status `connected` (and status exit 10, and 11) with a current doctor result exiting 14 yields the blocked image and `Server allows too much` rows with `Copy Fix`; negatives: status exit 13 with it yields `Server key changed`, status exit 2 yields its config state, unreadable status yields `Can't read the tunnel status.`, the same doctor result after a status change or 10 minutes old yields `Connected`, and a later doctor exit 0 yields `Connected` (TRAY-01, AC 25)
 Proof: run rust | tray_c25_ ok
 
-**C26** - A doctor result with exit 12 leaves status `connected` as `Connected` and status `reconnecting` as `Reconnecting…` (TRAY-01, AC 26)
+**C26** - Across Run Check, the automatic doctor runs, `run_check` and Settings' `Check Again`, the fake runner records no argv containing `--domain` (TRAY-01, AC 26)
 Proof: run rust | tray_c26_ ok
 
-**C27** - Table-driven over the 11 hop-and-exit pairs of uiux.md: a Disconnected model with that doctor result shows exactly that pair's two rows, each at most 60 characters with sample values substituted (TRAY-01, AC 27)
+**C27** - Table-driven over the 7 pairs reachable under Disconnected (config/2, key/2, server_reachable/10, ssh_auth/10, forward/10, lockdown/10, egress/10): a Disconnected model with that current doctor result shows exactly that pair's two rows, each at most 60 characters with sample values; no current result and a current result with exit 0 (no failing hop) show no hop rows; a result older than the last status change shows none (TRAY-01, AC 27)
 Proof: run rust | tray_c27_ ok
 
-**C28** - Reconnecting, Disconnected and Blocked models with status `domains` 5 contain `5 domains paused. Nothing goes direct.`; Connected and Not set up models contain no row with `paused` (TRAY-01, AC 28)
+**C28** - Reconnecting, Disconnected and Blocked models with `domains` 5 contain `5 domains paused. Nothing goes direct.`; with 1, `1 domain paused. Nothing goes direct.`; an unreadable status after a readable one with 3 shows `3 domains paused. Nothing goes direct.`; an unreadable status with none ever readable has no `paused` row; Connected and Not set up models have no `paused` row (TRAY-01, AC 28)
 Proof: run rust | tray_c28_ ok
 
-**C29** - For each of the 8 non-idle menu states the trailing entries are, in order: action (when any), `Run Check`, `Reconnect` (owned only), `Settings…` with accelerator `CmdOrCtrl+,`, `Open at Login` checkable, separator, `Quit social-tunnel` with `CmdOrCtrl+Q` (TRAY-01, AC 29)
+**C29** - For each of the 12 non-idle layouts (titles `Connected`, `Reconnecting…`, `Disconnected`, `Blocked at the server`, `Server key changed`, `Server allows too much`, each with ownership owned-or-none and external) the trailing entries are, in order: action (when any), `Run Check`, `Reconnect` (in the 6 owned-or-none layouts, absent in the 6 external ones), `Settings…` with accelerator `CmdOrCtrl+,`, `Open at Login` checkable, separator, `Quit social-tunnel` with `CmdOrCtrl+Q` (TRAY-01, AC 29)
 Proof: run rust | tray_c29_ ok
 
 **C30** - A 61-character domain row becomes 59 characters plus `…`; a 60-character row is unchanged (TRAY-01, AC 30)
@@ -149,24 +151,33 @@ Proof: run rust | tray_c34_ ok
 **C35** - Three identical polls cause one menu build and one `snapshot` event; a fourth poll with a changed `retryAt` causes a second (TRAY-01, AC 35)
 Proof: run rust | tray_c35_ ok
 
+**C86** - Root `bunfig.toml` sets `[test] root = "tests"`; with app test files present, root `bun test` prints no file path under `app/` (SIDE-01, AC 86)
+Proof: `grep -qx 'root = "tests"' bunfig.toml && test -n "$(ls app/bun-tests/*.test.ts)" && ! env -u CLAUDECODE taskpolicy -b nice -n 10 bun test 2>&1 | grep -qE '^(\./)?app/'`
+
+**C87** - A doctor result started before the latest change of status `state`, `reason` or exit, or 10 minutes old, is not current: the model shows no hop rows and no lock-down Blocked from it, while the snapshot still carries it as `latest` for Settings; one started after the change and 9 min 59 s old is current (TRAY-01, AC 87)
+Proof: run rust | tray_c87_ ok
+
+**C90** - Table-driven: the 5 valid rows of AC 90 are accepted; exit 0 with `reconnecting`, exit 10 with `connected`, unknown state `paused`, missing `server`, `pid` `"4242"`, `domains` `"5"`, `allowlist` not an array, exit 11 with `host_key_mismatch`, exit 2 with `error.code` `internal`, exit 2 without `configPath`, and exit 14 are each rejected as unreadable (TRAY-01, AC 90)
+Proof: run rust | tray_c90_ ok
+
 **C84** - The Settings window's navigation policy denies `https://example.com/` and `file:///etc/hosts`, allows the app's own origin, and its new-window handler denies every request (SAFE-01, AC 84)
 Proof: run rust | tray_c84_ ok
 
 ### S2 - The app runs or watches the tunnel, and its actions work
 
-**C36** - Status with `state` `connected` and pid 4242 while the app has no child yields zero spawns, no `Reconnect` entry and the row `Managed outside the app (pid 4242).` (SUP-01, AC 36)
+**C36** - Status pid 4242 while the app has no child, with `state` `connected`, with `stopped`/`stale` and with `stopped`/`config_changed`, each yields zero spawns over 10 polls, no `Reconnect` entry and the row `Managed outside the app (pid 4242).` (SUP-01, AC 36)
 Proof: run rust | tray_c36_ ok
 
-**C37** - Status `stopped` with an existing valid config and exit 10 yields exactly one spawn of `run --json`, and no second spawn over the next 5 polls while the child lives (SUP-01, AC 37)
+**C37** - Status exit 10 `stopped` with pid null and no child or pending restart yields exactly one spawn of `run --json`, and no second spawn over the next 5 polls while the child lives (SUP-01, AC 37)
 Proof: run rust | tray_c37_ ok
 
-**C38** - A child that exits 2 with `{"error":{"code":"already_running"}}` is not respawned over 60 s of fake time, and the next poll with a live external pid is watched (SUP-01, AC 38)
+**C38** - A child that writes 1 MiB to stderr and then `{"ok":false,"command":"run","error":{"code":"already_running",...}}` on stdout and exits 2 is classified `already_running`; with polls then showing `stopped`/`config_changed` pid 4242 it is not respawned over 60 s of fake time (no spawn every 2 s); a later poll with pid null respawns only after the 1 s backoff (SUP-01, AC 38)
 Proof: run rust | tray_c38_ ok
 
 **C39** - A child that exits 13 is not respawned over 60 s of fake time (SUP-01, AC 39)
 Proof: run rust | tray_c39_ ok
 
-**C40** - A child that exits 2 with `key_permissions` is not respawned and exactly one `doctor --json` starts (SUP-01, AC 40)
+**C40** - A child that writes 1 MiB to stderr, then the `key_permissions` error JSON on stdout, and exits 2 is not respawned and exactly one `doctor --json` starts (SUP-01, AC 40)
 Proof: run rust | tray_c40_ ok
 
 **C41** - A child that exits 0 without an app-sent signal is not respawned over 60 s of fake time (SUP-01, AC 41)
@@ -190,13 +201,13 @@ Proof: run rust | tray_c46_ ok
 **C47** - Across Quit, Reconnect and every exit path with an external live pid in status, the signal log holds only pids the runner spawned (SUP-01, AC 47)
 Proof: run rust | tray_c47_ ok
 
-**C48** - A fake sidecar that writes 1 MiB to stderr then sleeps is still running 2 s later, and its exit is observed when it ends (SUP-01, AC 48)
+**C48** - A fake sidecar that writes 1 MiB to stderr then sleeps is still running 2 s later; one that writes 200 KiB of stdout lines then a JSON line keeps exactly the last 64 KiB and its exit is classified from that JSON line (SUP-01, AC 48)
 Proof: run rust | tray_c48_ ok
 
 **C49** - Run Check starts one `doctor --json`, the menu shows `Checking…` disabled while it runs, and a second Run Check and a `run_check` IPC call during it start no second doctor and return the same result (SUP-01, AC 49)
 Proof: run rust | tray_c49_ ok
 
-**C50** - Entering Disconnected starts one doctor; entering Blocked 20 s later starts none; entering Disconnected again 31 s after the first starts one (SUP-01, AC 50)
+**C50** - Entering Disconnected starts one doctor; entering Blocked 20 s later starts none; entering Disconnected again 31 s after the first starts one; at launch with status exit 10 `stopped` pid null the first poll spawns `run`, shows Reconnecting (AC 20) and starts no doctor (SUP-01, AC 50)
 Proof: run rust | tray_c50_ ok
 
 **C51** - A doctor call that hangs is killed at 120 s and the model keeps the previous doctor result (SUP-01, AC 51)
@@ -213,6 +224,9 @@ Proof: run rust | tray_c54_ ok
 
 **C83** - With a fake runner whose child has exited and been observed, Reconnect and Quit make zero signal calls; with a live child, the signal goes through its handle and the signal log names its pid (SUP-01, AC 83)
 Proof: run rust | tray_c83_ ok
+
+**C88** - With a current doctor result exiting 14 and status `connected`, fake time advanced 30 min starts doctor at 10, 20 and 30 min; once a doctor exits 0 no further run starts (SUP-01, AC 88)
+Proof: run rust | tray_c88_ ok
 
 **C85** - `copy_fix` on a failing hop whose `fix` holds `\n`, `\r`, `\x1b` or `\x7f` returns `no_fix` and makes zero clipboard writes; a fix with quotes and `=` still copies (SUP-01, AC 85)
 Proof: run rust | tray_c85_ ok
@@ -252,7 +266,7 @@ Proof: run ui | ✓ [tray-app C64]
 **C65** - The Server tab shows host, SSH port, tunnel user, `SHA256:` fingerprint, key path and tunnel port from the fixture, and the rendered text holds no `PRIVATE KEY` and no key-body fixture marker (SET-01, AC 65)
 Proof: run ui | ✓ [tray-app C65]
 
-**C66** - The Domains tab lists 5 fixture domains in order under `5 domains use home internet` and holds no input, no button and no `Remove` text (SET-01, AC 66)
+**C66** - The Domains tab lists 5 fixture domains in order under `5 domains use home internet` (one domain: `1 domain uses home internet`) and holds no input, no button and no `Remove` text (SET-01, AC 66)
 Proof: run ui | ✓ [tray-app C66]
 
 **C67** - The General tab's `Open at login` checkbox is checked for `openAtLogin: true`, and clicking it calls `set_open_at_login` with `false` once (SET-01, AC 67)
@@ -279,6 +293,10 @@ Proof: run ui | ✓ [tray-app C73]
 
 **C74** - After `vite build`, no `src`, `href` or CSS `url()` in `app/dist` starts with `http://` or `https://` (SET-01, AC 74)
 Proof: run dist | ✓ [tray-app C74]
+
+**C89** - The built page in Playwright WebKit, served with the exact CSP of `tauri.conf.json` as a response header and IPC stubbed with fixture snapshots, records zero `securitypolicyviolation` events on each of Status, Server, Domains, General and the Set Up view; and across every Vitest fixture state no rendered element has a `style` attribute (SET-01, AC 89)
+Proof: run dist | ✓ [tray-app C89]
+Proof: run ui | ✓ [tray-app C89]
 
 ### S4 - A bundled app that opens at login
 
@@ -313,14 +331,21 @@ Proof: run smoke | PASS [tray-app C82] quit
 | Set (size) | Member -> proof | Unproven |
 | --- | --- | --- |
 | status input -> tray state (15) | not set up C14 · config invalid C15 · connected C16 · connecting C17 · reconnecting C17 · lost <60 s C17 · lost >=60 s C18 · auth_failed C19 · stopped C20 · stopped after spawn C20 · stale C21 · config_changed C22 · port_blocked C23 · host_key_mismatch C24 · unreadable C13 | - |
-| unreadable status causes (6) | timeout C13 · exit 1 C13 · exit 14 C13 · not JSON C13 · two objects C13 · over 1 MiB C13 | - |
-| doctor exit -> tray (3) | 14 raises Blocked C25 · 12 leaves state C26 · other exits give rows only C27 | - |
+| unreadable status causes (5) | timeout C13 · not JSON C13 · two objects C13 · over 1 MiB C13 · rejected by the validity table C13, C90 | - |
+| status validity table (16) | exit 0 ok C90 · exit 10 ok C90 · exit 11 ok C90 · exit 13 ok C90 · exit 2 ok C90 · 0+reconnecting C90 · 10+connected C90 · unknown state C90 · missing server C90 · pid string C90 · domains string C90 · allowlist not array C90 · 11+host_key_mismatch C90 · 2+internal C90 · 2 without configPath C90 · exit 14 C90 | - |
+| doctor exit -> tray (3) | 14 raises Blocked C25 · 12 never produced in v0.2 C26 · other exits give rows only C27 | - |
+| doctor result freshness (4) | current C87 · started before status change C87, C25, C27 · 10 minutes old C87, C25 · exit 0 no failing hop C27 | - |
+| lock-down precedence (4) | status 13 wins C24, C25 · status 2 wins C25 · unreadable wins C25 · re-check every 10 min C88 | - |
+| paused row (4) | plural C28 · singular C28 · last known count C28 · never readable C28 | - |
+| domain rows cap (2) | up to 10 C16 · `<n> more in Settings` C16 | - |
 | tray images (5) | not set up C14, C31 · connected C16, C31 · reconnecting C17, C31-C33 · disconnected C15, C31 · blocked C23, C31 | - |
 | menu titles (7) | `Not set up` C14 · `Connected` C16 · `Reconnecting…` C17 · `Disconnected` C15 · `Blocked at the server` C23 · `Server key changed` C24 · `Server allows too much` C25 | - |
-| short hop rows (11) | config/2 C27 · key/2 C27 · server_reachable/10 C27 · ssh_auth/10 C27 · ssh_auth/13 C27 · forward/11 C27 · forward/10 C27 · lockdown/14 C27 · lockdown/10 C27 · egress/10 C27 · domain/12 C27 | - |
+| short hop rows (11) | config/2 C27 · key/2 C27 · server_reachable/10 C27 · ssh_auth/10 C27 · forward/10 C27 · lockdown/10 C27 · egress/10 C27 · ssh_auth/13 as Blocked rows C24 · forward/11 as Blocked rows C23 · lockdown/14 as Blocked rows C25 · domain/12 unreachable in v0.2 C26 | - |
+| menu layouts (13) | Not set up C14 · Connected owned C29 · Connected external C29 · Reconnecting owned C29 · Reconnecting external C29 · Disconnected owned C29 · Disconnected external C29 · Blocked port owned C29 · Blocked port external C29 · key changed owned C29 · key changed external C29 · lock-down owned C29 · lock-down external C29 | - |
 | menu trailing rows (6) | action C29 · `Run Check` C29, C49 · `Reconnect` C29, C36 · `Settings…` C29 · `Open at Login` C29, C78 · `Quit social-tunnel` C29, C46 | - |
 | motion (3) | loop C32 · Reduce Motion still C33 · stop on leave C34 | - |
-| ownership (2) | owned C44 · external C36, C47, C82 | - |
+| ownership (4) | owned C44 · external live C36, C47, C82 · external `stopped`/`stale` with pid C36 · external `stopped`/`config_changed` with pid C36, C38 | - |
+| child stdout handling (3) | final JSON after 1 MiB stderr C38, C40 · 64 KiB tail kept C48 · stderr drained C48 | - |
 | child exit outcomes (6) | `already_running` C38 · 13 C39 · 2 other C40 · 0 unsignalled C41 · 1 or other code C42 · outside signal C42 | - |
 | backoff steps (7) | 1 s C42 · 2 s C42 · 4 s C42 · 8 s C42 · 16 s C42 · 30 s cap C42 · reset after 60 s C42, C44 | - |
 | `sidecar argv` accepted shapes (8) | status C6 · doctor C6 · doctor --domain C6 · run C6 · status --config C6 · doctor --config C6 · doctor --domain --config C6 · run --config C6 | - |
@@ -332,6 +357,8 @@ Proof: run smoke | PASS [tray-app C82] quit
 | tabs (4) | Status C57, C58 · Server C57, C65, C70 · Domains C57, C66 · General C57, C67 | - |
 | Settings states (5) | loading C63 · unreadable C64 · checking C61 · not set up C68 · populated C59, C60 | - |
 | Reduce Transparency (2) | off C71 · on C71 | - |
+| CSP behaviour views (5) | Status C89 · Server C89 · Domains C89 · General C89 · Set Up C89 | - |
+| root test discovery (2) | `app/bun-tests` excluded C86 · `app/src` Vitest files excluded C86 | - |
 | `social-tunnel status --json` added fields (4) | `server.user` C1 · `server.hostKey` C1 · `keyPath` C1 · `allowlist` C1 | - |
 | config-failure `configPath` (2 verbs) | status C2 · run C2 | - |
 | `get_snapshot` outcomes (2) | ok C55, C57 · `status_unreadable` C13, C64 | - |
@@ -352,10 +379,10 @@ Proof: run smoke | PASS [tray-app C82] quit
 | ID | Abuse case | Expected | Checks |
 | --- | --- | --- | --- |
 | SEC-001 | Script running in the webview starts a process, passes its own arguments, or reads a file | No plugin permission to do so; only four typed commands; argv only from the allowlist | C5, C6, C7, C10 |
-| SEC-002 | Remote content loads into the webview (script, style, font, frame) or the window navigates away | CSP blocks it; the built page references no remote URL; navigation outside the app and new windows refused | C9, C74, C84 |
+| SEC-002 | Remote content loads into the webview (script, style, font, frame) or the window navigates away | CSP blocks it and the page runs under it with zero violations; the built page references no remote URL; navigation outside the app and new windows refused | C9, C74, C84, C89 |
 | SEC-003 | A `social-tunnel` earlier on `PATH` replaces the bundled sidecar | The app runs only the binary next to its own executable | C8, C75 |
 | SEC-004 | The SSH private key is read by the app or shown in Settings | The app's Rust source has no file read; Settings shows path and fingerprint only | C10, C65 |
-| SEC-005 | The app stops, signals or duplicates a run it did not start (the user's LaunchAgent) | External run watched only; signals only to own live children, never to a reaped pid; `already_running` stops the app's attempt | C36, C38, C47, C82, C83 |
+| SEC-005 | The app stops, signals or duplicates a run it did not start (the user's LaunchAgent) | External run (any status with a pid not the app's) watched only; signals only to own live children, never to a reaped pid; `already_running` stops the app's attempt without a respawn loop | C36, C38, C47, C82, C83 |
 | SEC-006 | Config- or server-supplied text injects markup into Settings or forges menu rows | Text rendered as text; rows cut at 60 characters | C30, C73 |
 | SEC-007 | The webview places arbitrary text on the clipboard for the user to paste into a terminal | `copy_fix` takes a hop name and copies only doctor's own `fix`, never one holding a control character | C52, C54, C85 |
 | SEC-008 | The login item overwrites or edits the user's LaunchAgent plist | Different label; plist hash unchanged | C78, C79 |
@@ -376,7 +403,7 @@ feature builds under these rows; they are not written into the repo's guidelines
 
 Evidence:
 
-- app `model`: 15 status inputs, 3 doctor overrides, 11 hop rows, 8 menu layouts -> decides
+- app `model`: 15 status inputs, 16-row validity table, doctor freshness and precedence, 11 hop rows, 13 menu layouts -> decides
 - app `supervisor`: 6 exit outcomes, 7 backoff steps, 2 ownership cases, 3 signal paths -> decides
 - app `sidecar` argv: 4 shapes, 8 rejections -> decides
 - closest analogue in the repo: `src/status.ts` `evaluateStatus`, a state-to-output decision table proven row by row at its own layer (cli-core C30-C34, C121) and at the CLI boundary
@@ -386,14 +413,14 @@ and 3 smoke-script runs on the installed app.
 
 ## Swept
 
-- validation: C7, C13, C30, C54
+- validation: C7, C13, C30, C54, C90
 - failure modes: C13, C38, C39, C40, C41, C42, C51, C81
 - idempotency: C35, C37, C49, C55 - a repeated poll, spawn decision, check or Settings open does nothing twice
 - authorization: C5, C6, C8, C9, C47, C54, C83, C84, C85 - the webview reaches four commands only; the app signals only its own children
 - concurrency: C12, C38, C49, C61 - one status and one doctor in flight; `run.lock` settles a start race with the LaunchAgent (C38); a second app instance only watches the first one's child (C36)
 - data lifecycle: C10, C78 - the app stores nothing; the login item is removed when switched off
 - dependency failure: C13, C18, C42, C51 - sidecar unreadable or hung, tunnel down, child crashing
-- state transitions: C17, C18, C19, C20, C34, C42, C44, C45, C69
+- state transitions: C17, C18, C19, C20, C25, C34, C42, C44, C45, C50, C69, C87, C88
 - observability: C13, C27, C60 - the menu and Settings are the observable surface; the app writes no log in v0.2 (C10)
 - deploy compatibility: C1, C2 - JSON additions are additive and cli-core proofs stay green; rollback is deleting the `.app`, the CLI fields stay harmless
 - performance budget: C12, C35, C48 - one status process at a time every 2 s and a menu rebuilt only on change; CPU use is a service target, not a criterion, in v0.2
