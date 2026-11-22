@@ -130,9 +130,11 @@ export async function runDoctor(
       hop: "server_reachable",
       run: async () => {
         const { host, port } = config.server;
+        const giveUp = new AbortController();
         try {
-          (await withTimeout(deps.dial(host, port), timeoutMs, (late) => late.destroy())).destroy();
+          (await withTimeout(deps.dial(host, port, giveUp.signal), timeoutMs, (late) => late.destroy())).destroy();
         } catch {
+          giveUp.abort(); // a dial that timed out is still connecting: stop it
           return fail(
             `no TCP connection to ${host}:${port}`,
             "Check server.host and server.port, that the server is up, and that its firewall allows SSH.",
@@ -303,12 +305,14 @@ export async function runDoctor(
           "Check this computer's internet connection and DNS.",
           EXIT.down,
         );
+        const giveUp = new AbortController();
         try {
           const addresses = await withTimeout(deps.resolve(host), timeoutMs);
           const address = addresses.find((a) => !isRefusedAddress(a));
           if (address === undefined) return failed;
-          (await withTimeout(deps.dial(address, 443), timeoutMs, (late) => late.destroy())).destroy();
+          (await withTimeout(deps.dial(address, 443, giveUp.signal), timeoutMs, (late) => late.destroy())).destroy();
         } catch {
+          giveUp.abort();
           return failed;
         }
         return pass(`${host}:443 is reachable from this computer`);

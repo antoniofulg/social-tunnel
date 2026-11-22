@@ -496,6 +496,26 @@ test("[C109] the lockdown fix pins the listen port and gateway ports like the RE
   expect(hop("lockdown").fix).toContain("GatewayPorts no");
 });
 
+test("[C110] a server_reachable or egress dial still pending at the timeout is told to stop", async () => {
+  const env = await locked();
+  for (const [hop, port] of [["server_reachable", env.config.server.port], ["egress", 443]] as const) {
+    const signals: (AbortSignal | undefined)[] = [];
+    const io: Partial<Io> = {
+      ...seams().io,
+      dial: (address, p, signal) => {
+        if (p !== port) return localDial(address, p);
+        signals.push(signal);
+        return new Promise(() => {});
+      },
+      connectTimeoutMs: 300,
+    };
+    const result = await doctor(env.path, io);
+    expect([hop, result.code]).toEqual([hop, 10]);
+    expect(result.hop(hop)).toMatchObject({ ok: false, skipped: false });
+    expect(signals.map((s) => s?.aborted)).toEqual([true]);
+  }
+});
+
 test("[C97] a forward request the connection never answers fails the forward hop with exit 10, not as a refusal", async () => {
   const drop = (ssh: TestServer) => ssh.clients.forEach((c) => (c as unknown as { _sock: { destroy(): void } })._sock.destroy());
   const table: [RegExp, (env: () => Awaited<ReturnType<typeof setup>>) => Server][] = [

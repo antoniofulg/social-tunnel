@@ -6,7 +6,7 @@ Build: `taskpolicy -b nice -n 10 bun run typecheck`
 Run unit: `env -u CLAUDECODE taskpolicy -b nice -n 10 bun test`
 Plan: `.specs/features/cli-core/plan.md`
 
-108 checks in 6 slices (ids C1-C109; C57 unused; C64-C69 added after verification round 1, C70-C78 after deep review round 1, C79-C84 after round 2, C85-C89 after round 4, C90-C104 after round 5, C105-C109 after round 6) · 8 one-way doors · 2 open, of which 0 block
+109 checks in 6 slices (ids C1-C110; C57 unused; C64-C69 added after verification round 1, C70-C78 after deep review round 1, C79-C84 after round 2, C85-C89 after round 4, C90-C104 after round 5, C105-C110 after round 6) · 8 one-way doors · 2 open, of which 0 block
 
 Test names start with the check id in brackets, so `bun test` prints `(pass) [C<n>] ...`. Each id has exactly one test. `CLAUDECODE` is unset because Bun hides per-test pass lines when it is set.
 
@@ -281,7 +281,7 @@ Proof: run unit | (pass) [C104]
 
 ### S5 - `doctor` names the broken hop and its fix
 
-Complete: C45-C54, C62, C64, C74-C76, C84, C87, C88, C96, C97, C105, C109 and C34 (S3) - proofs green
+Complete: C45-C54, C62, C64, C74-C76, C84, C87, C88, C96, C97, C105, C109, C110 and C34 (S3) - proofs green
 
 **C45** - Hops run in order `config, key, server_reachable, ssh_auth, forward, lockdown, egress`; after a `server_reachable` failure the later hops have `ok: false`, `skipped: true` and an empty `fix` (DOC-01, AC 35, 36)
 Proof: run unit | (pass) [C45]
@@ -349,6 +349,9 @@ Proof: run unit | (pass) [C105]
 **C109** - The `lockdown` hop's fix contains `PermitListen 127.0.0.1:<remotePort>` and `GatewayPorts no` (DOC-01, AC 87)
 Proof: run unit | (pass) [C109]
 
+**C110** - With a 300 ms timeout and a dialer that never connects, once for the SSH port and once for 443, `doctor` exits 10 failing `server_reachable` and `egress` respectively, and each pending dial's abort signal has fired (DOC-01, AC 88)
+Proof: run unit | (pass) [C110]
+
 ### S6 - The CLI never blocks an agent
 
 Complete: C55, C56, C77 - proofs green
@@ -392,7 +395,7 @@ Proof: run unit | (pass) [C77]
 | backoff steps (7) | 1 s C29 · 2 s C29 · 4 s C29 · 8 s C29 · 16 s C29 · 30 s cap C29 · reset C29, C106 | - |
 | startup assembly (2) | CLI subprocess C26, C32, C58 · in-process harness C25 | - |
 
-- Claims naming an outcome, interface or response shape: C2, C8-C19, C21-C23, C26, C32, C38-C44, C50-C53, C55, C58, C61, C62, C64-C66, C68-C77, C85-C88, C90, C94, C96-C100, C104, C105 - each has a proof that crosses the boundary it names
+- Claims naming an outcome, interface or response shape: C2, C8-C19, C21-C23, C26, C32, C38-C44, C50-C53, C55, C58, C61, C62, C64-C66, C68-C77, C85-C88, C90, C94, C96-C100, C104, C105, C110 - each has a proof that crosses the boundary it names
 - No other check claims more than the cases its proof enumerates
 
 ## Security cases
@@ -407,7 +410,7 @@ Proof: run unit | (pass) [C77]
 | SEC-006 | Private key leaks through output, logs or state | No key line in any captured output | C6, C34 |
 | SEC-007 | Malformed or smuggled CONNECT head | `400`/`405`/`408`, trailing bytes never parsed | C16, C17, C21, C22, C23, C37 |
 | SEC-008 | Tunnel user can open a shell, sftp or other forwards | `lockdown` hop fails, exit 14 | C53, C64, C75, C76, C84, C87, C88, C96, C105, C109 |
-| SEC-009 | Connection flood or slow client exhausts the home machine | `503` past 256 relays, timeouts close stalled sockets | C17, C18, C19, C24, C63, C69, C80, C82, C85, C86, C90, C91, C92, C93, C98, C99, C100 |
+| SEC-009 | Connection flood or slow client exhausts the home machine | `503` past 256 relays, timeouts close stalled sockets | C17, C18, C19, C24, C63, C69, C80, C82, C85, C86, C90, C91, C92, C93, C98, C99, C100, C110 |
 | SEC-010 | Server-, request- or config-supplied text carries terminal control characters or shell syntax into output a person or agent acts on | Characters stripped; printed commands quoted | C37, C74, C78, C83, C104 |
 
 ## Test policy
@@ -428,17 +431,17 @@ Evidence:
 - `src/tunnel.ts`: 6 states, 7 backoff steps -> decides
 - closest analogue in the repo: none - these modules are the first of their kind here
 
-Cost: about 108 tests in 10 files, all `bun test`; SSH tests use an in-process `ssh2` server, network tests use injected resolvers and dialers, so the suite needs no internet and no sshd.
+Cost: about 109 tests in 10 files, all `bun test`; SSH tests use an in-process `ssh2` server, network tests use injected resolvers and dialers, so the suite needs no internet and no sshd.
 
 ## Swept
 
 - validation: C2, C3, C4, C5, C21, C60, C68, C72
-- failure modes: C18, C27, C28, C59, C70, C71, C79, C80, C81, C85, C86, C87, C90, C91, C92, C93, C96, C97, C98, C99, C100, C105, C106, C108
+- failure modes: C18, C27, C28, C59, C70, C71, C79, C80, C81, C85, C86, C87, C90, C91, C92, C93, C96, C97, C98, C99, C100, C105, C106, C108, C110
 - idempotency: n/a - no request is retried by this tool; a reconnect re-requests the forward, covered by C28
 - authorization: C9, C10, C11, C14, C35, C53, C64, C65, C67, C75, C76, C88, C89, C101, C105
 - concurrency: C19, C33, C66, C69, C90, C92, C100, C107, C108
 - data lifecycle: C31, C44 - `state.json` is replaced atomically and goes stale after 90 s
-- dependency failure: C18, C28, C49, C93
+- dependency failure: C18, C28, C49, C93, C110
 - state transitions: C25, C26, C27, C28, C32, C94, C95, C102, C103, C106, C107, C108
 - observability: C37, C43, C61, C73, C77, C78, C95, C104 - state and hop results are the observable surface; no metrics in v0.1
 - deploy compatibility: n/a - first release; schema `version: 1` in config and state allows later migration
