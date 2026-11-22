@@ -6,7 +6,7 @@ Build: `taskpolicy -b nice -n 10 bun run typecheck`
 Run unit: `env -u CLAUDECODE taskpolicy -b nice -n 10 bun test`
 Plan: `.specs/features/cli-core/plan.md`
 
-123 checks in 6 slices (ids C1-C124; C57 unused; C64-C69 added after verification round 1, C70-C78 after deep review round 1, C79-C84 after round 2, C85-C89 after round 4, C90-C104 after round 5, C105-C111 after round 6, C112-C116 after round 8, C117-C118 after round 9, C119 after round 10, C120 after round 11, C121-C124 after round 12) · 8 one-way doors · 2 open, of which 0 block
+124 checks in 6 slices (ids C1-C125; C57 unused; C64-C69 added after verification round 1, C70-C78 after deep review round 1, C79-C84 after round 2, C85-C89 after round 4, C90-C104 after round 5, C105-C111 after round 6, C112-C116 after round 8, C117-C118 after round 9, C119 after round 10, C120 after round 11, C121-C125 after round 12) · 8 one-way doors · 2 open, of which 0 block
 
 Test names start with the check id in brackets, so `bun test` prints `(pass) [C<n>] ...`. Each id has exactly one test. `CLAUDECODE` is unset because Bun hides per-test pass lines when it is set.
 
@@ -286,7 +286,7 @@ Proof: run unit | (pass) [C115]
 
 ### S4 - `status` answers in one call
 
-Complete: C38-C44, C73, C104, C121 - proofs green
+Complete: C38-C44, C73, C104, C121, C125 - proofs green
 
 **C38** - Live pid + `connected` exits 0 with `state`, `since`, `server.host`, `remotePort`, `domains` count (STA-01, AC 29)
 Proof: run unit | (pass) [C38]
@@ -311,6 +311,9 @@ Proof: run unit | (pass) [C44]
 
 **C121** - `status` order, table-driven over `evaluateStatus` with a pinned clock: dead pid `blocked`/`port_blocked` -> `stopped` exit 10; stale live pid `blocked`/`port_blocked` -> `stopped`/`stale` exit 10; fresh live pid `blocked`/`port_blocked` -> exit 11; dead and stale live pid `disconnected` -> `stopped` exit 10 with no `retryAt`; dead and stale `host_key_mismatch` -> exit 13; the first two rows also through `status --json` (STA-01, AC 98)
 Proof: run unit | (pass) [C121]
+
+**C125** - With `state.json` holding `blocked`/`host_key_mismatch` for another server or `remotePort`: a live pid gives `stopped`/`config_changed` exit 10, a dead pid `stopped` exit 10; the same file for the configured server and port with a dead pid still gives exit 13 (STA-01, AC 102)
+Proof: run unit | (pass) [C125]
 
 **C73** - With a live `connected` state.json naming another `remotePort`, server host or server port than the config, `status --json` exits 10 with `stopped`/`config_changed`, and the `doctor` `forward` hop sends `tcpip-forward` then `cancel-tcpip-forward` for the config's port (STA-01, DOC-01, AC 63)
 Proof: run unit | (pass) [C73]
@@ -428,7 +431,7 @@ Proof: run unit | (pass) [C77]
 | refused address ranges (26) | `0/8` C12 · `10/8` C12 · `100.64/10` C12 · `127/8` C12 · `169.254/16` C12 · `172.16/12` C12 · `192.0.0/24` C12 · `192.168/16` C12 · `198.18/15` C12 · `224/4` C12 · `240/4` C12 · `::/128` C12 · `::1` C12 · `100::/64` C12 · `2001::/32` C12 · `64:ff9b:1::/48` C12 · `fc00::/7` C12 · `fe80::/10` C12 · `fec0::/10` C12 · `ff00::/8` C12 · `::/96` C12 · `::ffff:0:0/96` C12 · `::ffff:0:0:0/96` C89 · `64:ff9b::/96` C12 · `2002::/16` C12 · own interface C13, C65 | - |
 | T1 request corpus (12) | lookalike C9 · suffix trick C9 · upper case C8 · trailing dot C8 · IPv4 literal C11 · bracketed IPv6 C11 · mapped IPv4 C11 · underscore C21 · userinfo C21 · percent C21 · odd port C21 · smuggled second request C22 | - |
 | tunnel states (6) | `connecting` C25 · `connected` C25 · `disconnected` C28, C59 · `reconnecting` C28 · `blocked` C26, C27 · `stopped` C32 | - |
-| `status` state mapping (11 cases) | connected C38 · absent C39 · dead pid C39, C121 · stopped C39 · connecting C40 · disconnected C40 · reconnecting C40 · stale C44, C121 · host key mismatch dead pid C42, C121 · dead pid port_blocked C121 · stale port_blocked C121 | - |
+| `status` state mapping (12 cases) | connected C38 · absent C39 · dead pid C39, C121 · stopped C39 · connecting C40 · disconnected C40 · reconnecting C40 · stale C44, C121 · host key mismatch dead pid C42, C121 · dead pid port_blocked C121 · stale port_blocked C121 · mismatch for another server C125 | - |
 | doctor hops (8) | `config` C62 · `domain` C50 · `key` C62, C54 · `server_reachable` C45 · `ssh_auth` C51 · `forward` C47, C48 · `lockdown` C53 · `egress` C49 | - |
 | lockdown attempts (6) | shell C53 · shell without PTY C64, C75 · exec C64, C75 · sftp C53, C105 · local forward C53, C76 · other remote port C53, C76, C88 | - |
 | `--json` reason and error codes (12) | `host_key_mismatch` C26 · `port_blocked` C27 · `connection_lost` C28 · `auth_failed` C71 · `stale` C44 · `config_changed` C73 · `config_invalid` C2 · `key_permissions` C6 · `key_unreadable` C72 · `key_invalid` C72 · `already_running` C33, C112, C113, C116, C117, C120 · `internal` C56 | - |
@@ -437,7 +440,7 @@ Proof: run unit | (pass) [C77]
 | backoff steps (7) | 1 s C29 · 2 s C29 · 4 s C29 · 8 s C29 · 16 s C29 · 30 s cap C29 · reset C29, C106 | - |
 | startup assembly (2) | CLI subprocess C26, C32, C58 · in-process harness C25 | - |
 
-- Claims naming an outcome, interface or response shape: C2, C8-C19, C21-C23, C26, C32, C38-C44, C50-C53, C55, C58, C61, C62, C64-C66, C68-C77, C85-C88, C90, C94, C96-C100, C104, C105, C110, C112, C113, C116, C117, C121, C122, C123, C124 - each has a proof that crosses the boundary it names
+- Claims naming an outcome, interface or response shape: C2, C8-C19, C21-C23, C26, C32, C38-C44, C50-C53, C55, C58, C61, C62, C64-C66, C68-C77, C85-C88, C90, C94, C96-C100, C104, C105, C110, C112, C113, C116, C117, C121, C122, C123, C124, C125 - each has a proof that crosses the boundary it names
 - No other check claims more than the cases its proof enumerates
 
 ## Security cases

@@ -155,3 +155,21 @@ test("[C121] status applies host key mismatch, then dead pid or stopped, then st
   const sp = await status(stateFile({ ...blocked, updatedAt: new Date(Date.now() - 91_000).toISOString() }));
   expect([sp.code, sp.body.state, sp.body.reason]).toEqual([10, "stopped", "stale"]);
 });
+
+test("[C125] a host key mismatch recorded for another server or port reads as that config's tunnel, not this one's", async () => {
+  const at = Date.parse("2026-11-21T12:00:00.000Z");
+  const dead = await deadPid();
+  const alive = (pid: number) => pid !== dead;
+  const target = { server: { host: "vps.example.com", port: 22 }, remotePort: 8888 };
+  const mismatch = { state: "blocked", reason: "host_key_mismatch", updatedAt: new Date(at - 1_000).toISOString() } as const;
+  const rows: [string, Partial<State>, { state: string; reason: string | null; exit: number }][] = [
+    ["live pid, other host", { ...mismatch, server: { host: "old.example.com", port: 22 } }, { state: "stopped", reason: "config_changed", exit: 10 }],
+    ["live pid, other remotePort", { ...mismatch, remotePort: 9999 }, { state: "stopped", reason: "config_changed", exit: 10 }],
+    ["dead pid, other host", { ...mismatch, pid: dead, server: { host: "old.example.com", port: 22 } }, { state: "stopped", reason: null, exit: 10 }],
+    ["dead pid, same server", { ...mismatch, pid: dead }, { state: "blocked", reason: "host_key_mismatch", exit: 13 }],
+  ];
+  for (const [name, patch, want] of rows) {
+    const view = evaluateStatus(stateFile(patch), alive, at, 90_000, target);
+    expect([name, { state: view.state, reason: view.reason, exit: view.exit }]).toEqual([name, want]);
+  }
+});
