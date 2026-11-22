@@ -9,8 +9,8 @@ Change the layout by decision, not drift:
 | Path | Holds | Stack |
 | --- | --- | --- |
 | `src/` | CLI: commands, SSH tunnel, allowlist proxy, server setup, login services, config | Bun, TypeScript, `ssh2`, `bun test` |
-| `app/` | v0.2 tray app; runs the compiled CLI as a sidecar | Tauri v2 (Rust), React, Vite, Tailwind CSS v4 |
-| `skills/social-tunnel/SKILL.md` | The shipped skill that teaches agents to drive the CLI | Markdown |
+| `app/` (planned) | v0.2 tray app; runs the compiled CLI as a sidecar | Tauri v2 (Rust), React, Vite, Tailwind CSS v4 |
+| `skills/social-tunnel/SKILL.md` (planned) | The shipped skill that teaches agents to drive the CLI | Markdown |
 
 The tray app holds no tunnel or proxy logic: it calls the CLI (`--json`), so CLI, app and the later MCP server share one code path.
 
