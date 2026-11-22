@@ -61,7 +61,7 @@ Proof: run unit | (pass) [C8]
 **C9** - `CONNECT evilinstagram.com:443`, `instagram.com.evil.net:443` and `example.org:443` get `403` with zero lookups and zero connections (PRX-01, AC 8)
 Proof: run unit | (pass) [C9]
 
-**C10** - `CONNECT instagram.com:80` and `:8443` get `403` with zero lookups and zero connections (PRX-01, AC 9)
+**C10** - `CONNECT instagram.com:80` and `:8443` get `403` with zero lookups and zero connections (PRX-01, AC 9, 94)
 Proof: run unit | (pass) [C10]
 
 **C11** - `CONNECT 157.240.1.1:443`, `[2a03:2880::1]:443` and `[::ffff:157.240.1.1]:443` get `403` with zero lookups and zero connections (PRX-01, AC 10, 44 precedence)
@@ -97,7 +97,7 @@ Proof: run unit | (pass) [C20]
 **C58** - While `social-tunnel run` is connected as a subprocess, `lsof -a -p <pid> -iTCP -sTCP:LISTEN` prints no socket (its exit 1 with empty output counts as none; the test fails if `lsof` is absent) (PRX-01, AC 17)
 Proof: run unit | (pass) [C58]
 
-**C21** - Hosts `insta_gram.com`, `user@instagram.com`, `insta%67ram.com`, a 64-character label and a 254-character name, and ports `+443`, `0443`, `443abc`, `443 `, each get `400` (PRX-01, AC 44)
+**C21** - Hosts `insta_gram.com`, `user@instagram.com`, `insta%67ram.com`, a 64-character label and a 254-character name, and ports `+443`, `0443`, `443abc`, `443 `, each get `400` (PRX-01, AC 44, 94)
 Proof: run unit | (pass) [C21]
 
 **C22** - A TLS ClientHello, and separately a second `CONNECT example.org:443` request, sent in the same packet as the head both reach upstream byte-for-byte and are never answered by the proxy (PRX-01, AC 45)

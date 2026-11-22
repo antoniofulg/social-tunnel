@@ -86,9 +86,9 @@ A command either gets a valid config or tells the user exactly what is wrong, in
 56. IF `server.hostKey` is missing or is not `SHA256:` followed by 43 unpadded base64 characters THEN the system SHALL reject the config naming `server.hostKey`
 68. IF the key file does not hold an unencrypted SSH private key (a public key file included) THEN `run` SHALL exit 2 with error code `key_invalid`, and IF it is missing or unreadable THEN with `key_unreadable`; `doctor` reports both as a failed `key` hop (added after deep review round 1)
 69. IF `--config` or `--domain` is given an empty value THEN the system SHALL treat it as a usage error (criterion 42) and never fall back to another config (added after deep review round 1)
+91. WHEN `run` or `doctor` loads the key THEN the system SHALL check its mode and read it through one open file descriptor, so a file swapped in after the check is never read (added after deep review round 8; refines 6)
 
 **Independent test:** run `social-tunnel status --json --config <fixture>` against valid, missing, malformed and bad-domain fixtures and read the exit code and JSON.
-91. WHEN `run` or `doctor` loads the key THEN the system SHALL check its mode and read it through one open file descriptor, so a file swapped in after the check is never read (added after deep review round 8; refines 6)
 
 ### S2: Only allowlisted HTTPS hosts leave through the home IP (P1)
 
@@ -119,6 +119,7 @@ The proxy handler, given a forwarded stream, relays only allowlisted `host:443` 
 77. The embedded forms of criterion 11 SHALL also include the IPv4-translated form `::ffff:0:0:0/96` (added after deep review round 4)
 78. WHEN a relay ends because upstream closed or reset, or because the idle timeout of criterion 47 passed THEN the system SHALL free its relay slot as it closes the channel, whether or not the channel reports that close, and SHALL read and discard what the remaining side still sends so that those bytes never keep the relay open past the idle timeout; this SHALL hold on the tunnel's own SSH channels, which report a close only once they are read (added after deep review round 5; refines 16, 47 and 66)
 79. IF the outbound connection of criterion 15 has not completed within its 10 s THEN the system SHALL abandon it and close its socket, so a connection that timed out is not left connecting outside the relay cap (added after deep review round 5; refines 15)
+94. The port clause of criterion 44 SHALL yield to criterion 9: a well-formed port, 1-5 digits with no sign or leading zero, other than 443 SHALL get `403 Forbidden` under criterion 9, and only a malformed port string (such as `+443`, `0443`, `443abc` or `443` followed by a space) SHALL get `400 Bad Request` (added after deep review round 9; clarifies 9 and 44)
 
 **Independent test:** feed the handler in-memory duplex streams with allowed, refused, IP-literal, private-resolving, malformed and oversized requests; assert status lines and that refused cases made no lookup or connection.
 
@@ -220,7 +221,7 @@ The user or an agent learns which hop failed and what to do about it.
 | ID | Slice | Criteria | Status |
 | --- | --- | --- | --- |
 | CFG-01 | S1 | 1, 2, 3, 4, 5, 6, 55, 56, 68, 69, 91 | Done |
-| PRX-01 | S2 | 7-17, 44, 45, 46, 47, 58, 61, 66, 73, 74, 77, 78, 79 | Done |
+| PRX-01 | S2 | 7-17, 44, 45, 46, 47, 58, 61, 66, 73, 74, 77, 78, 79, 94 | Done |
 | TUN-01 | S3 | 18-28, 48, 49, 50, 57, 60, 62, 70, 71, 80, 81, 86, 89, 90, 92, 93 | Done |
 | STA-01 | S4 | 29-34, 51, 63, 84 | Done |
 | DOC-01 | S5 | 35-41, 52, 53, 54, 59, 64, 65, 67, 72, 75, 76, 82, 83, 85, 87, 88 | Done |
@@ -233,7 +234,7 @@ The user or an agent learns which hop failed and what to do about it.
 | S1 | New runtime, `ssh2` dependency, config and state files | Pinned dependency in `bun.lock`; strict schema v1 with unknown keys rejected | SEC-001; criteria 2, 3, 5, 56 |
 | S2 | Forwarded channels from the server's loopback port into the home machine | Allowlist, port 443 only, IP literal and refused-range check incl. own interface prefixes, only the expected forward accepted, no local listener | SEC-002, SEC-003, SEC-004; criteria 7-12, 17, 48, 73, 77 |
 | S5 | SSH private key and server host key | Key file permission check, dedicated-key advice, no key material in output, one pinned connect path for `run` and `doctor` | SEC-005, SEC-006; criteria 6, 19, 28, 52, 54, 91 |
-| S6 | Untrusted CONNECT request head and server-supplied text | 8 KiB / 10 s head bounds, strict hostname and port grammar, post-head bytes never parsed, sanitised logs, generic refusal bodies | SEC-007, SEC-010; criteria 13, 14, 44, 45, 46, 50, 71, 84 |
+| S6 | Untrusted CONNECT request head and server-supplied text | 8 KiB / 10 s head bounds, strict hostname and port grammar, post-head bytes never parsed, sanitised logs, generic refusal bodies | SEC-007, SEC-010; criteria 13, 14, 44, 45, 46, 50, 71, 84, 94 |
 | S9 | Server-side tunnel user restrictions (configured by hand in v0.1) | `doctor` lockdown hop proves shell, sftp, local forward and other ports are refused | SEC-008; criteria 53, 59, 64, 65, 72, 75, 76, 82, 85, 87 |
 | S11 | Long-running process on the user's laptop | 256-relay cap, DNS/connect and idle timeouts, single-instance guard, stale-state detection | SEC-009; criteria 15, 16, 27, 47, 49, 51, 61, 73, 74, 78, 79, 88, 90, 92, 93 |
 
@@ -310,7 +311,7 @@ The user or an agent learns which hop failed and what to do about it.
 - Scope: build S1-S6 with tests and local commits only; no push, publish or server changes
 - Revision after criteria review (2026-11-21): settled contradictions and ambiguities the reviewer found (criteria 2, 6, 7, 11, 15, 30, 33, 35, 36, 40, 44, 51 clarified; 56, 57 and 58 added; `skipped` added to the doctor hop shape). No capability added or removed; reported to the user for objection
 - Revision after verification round 1 (2026-11-21): criteria 59 (lockdown also probes a shell without a PTY and `exec`, counting only an evaluated marker), 60 (a stale `state.json` does not block `run`) and 61 (a channel holds a relay slot from open) appended to close verifier findings F1, F3 and F7; reported to the user in the coordinating chat. No capability added or removed
-- Revision after deep review round 1 (2026-11-21): criteria 62-70 and one Surface row appended for the defects in `.wtk-deep-review/cli-core/review.md`. Approver: none recorded. This revision and the two above were directed by the coordinating agent and reported to the user; the user's recorded approval covers only the revision named under "Reviewed revision"
+- Revision after deep review round 1 (2026-11-21): criteria 62-70 and one Surface row appended for the defects found in deep review round 1. Approver: none recorded. This revision and the two above were directed by the coordinating agent and reported to the user; the user's recorded approval covers only the revision named under "Reviewed revision"
 - Revision after deep review round 2 (2026-11-21): criteria 71 and 72 appended. Approver: none recorded; directed by the coordinating agent
 - Revision after deep review round 4 (2026-11-22): criteria 73-77 appended for the round 4 defects (a channel lost during the lookup on a real SSH channel, a refusal the server never takes, a connection lost during the lockdown hop, other-port probes at the top of the port range) and the IPv4-translated address form. Approver: none recorded; directed by the coordinating agent
 - Approval of criteria 59-77 (2026-11-22): Decision: "Approve 59–77 (Recommended)". Source: user answer in the coordinating Claude Code chat (AskUserQuestion), after deep review round 5 flagged the receipt. Scope: criteria 59-77 as written at commit aec4a8f
@@ -320,4 +321,4 @@ The user or an agent learns which hop failed and what to do about it.
 - Approval of criteria 85-89 (2026-11-22): Decision: "Approve 85–89 (Recommended)". Source: user answer in the coordinating Claude Code chat (AskUserQuestion). Scope: criteria 85-89 as written at commit f110352
 - Revision after deep review round 8 (2026-11-22): criteria 90 and 92 appended for two `run` processes started at once that both passed the single-instance check and could then race to take over one leftover lock, and (advisory) criterion 91 for a key file that could be swapped between its mode check and its read.
 - Approval of criteria 90-92 (2026-11-22): Decision: "Approve 90–92 (Recommended)", plus the user's standing delegation to proceed without asking for approval of fix-round criteria. Source: user in the coordinating chat, 2026-11-22, as relayed by the coordinating agent
-- Revision after deep review round 9 (2026-11-22): criterion 93 appended for a live `run` whose `run.lock` was never refreshed, so a second `run` took it over once `state.json` was missing and the lock was older than 90 s. Approved under the user's standing delegation to proceed without asking for approval of fix-round criteria. Source: user in the coordinating chat, 2026-11-22
+- Revision after deep review round 9 (2026-11-22): criteria 93 and 94 appended: 93 for a live `run` whose `run.lock` was never refreshed, so a second `run` took it over once `state.json` was missing and the lock was older than 90 s, and 94 to settle that a well-formed port other than 443 gets `403` (criterion 9) while only a malformed port gets `400` (criterion 44); criterion 91 moved above S1's independent-test line, text unchanged. Approved under the user's standing delegation to proceed without asking for approval of fix-round criteria. Source: user in the coordinating chat, 2026-11-22
