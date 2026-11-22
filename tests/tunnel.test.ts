@@ -660,3 +660,31 @@ test("[C106] a connection that authenticates but has its forward refused resets 
   expect(t.names().filter((n) => n.startsWith("blocked"))).toEqual(["blocked/port_blocked"]);
   expect(delays).toEqual([1000, 2000, 4000, 30000, 1000]);
 });
+
+test("[C107] stop() while the SSH connection is still being made ends that connection without a forward request", async () => {
+  const env = await setup();
+  const t = await tunnelTo(env);
+  await t.tunnel.stop();
+  expect(t.names()).toEqual(["connecting", "stopped"]);
+
+  // The connection that was under way finishes authenticating after the stop.
+  await until(() => env.ssh.auth.includes("publickey"));
+  await sleep(200);
+  expect(env.ssh.requests).toEqual([]);
+  expect(t.names()).toEqual(["connecting", "stopped"]);
+  expect(readJson(env.statePath).state).toBe("stopped");
+});
+
+test("[C108] a connection that closes before the forward is answered is one connection loss with one retry", async () => {
+  const env = await setup({ forward: () => "silent" });
+  const delays: number[] = [];
+  const t = await tunnelTo(env, { schedule: (_fn, ms) => (delays.push(ms), () => {}) });
+  await until(() => env.ssh.requests.some((r) => r.name === "tcpip-forward"));
+  env.ssh.dropAll();
+  await until(() => t.names().includes("disconnected/connection_lost"));
+  await sleep(200);
+
+  expect(t.names()).toEqual(["connecting", "disconnected/connection_lost"]);
+  expect(delays).toEqual([10]);
+  expect(readJson(env.statePath)).toMatchObject({ state: "disconnected", reason: "connection_lost" });
+});
