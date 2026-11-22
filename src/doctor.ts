@@ -49,22 +49,42 @@ export async function runDoctor(
   let config!: Config;
   let key!: Buffer;
   let client: Client | undefined;
-  // Set once the SSH connection is gone: from then on a `false` from `allowed` is not a refusal.
+  // `lost` is set once the SSH connection is gone, `silent` once a request got no answer in time:
+  // from then on a `false` from `allowed` is not a refusal.
   let lost = false;
+  let silent = false;
+  const unfinished = (what: string): Outcome =>
+    fail(
+      lost ? `the SSH connection closed during ${what}` : `the server did not answer ${what} in time`,
+      "Run doctor again. If it happens every time, check the connection to the server and read its sshd log: it may be dropping the tunnel user on a refused request.",
+      EXIT.down,
+    );
 
-  // Resolves true when the server granted the request. No answer in time counts as refused.
-  const allowed = (ask: (answer: (granted: boolean) => void) => void) =>
-    withTimeout(
+  // Resolves true when the server granted the request. `ask` calls `heard` when the server has
+  // answered the request itself and only the outcome is still awaited; `answer` implies it.
+  const allowed = (ask: (answer: (granted: boolean) => void, heard: () => void) => void) => {
+    let answered = false;
+    return withTimeout(
       new Promise<boolean>((resolve) => {
         try {
-          ask(resolve);
+          ask(
+            (granted) => {
+              answered = true;
+              resolve(granted);
+            },
+            () => (answered = true),
+          );
         } catch {
           lost = true; // ssh2 throws when the connection is already gone
           resolve(false);
         }
       }),
       timeoutMs,
-    ).catch(() => false);
+    ).catch(() => {
+      if (!answered) silent = true;
+      return false;
+    });
+  };
 
   const steps: Step[] = [
     {
@@ -154,6 +174,8 @@ export async function runDoctor(
         if (live.exit === EXIT.ok) return pass(`held by the running tunnel (pid ${live.pid})`);
         const c = client!;
         if (!(await allowed((answer) => c.forwardIn("127.0.0.1", port, (err) => answer(!err))))) {
+          // A request the connection never answered was not refused: the broken hop is the connection.
+          if (lost || silent) return unfinished("the forward request");
           return fail(
             `the server refused a remote forward on 127.0.0.1:${port}`,
             `Free port ${port} on the server and allow it for the tunnel key: permitlisten="127.0.0.1:${port}".`,
@@ -173,7 +195,10 @@ export async function runDoctor(
         // runs its own command. The probe counts only when a shell evaluated it: joining the quoted
         // pieces works in sh, bash, zsh, fish and tcsh, and the joined text is not in the command.
         const command = "echo social-tunnel'-'ok";
-        const ran = (channel: ClientChannel | undefined, answer: (granted: boolean) => void) => {
+        // The server has answered by the time ssh2 calls back, so a command that then prints nothing
+        // in time (a forced command that keeps running) is a refusal, not silence.
+        const ran = (channel: ClientChannel | undefined, answer: (granted: boolean) => void, heard: () => void) => {
+          heard();
           if (!channel) return answer(false);
           let output = "";
           channel.on("data", (chunk: Buffer) => {
@@ -185,17 +210,17 @@ export async function runDoctor(
           });
           channel.on("close", () => answer(false));
         };
-        const probes: [string, (answer: (granted: boolean) => void) => void][] = [
+        const probes: [string, (answer: (granted: boolean) => void, heard: () => void) => void][] = [
           [
             "shell",
             // No PTY: a server that refuses terminals may still hand out a shell.
-            (answer) =>
+            (answer, heard) =>
               c.shell(false, (err, channel) => {
-                ran(channel, answer);
+                ran(channel, answer, heard);
                 if (!err) channel.write(`${command}\nexit\n`);
               }),
           ],
-          ["exec", (answer) => c.exec(command, (_err, channel) => ran(channel, answer))],
+          ["exec", (answer, heard) => c.exec(command, (_err, channel) => ran(channel, answer, heard))],
           ["sftp", (answer) => c.sftp((err, sftp) => (sftp?.end(), answer(!err)))],
           [
             "local forward",
@@ -231,7 +256,10 @@ export async function runDoctor(
           ],
         ];
         const granted: string[] = [];
-        for (const [name, probe] of probes) if (await allowed(probe)) granted.push(name);
+        for (const [name, probe] of probes) {
+          if (await allowed(probe)) granted.push(name);
+          if (lost || silent) break; // this connection answers nothing more
+        }
         if (granted.length > 0) {
           return fail(
             `the server allowed the tunnel user: ${granted.join(", ")}`,
@@ -239,14 +267,8 @@ export async function runDoctor(
             EXIT.lockdown,
           );
         }
-        // Probes that were never answered prove nothing, so a lost connection is never a pass.
-        if (lost) {
-          return fail(
-            "the SSH connection closed during the lockdown checks, so they did not finish",
-            "Run doctor again. If the connection closes every time, read the server's sshd log: it may be dropping the tunnel user on a refused request.",
-            EXIT.down,
-          );
-        }
+        // Probes that were never answered prove nothing, so a lost or silent connection is never a pass.
+        if (lost || silent) return unfinished("the lockdown checks, so they did not finish");
         return pass("the server ran no shell or exec command and refused sftp, a local forward and a forward on another port");
       },
     },

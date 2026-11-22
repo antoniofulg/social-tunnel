@@ -1,12 +1,12 @@
 # CLI core checks
 
 Profile: standard
-Risk: C9, C12, C14, C15, C20, C21, C26, C34, C35, C51, C53, C58, C64, C65, C75, C76, C87, C88, C89 - allowlist, address guard, no-listener, host-key pin, key leakage, channel filter and server lockdown are the safety invariants; a weak test there ships an open proxy, a MITM or a usable server account
+Risk: C9, C12, C14, C15, C20, C21, C26, C34, C35, C51, C53, C58, C64, C65, C75, C76, C87, C88, C89, C96 - allowlist, address guard, no-listener, host-key pin, key leakage, channel filter and server lockdown are the safety invariants; a weak test there ships an open proxy, a MITM or a usable server account
 Build: `taskpolicy -b nice -n 10 bun run typecheck`
 Run unit: `env -u CLAUDECODE taskpolicy -b nice -n 10 bun test`
 Plan: `.specs/features/cli-core/plan.md`
 
-94 checks in 6 slices (ids C1-C95; C57 unused; C64-C69 added after verification round 1, C70-C78 after deep review round 1, C79-C84 after round 2, C85-C89 after round 4, C90-C95 after round 5) · 8 one-way doors · 2 open, of which 0 block
+96 checks in 6 slices (ids C1-C97; C57 unused; C64-C69 added after verification round 1, C70-C78 after deep review round 1, C79-C84 after round 2, C85-C89 after round 4, C90-C97 after round 5) · 8 one-way doors · 2 open, of which 0 block
 
 Test names start with the check id in brackets, so `bun test` prints `(pass) [C<n>] ...`. Each id has exactly one test. `CLAUDECODE` is unset because Bun hides per-test pass lines when it is set.
 
@@ -251,7 +251,7 @@ Proof: run unit | (pass) [C73]
 
 ### S5 - `doctor` names the broken hop and its fix
 
-Complete: C45-C54, C62, C64, C74-C76, C84, C87, C88 and C34 (S3) - proofs green
+Complete: C45-C54, C62, C64, C74-C76, C84, C87, C88, C96, C97 and C34 (S3) - proofs green
 
 **C45** - Hops run in order `config, key, server_reachable, ssh_auth, forward, lockdown, egress`; after a `server_reachable` failure the later hops have `ok: false`, `skipped: true` and an empty `fix` (DOC-01, AC 35, 36)
 Proof: run unit | (pass) [C45]
@@ -304,6 +304,12 @@ Proof: run unit | (pass) [C87]
 **C88** - With `remotePort` 65535 and 65534 against a server granting every port 1-65535, `lockdown` fails with exit 14 naming `remote forward` and the only other port requested is `<remotePort - 1>`; with 65535 and a server granting only 65533 besides, it fails and the requests are 65535, 65534, 65533 (DOC-01, AC 76)
 Proof: run unit | (pass) [C88]
 
+**C96** - With a 300 ms timeout against a server that would run a shell and grant every forward but stops reading at the first session request, `doctor` exits 10, `forward` passed, `lockdown` is failed and not skipped with a detail saying the server did not answer (not "refused", not "closed") and a fix saying to run doctor again, and `egress` is skipped; a locked-down server whose forced command never prints or exits passes `lockdown` with exit 0 (DOC-01, AC 82)
+Proof: run unit | (pass) [C96]
+
+**C97** - With a server that destroys the connection when the tunnel forward is requested, and separately one that never answers that request (300 ms timeout), `doctor` exits 10, `ssh_auth` passed, the `forward` hop is failed with a detail naming the closed or unanswering connection and not "refused", its fix says to run doctor again and does not mention `permitlisten`, and `lockdown` is skipped (DOC-01, AC 83)
+Proof: run unit | (pass) [C97]
+
 ### S6 - The CLI never blocks an agent
 
 Complete: C55, C56, C77 - proofs green
@@ -335,7 +341,7 @@ Proof: run unit | (pass) [C77]
 | door 8 host-key pin (3) | `run` C26 · `doctor` C51 · format C60 | - |
 | `social-tunnel run` outcomes (3) | 0 C32 · 2 C33, C66 · 13 C26 | - |
 | `social-tunnel status` outcomes (5) | 0 C38 · 10 C39 · 11 C41 · 13 C42, C94 · 2 C2 | - |
-| `social-tunnel doctor` outcomes (7) | 0 C52 · 2 C62 · 10 C52, C87 · 11 C52 · 12 C50 · 13 C51 · 14 C53 | - |
+| `social-tunnel doctor` outcomes (7) | 0 C52 · 2 C62 · 10 C52, C87, C96, C97 · 11 C52 · 12 C50 · 13 C51 · 14 C53 | - |
 | CLI meta outcomes (2) | unknown input 2 C55, C68 · help/version 0 C55 | - |
 | `proxy over a forwarded channel` outcomes (8) | 200 C8 · 400 C17 · 403 C9 · 405 C16 · 408 C17 · 502 C18 · 503 C19, C69, C92 · 504 C18, C93 | - |
 | refused address ranges (26) | `0/8` C12 · `10/8` C12 · `100.64/10` C12 · `127/8` C12 · `169.254/16` C12 · `172.16/12` C12 · `192.0.0/24` C12 · `192.168/16` C12 · `198.18/15` C12 · `224/4` C12 · `240/4` C12 · `::/128` C12 · `::1` C12 · `100::/64` C12 · `2001::/32` C12 · `64:ff9b:1::/48` C12 · `fc00::/7` C12 · `fe80::/10` C12 · `fec0::/10` C12 · `ff00::/8` C12 · `::/96` C12 · `::ffff:0:0/96` C12 · `::ffff:0:0:0/96` C89 · `64:ff9b::/96` C12 · `2002::/16` C12 · own interface C13, C65 | - |
@@ -350,7 +356,7 @@ Proof: run unit | (pass) [C77]
 | backoff steps (7) | 1 s C29 · 2 s C29 · 4 s C29 · 8 s C29 · 16 s C29 · 30 s cap C29 · reset C29 | - |
 | startup assembly (2) | CLI subprocess C26, C32, C58 · in-process harness C25 | - |
 
-- Claims naming an outcome, interface or response shape: C2, C8-C19, C21-C23, C26, C32, C38-C44, C50-C53, C55, C58, C61, C62, C64-C66, C68-C77, C85-C88, C90, C94 - each has a proof that crosses the boundary it names
+- Claims naming an outcome, interface or response shape: C2, C8-C19, C21-C23, C26, C32, C38-C44, C50-C53, C55, C58, C61, C62, C64-C66, C68-C77, C85-C88, C90, C94, C96, C97 - each has a proof that crosses the boundary it names
 - No other check claims more than the cases its proof enumerates
 
 ## Security cases
@@ -364,7 +370,7 @@ Proof: run unit | (pass) [C77]
 | SEC-005 | Server presents a different host key (MITM) | No auth sent, exit 13 on `run` and `doctor` | C26, C51 |
 | SEC-006 | Private key leaks through output, logs or state | No key line in any captured output | C6, C34 |
 | SEC-007 | Malformed or smuggled CONNECT head | `400`/`405`/`408`, trailing bytes never parsed | C16, C17, C21, C22, C23, C37 |
-| SEC-008 | Tunnel user can open a shell, sftp or other forwards | `lockdown` hop fails, exit 14 | C53, C64, C75, C76, C84, C87, C88 |
+| SEC-008 | Tunnel user can open a shell, sftp or other forwards | `lockdown` hop fails, exit 14 | C53, C64, C75, C76, C84, C87, C88, C96 |
 | SEC-009 | Connection flood or slow client exhausts the home machine | `503` past 256 relays, timeouts close stalled sockets | C17, C18, C19, C24, C63, C69, C80, C82, C85, C86, C90, C91, C92, C93 |
 | SEC-010 | Server-, request- or config-supplied text carries terminal control characters or shell syntax into output a person or agent acts on | Characters stripped; printed commands quoted | C37, C74, C78, C83 |
 
@@ -386,12 +392,12 @@ Evidence:
 - `src/tunnel.ts` (planned): 6 states, 7 backoff steps -> decides
 - closest analogue in the repo: none - first code in the repository
 
-Cost: about 94 tests in 10 files, all `bun test`; SSH tests use an in-process `ssh2` server, network tests use injected resolvers and dialers, so the suite needs no internet and no sshd.
+Cost: about 96 tests in 10 files, all `bun test`; SSH tests use an in-process `ssh2` server, network tests use injected resolvers and dialers, so the suite needs no internet and no sshd.
 
 ## Swept
 
 - validation: C2, C3, C4, C5, C21, C60, C68, C72
-- failure modes: C18, C27, C28, C59, C70, C71, C79, C80, C81, C85, C86, C87, C90, C91, C92, C93
+- failure modes: C18, C27, C28, C59, C70, C71, C79, C80, C81, C85, C86, C87, C90, C91, C92, C93, C96, C97
 - idempotency: n/a - no request is retried by this tool; a reconnect re-requests the forward, covered by C28
 - authorization: C9, C10, C11, C14, C35, C53, C64, C65, C67, C75, C76, C88, C89
 - concurrency: C19, C33, C66, C69, C90, C92

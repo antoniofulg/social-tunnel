@@ -455,3 +455,46 @@ test("[C88] at the top of the port range the lockdown hop asks for real other po
   expect((await doctor(env.path, seams().io)).code).toBe(14);
   expect(env.ssh.requests.filter((r) => r.name === "tcpip-forward").map((r) => r.bindPort)).toEqual([65535, 65534, 65533]);
 });
+
+test("[C96] a server that stops answering during the lockdown hop fails the hop with exit 10, and a forced command that hangs still passes", async () => {
+  // The server would run a shell and grant any forward: answered, these probes give exit 14.
+  let env!: Awaited<ReturnType<typeof setup>>;
+  env = await setup({ shell: true, exec: true, sftp: true, localForward: true, onSession: () => env.ssh.stopReading() });
+  servers.push(env.ssh);
+  const { code, hop } = await doctor(env.path, { ...seams().io, connectTimeoutMs: 300 });
+  expect(code).toBe(10);
+  expect(hop("forward")).toMatchObject({ ok: true });
+  expect(hop("lockdown")).toMatchObject({ ok: false, skipped: false });
+  expect(hop("lockdown").detail).toMatch(/did not answer/);
+  expect(hop("lockdown").detail).not.toMatch(/refused|closed/);
+  expect(hop("lockdown").fix).toMatch(/doctor again/);
+  expect(hop("egress")).toMatchObject({ ok: false, skipped: true });
+
+  // The server answers every request; its forced command just never prints or exits. Nothing was allowed.
+  const hanging = await doctor((await locked({ forced: "hangs" })).path, { ...seams().io, connectTimeoutMs: 300 });
+  expect(hanging.code).toBe(0);
+  expect(hanging.hop("lockdown")).toMatchObject({ ok: true, skipped: false });
+});
+
+test("[C97] a forward request the connection never answers fails the forward hop with exit 10, not as a refusal", async () => {
+  const drop = (ssh: TestServer) => ssh.clients.forEach((c) => (c as unknown as { _sock: { destroy(): void } })._sock.destroy());
+  const table: [RegExp, (env: () => Awaited<ReturnType<typeof setup>>) => Server][] = [
+    [/connection closed/, (env) => ({ forward: () => (drop(env().ssh), false) })],
+    [/did not answer/, () => ({ forward: () => "silent" })],
+  ];
+  for (const [detail, server] of table) {
+    let env!: Awaited<ReturnType<typeof setup>>;
+    env = await setup(server(() => env));
+    servers.push(env.ssh);
+    const { code, hop } = await doctor(env.path, { ...seams().io, connectTimeoutMs: 300 });
+    expect([detail, code]).toEqual([detail, 10]);
+    expect(hop("ssh_auth")).toMatchObject({ ok: true });
+    expect(hop("forward")).toMatchObject({ ok: false, skipped: false });
+    expect(hop("forward").detail).toMatch(detail);
+    expect(hop("forward").detail).not.toMatch(/refused/);
+    expect(hop("forward").fix).toMatch(/doctor again/);
+    expect(hop("forward").fix).not.toMatch(/permitlisten/);
+    expect(hop("lockdown")).toMatchObject({ ok: false, skipped: true });
+  }
+  // A server that answers "no" is still a refusal with exit 11 (C52).
+});

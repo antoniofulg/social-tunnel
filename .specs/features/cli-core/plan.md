@@ -51,6 +51,7 @@ None - no stored-data shape change beyond two new local JSON files, whose litera
 | proxy over a forwarded channel | `CONNECT host:443 HTTP/1.1` | relayed bytes | `200 Connection Established`, `400`, `403`, `405`, `408`, `502`, `503`, `504` |
 | `--json` reason and error codes | - | `state.json` / `status` `reason`: `host_key_mismatch`, `port_blocked`, `connection_lost`, `auth_failed` (server refused the key; retried with backoff), `stale`; `error.code`: `config_invalid`, `key_permissions`, `key_unreadable` (key file missing or unreadable), `key_invalid` (not an unencrypted SSH private key), `already_running`, `internal` | `key_*` and `config_invalid` exit 2; `auth_failed` leaves `run` retrying and `status` at exit 10 |
 | `--json` reason (added after deep review round 1) | - | `status` `reason`: `config_changed` (a live run in this config directory serves another server or port) | `status` exit 10 |
+| `social-tunnel doctor` (added after deep review round 5) | - | same hop list | exit 10 also when the SSH connection closes or goes silent during the `forward` or `lockdown` hop |
 
 ## Landing
 
@@ -190,6 +191,8 @@ The user or an agent learns which hop failed and what to do about it.
 72. The `lockdown` fix of criterion 67 SHALL also name `AllowStreamLocalForwarding no` (added after deep review round 2)
 75. IF the SSH connection closes during the `lockdown` hop and no attempt was allowed before it closed THEN the hop SHALL fail with exit 10, a detail saying the checks did not finish and a fix saying to run `doctor` again; an attempt left unanswered by the closed connection SHALL NOT count as refused (added after deep review round 4; refines 41 and 53)
 76. WHEN `<remotePort + 2>` is above 65535 THEN the remote-forward attempts of criteria 53 and 65 SHALL use `<remotePort - 1>` and then `<remotePort - 2>` (added after deep review round 4; refines 53 and 65)
+82. IF the server leaves a `lockdown` attempt unanswered for the 10 s of criterion 58 while the connection stays open, and no attempt was allowed before that THEN the hop SHALL fail with exit 10, a detail saying the server did not answer and a fix saying to run `doctor` again; an unanswered attempt SHALL NOT count as refused. A shell or `exec` request the server granted whose command prints nothing in that time still counts as refused (added after deep review round 5; refines 41, 53, 59 and 75)
+83. IF the SSH connection closes, or the server gives no answer within the 10 s of criterion 58, while the `forward` hop's request of criterion 38 is pending THEN the hop SHALL fail with exit 10, a detail naming the closed or silent connection and a fix saying to run `doctor` again, and SHALL NOT report a refused forward (added after deep review round 5; refines 38 and 41)
 
 **Independent test:** run `doctor --json` against the in-process test server with a good setup, a wrong host key, a refused forward and an unlisted `--domain`; assert hop list and exit code.
 
@@ -210,7 +213,7 @@ The user or an agent learns which hop failed and what to do about it.
 | PRX-01 | S2 | 7-17, 44, 45, 46, 47, 58, 61, 66, 73, 74, 77, 78, 79 | Done |
 | TUN-01 | S3 | 18-28, 48, 49, 50, 57, 60, 62, 70, 71, 80, 81 | Done |
 | STA-01 | S4 | 29-34, 51, 63 | Done |
-| DOC-01 | S5 | 35-41, 52, 53, 54, 59, 64, 65, 67, 72, 75, 76 | Done |
+| DOC-01 | S5 | 35-41, 52, 53, 54, 59, 64, 65, 67, 72, 75, 76, 82, 83 | Done |
 | CLI-01 | S6 | 42, 43 | Done |
 
 ## Security Surfaces
@@ -301,4 +304,4 @@ The user or an agent learns which hop failed and what to do about it.
 - Revision after deep review round 2 (2026-11-21): criteria 71 and 72 appended. Approver: none recorded; directed by the coordinating agent
 - Revision after deep review round 4 (2026-11-22): criteria 73-77 appended for the round 4 defects (a channel lost during the lookup on a real SSH channel, a refusal the server never takes, a connection lost during the lockdown hop, other-port probes at the top of the port range) and the IPv4-translated address form. Approver: none recorded; directed by the coordinating agent
 - Approval of criteria 59-77 (2026-11-22): Decision: "Approve 59–77 (Recommended)". Source: user answer in the coordinating Claude Code chat (AskUserQuestion), after deep review round 5 flagged the receipt. Scope: criteria 59-77 as written at commit aec4a8f
-- Revision after deep review round 5 (2026-11-22): criteria 78-81 appended for the relay slot that was never freed on a real SSH channel, the timed-out dial left connecting the host key mismatch that a late stop overwrote and the `since` that restarted on every blocked retry. Approver: none recorded; directed by the coordinating agent and awaiting the user's approval
+- Revision after deep review round 5 (2026-11-22): criteria 78-83 and one Surface row appended for the relay slot that was never freed on a real SSH channel, the timed-out dial left connecting the host key mismatch that a late stop overwrote the `since` that restarted on every blocked retry, and the `doctor` hops that read an unanswered request as a refusal. Approver: none recorded; directed by the coordinating agent and awaiting the user's approval

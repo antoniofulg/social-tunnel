@@ -10,8 +10,8 @@ export interface ServerOptions {
   // Reuse a host key, so a restarted server keeps its identity.
   host?: { private: string; public: string };
   authorize?: boolean;
-  // Which remote-forward ports the server grants. Default: any.
-  forward?: (port: number) => boolean;
+  // Which remote-forward ports the server grants. Default: any. "silent": the request gets no answer.
+  forward?: (port: number) => boolean | "silent";
   // Really open the forwarded port and pass its connections down the tunnel.
   open?: boolean;
   // Runs commands sent to a shell session (with or without a terminal).
@@ -19,7 +19,8 @@ export interface ServerOptions {
   pty?: boolean;
   exec?: boolean;
   // Grants shell and exec requests but runs only its own command, like `command="/bin/false"`.
-  forced?: boolean;
+  // "hangs": that command never prints and never exits, like `command="sleep infinity"`.
+  forced?: boolean | "hangs";
   sftp?: boolean;
   // true: the forward is opened. "connect-failed": permitted, but nothing answers at the target.
   localForward?: boolean | "connect-failed";
@@ -108,7 +109,9 @@ export async function startServer(options: ServerOptions): Promise<TestServer> {
       client.on("request", (accept, reject, name, info) => {
         t.requests.push({ name, bindAddr: info.bindAddr, bindPort: info.bindPort });
         if (name === "tcpip-forward") {
-          if (options.forward && !options.forward(info.bindPort)) return reject?.();
+          const grant = options.forward ? options.forward(info.bindPort) : true;
+          if (grant === "silent") return;
+          if (!grant) return reject?.();
           if (!options.open) return accept?.();
           const listener = net.createServer((socket) => {
             client.forwardOut(info.bindAddr, info.bindPort, "127.0.0.1", socket.remotePort ?? 0, (err, channel) => {
@@ -148,6 +151,7 @@ export async function startServer(options: ServerOptions): Promise<TestServer> {
         };
         // A forced command: the request is granted, the server's own command runs and exits.
         const forcedCommand = (channel: { exit(code: number): void; end(): void }) => {
+          if (options.forced === "hangs") return;
           channel.exit(1);
           channel.end();
         };
