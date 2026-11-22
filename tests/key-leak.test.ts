@@ -102,3 +102,41 @@ test("[C34] no line of the private key appears in stdout, stderr or state.json o
   expect(five.hops.find((h) => h.hop === "ssh_auth")).toMatchObject({ ok: false, skipped: false });
   expect(leaked(locked.env.keyPath, five.captured)).toEqual([]);
 }, 60_000);
+
+// The key file as a logged Buffer would print it: JSON.stringify's number array, or base64.
+function encodedLeaks(keyPath: string, captured: string[]): string[] {
+  const bytes = readFileSync(keyPath);
+  const forms = [
+    JSON.stringify([...bytes.subarray(0, 32)]).slice(1, -1),
+    bytes.subarray(0, 48).toString("base64"),
+    bytes.subarray(48, 96).toString("base64"),
+  ];
+  return forms.filter((form) => captured.some((text) => text.replace(/\s/g, "").includes(form)));
+}
+
+test("[C115] the key file never appears as a JSON-serialised Buffer or base64 in run or doctor output", async () => {
+  // The detector finds both encodings when they are there.
+  const probe = await target();
+  const key = readFileSync(probe.env.keyPath);
+  expect(encodedLeaks(probe.env.keyPath, [JSON.stringify(key)]).length).toBe(1);
+  expect(encodedLeaks(probe.env.keyPath, [key.toString("base64")]).length).toBe(2);
+
+  const connected = await runUntil(probe.env, "connected");
+  expect(connected.code).toBe(0);
+  expect(encodedLeaks(probe.env.keyPath, connected.captured)).toEqual([]);
+
+  const refused = await target({ authorize: false });
+  const two = await runUntil(refused.env, "disconnected");
+  expect(two.captured[0]).toContain("auth_failed");
+  expect(encodedLeaks(refused.env.keyPath, two.captured)).toEqual([]);
+
+  const healthy = await target();
+  const three = await doctorCaptured(healthy.env);
+  expect(three.code).toBe(0);
+  expect(encodedLeaks(healthy.env.keyPath, three.captured)).toEqual([]);
+
+  const locked = await target({ authorize: false });
+  const four = await doctorCaptured(locked.env);
+  expect(four.code).toBe(10);
+  expect(encodedLeaks(locked.env.keyPath, four.captured)).toEqual([]);
+}, 60_000);
