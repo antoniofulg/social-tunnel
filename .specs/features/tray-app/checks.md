@@ -8,7 +8,7 @@ Run sidecar: `taskpolicy -b nice -n 10 bun run build:sidecar && cd app && env -u
 Run rust: `cd app/src-tauri && taskpolicy -b nice -n 10 cargo test -j 2 -- --test-threads=2`
 Run ui: `cd app && taskpolicy -b nice -n 10 bunx vitest run src --reporter=verbose --maxWorkers=2`
 Run dist: `cd app && taskpolicy -b nice -n 10 bunx vite build && taskpolicy -b nice -n 10 bunx vitest run tests/dist --reporter=verbose && taskpolicy -b nice -n 10 bunx playwright test --project=webkit --workers=1 --reporter=list`
-Run bundle: `cd app && CARGO_BUILD_JOBS=2 taskpolicy -b nice -n 10 bunx tauri build --bundles app && env -u CLAUDECODE taskpolicy -b nice -n 10 bun test ./bun-tests/bundle.test.ts`
+Run bundle: `cd app && load-gate wait && CARGO_BUILD_JOBS=2 taskpolicy -b nice -n 10 bunx tauri build --bundles app --no-sign --no-binary-patching -- --locked && env -u CI -u CLAUDECODE taskpolicy -b nice -n 10 bun test ./bun-tests/bundle.test.ts`
 Run smoke: `app/scripts/smoke-installed.sh`
 Plan: `.specs/features/tray-app/plan.md`
 UI contract: `.specs/features/tray-app/uiux.md`
@@ -36,11 +36,10 @@ with the code it is given, traps SIGTERM and records the signals it received.
 Load gate: run `load-gate wait` before `Run sidecar`, `Run rust`, `Run dist`, `Run bundle` and the
 build line; never change the mode.
 
-`smoke-installed.sh` runs against the copy in `~/Applications` after `install-local.sh`, in three
-steps (menu, login, quit) and prints one `PASS [tray-app C<n>] <step>` or `FAIL ...` line per check.
-It reads and clicks the menu through System Events, which needs Accessibility access for the
-terminal. Without that access the degraded path is a computer-use walk of the same steps with
-captures, recorded in `verification.md`; the affected checks stay unproven until then.
+`smoke-installed.sh` runs against the copy in `~/Applications` after `install-local.sh`. `login`
+and `preflight` do not launch the tray. Native smoke requires a matching connected sidecar PID,
+an unlocked session and Accessibility access before launch. It reads the menu without printing
+private values. Only a real native walk and cropped captures can settle the installed UI checks.
 
 ## Checks
 
@@ -424,3 +423,65 @@ and 3 smoke-script runs on the installed app.
 - observability: C13, C27, C60 - the menu and Settings are the observable surface; the app writes no log in v0.2 (C10)
 - deploy compatibility: C1, C2 - JSON additions are additive and cli-core proofs stay green; rollback is deleting the `.app`, the CLI fields stay harmless
 - performance budget: C12, C35, C48 - one status process at a time every 2 s and a menu rebuilt only on change; CPU use is a service target, not a criterion, in v0.2
+
+## Amendments
+
+Append-only notes on approved rows; the rows above stay as approved.
+
+- C55, C56 (S2/S3 build): the words "Under the mock runtime" no longer describe the proof. Tauri's
+  mock runtime crashes (SIGSEGV) on macOS when a test thread drives it off the main thread, so
+  `tray_c55_*` and `tray_c56_*` run `settings::open` against a fake window object and check the
+  exit-request rule `settings::exit_allowed` plus its wiring in `lib.rs`. The claims and proof lines
+  are unchanged. The real window close of C56 is confirmed on screen in the S4 smoke on this Mac
+  (captures `s4-settings-*.png`, `s4-after-close-*.png`).
+- C78 (smoke), C79 (S4 build): Open at Login is not switched on for this Mac's user (coordinator
+  brief, 2026-11-22: "the toggle exists, the user decides"). The smoke `login` step therefore runs
+  `tray_c79_*`: the real `auto_launch` LaunchAgent backend the autostart plugin uses, labelled
+  `login::LABEL`, with the installed app's executable as its program, under a temporary `HOME`, on
+  then off, hashing the user's `~/Library/LaunchAgents/tech.antoniofulg.social-tunnel.plist`
+  before, while on and after. The app's own menu toggle is proven by `tray_c78_*` with a fake
+  backend; the toggle is not clicked in the installed app.
+- C75–C77 (S4 recovery): preserve the compiler's executable metadata/signature without invoking
+  bundle signing; `beforeBuildCommand` rebuilds the compiled CLI so the bundle cannot pick up a
+  stale sidecar. The generated Portal and Beacon assets are tracked, including on machines whose
+  global macOS `Icon?` rule otherwise hides `icons/`.
+- C56, C82 (S4 recovery): never click Settings on the live tunnel under the no-live-doctor
+  guardrail. On first open C62 calls `doctor` even when connected. A native C56 walk needs a
+  separately authorized isolated fixture or a revised live-doctor guardrail; do not treat the
+  fake-window proof as the on-screen close.
+
+## Handoff
+
+- OMP accepted coordination. Checkout `main` at `37ca08d`; S2 `8237ff0`, S3 Rust `0805120`, and S3 component/WebKit commits are on this branch. Claude's pane stays open with automatic continue cancelled.
+- Claude S4 builder `a8469fbd47e8f0421` is finished (native owner metadata and quota stop). Its S4 edits are uncommitted. No bundle, installed app, or native S4 captures were found. Prior C78 fake and C79 temporary-HOME results passed; the last filtered Clippy result is not a reliable proof.
+- S4 recovery, Run `run_61744c2ca329`, starting revision `37ca08d`: OMP `implementer-risk`, `openai-codex/gpt-6.2-sol` / `xhigh`, pending dispatch in this checkout. Scope: finish C75–C82 and installed C11/C56, adopt the known Claude edits, retain local proof. Local install and capture are approved; no push, production/VPS changes, second tunnel, tunnel signals/restarts, or enabling Open at Login.
+- Orca accepted the S4 assignment: Task `task_ce994d158297`, Dispatch `ctx_c47cad1e791d`, worker `term_bc57f8d3-0868-4ade-aed2-4967d1c3e863`, state `ready`. The worker owns S4 in this checkout; wait for its evidence before final verification.
+
+### S4 recovery proof
+
+Tested on `main`, base `37ca08d`, with the S4 source and generated assets in the commit that adds
+this record. This slice does not redo S1–S3 or replace their captures.
+
+| Check | Result | Command and evidence |
+| --- | --- | --- |
+| C75–C77 | Pass | From `app/`: `taskpolicy -b nice -n 10 bun run icons`; gated `CARGO_BUILD_JOBS=2 taskpolicy -b nice -n 10 bunx tauri build --bundles app --no-sign --no-binary-patching -- --locked`; `env -u CLAUDECODE taskpolicy -b nice -n 10 bun test ./bun-tests/bundle.test.ts` (3 pass, 0 fail). The bundle is arm64, holds both executables, declares the tray ID and `LSUIElement`, and carries the generated Portal arch ICNS byte for byte. |
+| C78 (fake) | Pass | From `app/src-tauri/`: gated `CARGO_BUILD_JOBS=2 taskpolicy -b nice -n 10 cargo test --locked -j 2 --test login -- --test-threads=1` (4 pass, 0 fail). The backend read-back drives the menu checkmark, including after a failed enable. |
+| C78 (backend), C79 | Pass | `app/scripts/smoke-installed.sh login` (exit 0, `tray_c79_… ok` and both PASS lines). The pinned `auto-launch` 0.6.0 LaunchAgent branch only creates, checks or removes a file beneath `dirs::home_dir()`; `dirs-sys` uses nonempty `HOME`. No registration, launching or signaling occurs in that branch. The test subprocess used its own temporary HOME and the exact installed executable, checked the real plist hash before, during and after, removed its fixture, and left the real tray login plist and job absent. |
+| C80, C81 | Pass | `env -u CLAUDECODE taskpolicy -b nice -n 10 bun test tests/install-local.test.ts` (2 pass, 0 fail). C81 starts a disposable executable at the target path and checks the exact refusal and unchanged tree. `HOME=<temporary home> app/scripts/install-local.sh` also replaced an older copy with the real build: `diff -qr` exited 0 and the old-only file disappeared. `app/scripts/install-local.sh` then installed only to `~/Applications/social-tunnel.app`; `diff -qr` against the build exited 0. |
+| C11, C82 | Blocked | `app/scripts/smoke-installed.sh preflight` exited 0. The packaged sidecar's read-only status matched the live connected PID; `Supervisor::on_status` returns without spawning for a non-null PID and the connected startup poll has no alarm, child exit, or prior doctor to trigger another call. `orca computer permissions --json` exited 1 (`screen_locked`), so no tray launch, native Beacon/menu read, Quit or reopen. |
+| C56 (native), Settings route/Server | Blocked | In addition to `screen_locked`, opening Settings on a fresh process triggers the live `doctor` through `settings::check_due(None, …)` (C62). The no-live-doctor guardrail forbids the click, even if the screen is unlocked. Do not count the fake-window proof as a native close. |
+| Static and WTK | Scoped pass; aggregate not run | `validate_checks.py tray-app` exited 0 with the inherited `settings-view` and `Snapshot.checking` coverage warnings. The gated root `bun run typecheck`, app `bunx tsc --noEmit`, and Rust `cargo clippy --locked -j 2 --lib --test login --test login_agent -- -D warnings` all exited 0. Both shell scripts passed `/bin/sh -n`. `check_proofs.py` has no slice selector: it reruns the full root suite for C86 and requires native smoke while the GUI is unavailable. No aggregate green claim. |
+
+Live before/after (read-only `launchctl print`, `ps` and SHA-256): PID `19886`, started
+`Sun Nov 22 13:07:58 2026`, matching tunnel process count `1`, external plist SHA-256
+`86a4a528b4f23c8c1845bd3f0ab4f9b05162ce32a40903ae0fed66a448d99b5e`. All matched after
+install and isolated login. No tray process was running and Open at Login was off. No live doctor
+or new `run` was started and no production state was changed.
+
+Installed executable and sidecar SHA-256 respectively:
+`52868b5f963738adb0264324d4e22446b19c5186045f1988bf32a2598b56a1e1` and
+`d36fe1bcdce756464afde7b1d1483f8a322ffdde1a63e463940217269e93d753`. The linker signatures
+verified; ordinary bundle-level `codesign --verify` reported no sealed resources with signing
+skipped, while `--ignore-resources` exited 0. Native launch was not tested.
+
+Native captures: none; no `.specs/features/tray-app/captures/s4-*.png` files were created.

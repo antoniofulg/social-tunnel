@@ -3,6 +3,7 @@
 
 pub mod doctor;
 pub mod driver;
+pub mod login;
 pub mod model;
 pub mod nav;
 pub mod settings;
@@ -78,6 +79,7 @@ struct Core {
     spawner: ProcessSpawner,
     /// The last model showed the lock-down alarm (criterion 88).
     lockdown: bool,
+    open_at_login: bool,
 }
 
 struct AppState {
@@ -203,7 +205,7 @@ fn redraw(app: &AppHandle, core: &mut Core, now: i64) -> TrayImage {
         spawned_at: core.sup.spawned_at(),
         now,
         checking: state.doctors.running(),
-        open_at_login: false,
+        open_at_login: core.open_at_login,
     };
     let model = model::view(&core.tracker, &inputs);
     let mut snapshot = Snapshot::new(&model, &core.status, doctor.as_ref(), core.sup.child_pid());
@@ -309,17 +311,32 @@ fn copy_fix(app: AppHandle, hop: String) -> Result<(), String> {
     copy_fix_for(&app, &hop)
 }
 
-// Lands with the login item (S4).
+/// Switches the login item, keeps the read-back state and redraws the checkmark (criterion 78).
+fn switch_login(app: &AppHandle, enabled: Option<bool>) -> Result<bool, String> {
+    let state = app.state::<AppState>();
+    let mut core = state.core.lock().unwrap();
+    let item = login::Autostart(app);
+    let result = login::set(&item, enabled.unwrap_or(!core.open_at_login));
+    let read_back = result.as_ref().copied().unwrap_or_else(|_| login::read(&item));
+    if enabled.is_none() && read_back == core.open_at_login {
+        core.driver.invalidate_menu();
+    }
+    core.open_at_login = read_back;
+    redraw(app, &mut core, now_ms());
+    result
+}
 
 #[tauri::command]
-fn set_open_at_login(enabled: bool) -> Result<bool, String> {
-    let _ = enabled;
-    Err("autostart_failed".into())
+async fn set_open_at_login(app: AppHandle, enabled: bool) -> Result<bool, String> {
+    tauri::async_runtime::spawn_blocking(move || switch_login(&app, Some(enabled)))
+        .await
+        .map_err(|_| "autostart_failed".to_string())?
 }
 
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_clipboard_manager::init())
+        .plugin(login::plugin())
         .invoke_handler(tauri::generate_handler![get_snapshot, run_check, copy_fix, set_open_at_login])
         .setup(|app| {
             #[cfg(target_os = "macos")]
@@ -334,6 +351,7 @@ pub fn run() {
                     sup: Supervisor::default(),
                     spawner: ProcessSpawner { program: program.clone() },
                     lockdown: false,
+                    open_at_login: login::read(&login::Autostart(app.handle())),
                 }),
                 gate: PollGate::default(),
                 doctors: Doctors::default(),
@@ -358,6 +376,11 @@ pub fn run() {
                         if let Some(hop) = latest.as_ref().and_then(Doctor::first_failing) {
                             let _ = copy_fix_for(app, &hop.hop.clone());
                         }
+                    }
+                    "open_at_login" => {
+                        // Poll redraws can hold core while waiting for AppKit on this thread.
+                        let app = app.clone();
+                        std::thread::spawn(move || switch_login(&app, None));
                     }
                     "settings" => show_settings(app, settings::View::Status),
                     "set_up" => show_settings(app, settings::View::SetUp),

@@ -1,0 +1,47 @@
+//! Open at Login through `tauri-plugin-autostart` as a LaunchAgent (plan criterion 78, Landing 7).
+
+/// The login item's LaunchAgent label and plist name. Never the user's own
+/// `tech.antoniofulg.social-tunnel`: a login item under that label would overwrite its plist.
+pub const LABEL: &str = "tech.antoniofulg.social-tunnel.tray";
+
+/// The login-item operations the app needs; the app's is the autostart plugin, tests use a fake.
+pub trait LoginItem {
+    fn enable(&self) -> Result<(), String>;
+    fn disable(&self) -> Result<(), String>;
+    fn is_enabled(&self) -> Result<bool, String>;
+}
+
+/// Switches the login item and returns the state read back after the call, or `autostart_failed`.
+pub fn set(item: &dyn LoginItem, enabled: bool) -> Result<bool, String> {
+    let changed = if enabled { item.enable() } else { item.disable() };
+    changed.and_then(|()| item.is_enabled()).map_err(|_| "autostart_failed".to_string())
+}
+
+/// The state to show; an unreadable login item shows unchecked.
+pub fn read(item: &dyn LoginItem) -> bool {
+    item.is_enabled().unwrap_or(false)
+}
+
+pub fn plugin<R: tauri::Runtime>() -> tauri::plugin::TauriPlugin<R> {
+    let builder = tauri_plugin_autostart::Builder::new().app_name(LABEL);
+    #[cfg(target_os = "macos")]
+    let builder = builder.macos_launcher(tauri_plugin_autostart::MacosLauncher::LaunchAgent);
+    builder.build()
+}
+
+pub struct Autostart<'a, R: tauri::Runtime>(pub &'a tauri::AppHandle<R>);
+
+impl<R: tauri::Runtime> LoginItem for Autostart<'_, R> {
+    fn enable(&self) -> Result<(), String> {
+        use tauri_plugin_autostart::ManagerExt;
+        self.0.autolaunch().enable().map_err(|e| e.to_string())
+    }
+    fn disable(&self) -> Result<(), String> {
+        use tauri_plugin_autostart::ManagerExt;
+        self.0.autolaunch().disable().map_err(|e| e.to_string())
+    }
+    fn is_enabled(&self) -> Result<bool, String> {
+        use tauri_plugin_autostart::ManagerExt;
+        self.0.autolaunch().is_enabled().map_err(|e| e.to_string())
+    }
+}

@@ -1,7 +1,8 @@
 // Renders the tray template images (concept C · Beacon) and the app icon (concept A arch) from the
 // design SVGs. Run with `bun run icons` from app/; the PNGs are committed.
 import { Resvg } from "@resvg/resvg-js";
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { deflateSync } from "node:zlib";
 
@@ -65,12 +66,30 @@ for (const [name, source] of Object.entries(marks)) {
   writeFileSync(join(trayDir, `${name}@2x.png`), render(source, 36));
 }
 
-// App icon: concept A's arch, black on a light tile. `tauri icon` turns it into the bundle set.
+// App icon: concept A's arch, black on a light tile, as PNG sizes and the macOS .icns.
 const ARCH = "M3.5 14.6V9a5.5 5.5 0 0 1 11 0v5.6";
 const appIcon = `<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="-3 -3 24 24">
   <rect x="-2" y="-2" width="22" height="22" rx="5" fill="#f2f2f4"/>
   <path d="${ARCH}" fill="none" stroke="#1d1d1f" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"/>
 </svg>`;
-const icon = new Resvg(appIcon, { fitTo: { mode: "width", value: 1024 } }).render();
-writeFileSync(join(root, "src-tauri", "icons", "icon.png"), icon.asPng());
-console.log(`wrote ${Object.keys(marks).length * 2} tray images and icons/icon.png`);
+const iconsDir = join(root, "src-tauri", "icons");
+const appPng = (px: number) => new Resvg(appIcon, { fitTo: { mode: "width", value: px } }).render().asPng();
+writeFileSync(join(iconsDir, "icon.png"), appPng(1024));
+for (const [name, px] of [["32x32", 32], ["128x128", 128], ["128x128@2x", 256]] as const) {
+  writeFileSync(join(iconsDir, `${name}.png`), appPng(px));
+}
+// macOS bundle icon (plan criterion 77): an .iconset of every size, packed by `iconutil`.
+const scratch = mkdtempSync(join(tmpdir(), "social-tunnel-"));
+try {
+  const iconset = join(scratch, "icon.iconset");
+  mkdirSync(iconset);
+  for (const base of [16, 32, 128, 256, 512]) {
+    writeFileSync(join(iconset, `icon_${base}x${base}.png`), appPng(base));
+    writeFileSync(join(iconset, `icon_${base}x${base}@2x.png`), appPng(base * 2));
+  }
+  const packed = Bun.spawnSync(["iconutil", "-c", "icns", iconset, "-o", join(iconsDir, "icon.icns")]);
+  if (packed.exitCode !== 0) throw new Error(`iconutil failed: ${packed.stderr}`);
+} finally {
+  rmSync(scratch, { recursive: true });
+}
+console.log(`wrote ${Object.keys(marks).length * 2} tray images, icon.png, 3 PNG sizes and icon.icns`);

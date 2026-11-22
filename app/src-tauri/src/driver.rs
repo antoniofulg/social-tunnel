@@ -108,6 +108,11 @@ impl Driver {
         }
     }
 
+    /// AppKit toggles check items before dispatching their action, even if the action fails.
+    pub(crate) fn invalidate_menu(&mut self) {
+        self.menu = None;
+    }
+
     /// Sets the image (or starts the frame loop), rebuilds the menu and emits the snapshot only
     /// when they changed.
     pub fn apply(&mut self, model: &TrayModel, snapshot: Snapshot, reduce_motion: bool, sink: &mut dyn TraySink) {

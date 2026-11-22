@@ -10,6 +10,9 @@ app/dist/
 app/src-tauri/target/
 app/src-tauri/binaries/
 app/src-tauri/gen/
+# Override global macOS Icon? rules for the app's checked-in build inputs.
+!/app/src-tauri/icons/
+!/app/src-tauri/icons/**
 app/test-results/
 .specs/features/tray-app/captures/
 !app/tests/dist/
