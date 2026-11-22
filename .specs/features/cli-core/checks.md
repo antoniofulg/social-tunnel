@@ -319,6 +319,9 @@ Proof: run unit | (pass) [C75]
 **C76** - A server that permits a local forward but answers "connect failed" fails `lockdown` naming `local forward`, and the probe targets `127.0.0.1:<server.port>`; an administratively prohibited forward passes; a server refusing `<remotePort + 1>` but granting `<remotePort + 2>` fails naming `remote forward` (DOC-01, AC 65)
 Proof: run unit | (pass) [C76]
 
+**C84** - The `lockdown` hop's fix contains `AllowStreamLocalForwarding no` (DOC-01, AC 72)
+Proof: run unit | (pass) [C84]
+
 **C87** - Against servers that grant a remote forward on any port, with the SSH connection destroyed at the first session request, and separately while the forward on another port waits: `doctor` exits 10, the `forward` hop passed, the `lockdown` hop is failed and not skipped with a detail naming the closed connection and not "refused" and a fix saying to run doctor again, and `egress` is skipped (DOC-01, AC 75)
 Proof: run unit | (pass) [C87]
 
@@ -340,9 +343,6 @@ Proof: run unit | (pass) [C55]
 
 **C56** - With stdin held open and never written, `status` and `run` with an invalid config and `doctor` with a valid config against the in-process server each exit within 5 s; an unexpected exception exits 1 with `error.code` `internal` (CLI-01, AC 43; door 1)
 Proof: run unit | (pass) [C56]
-
-**C84** - The `lockdown` hop's fix contains `AllowStreamLocalForwarding no` (DOC-01, AC 72)
-Proof: run unit | (pass) [C84]
 
 **C77** - `status` without `--json` prints `state`, `since`, `retry at`, `server`, `remote port` and `domains` lines with an escape character in `reason` removed and exits 10 for `disconnected`; `doctor` without `--json` prints `ok`, `FAIL` with its `fix`, and `skip` lines and exits 2 for a 0644 key (STA-01, DOC-01, AC 29, 36)
 Proof: run unit | (pass) [C77]
@@ -408,10 +408,10 @@ The repo has no test guideline yet, so this feature uses these rows; they are no
 
 Evidence:
 
-- `src/proxy.ts` (planned): 8 outcomes, about 12 branch points -> decides
-- `src/address-guard.ts` (planned): 25 refused ranges -> decides
-- `src/tunnel.ts` (planned): 6 states, 7 backoff steps -> decides
-- closest analogue in the repo: none - first code in the repository
+- `src/proxy.ts`: 8 outcomes, about 12 branch points -> decides
+- `src/address-guard.ts`: 25 refused ranges -> decides
+- `src/tunnel.ts`: 6 states, 7 backoff steps -> decides
+- closest analogue in the repo: none - these modules are the first of their kind here
 
 Cost: about 103 tests in 10 files, all `bun test`; SSH tests use an in-process `ssh2` server, network tests use injected resolvers and dialers, so the suite needs no internet and no sshd.
 
