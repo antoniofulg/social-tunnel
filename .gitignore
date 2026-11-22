@@ -12,3 +12,4 @@ app/src-tauri/binaries/
 app/src-tauri/gen/
 app/test-results/
 .specs/features/tray-app/captures/
+!app/tests/dist/

@@ -10,5 +10,5 @@
     "skipLibCheck": true,
     "types": ["bun"]
   },
-  "include": ["src", "scripts", "bun-tests", "vite.config.ts"]
+  "include": ["src", "scripts", "bun-tests", "tests", "e2e", "vite.config.ts", "playwright.config.ts"]
 }
