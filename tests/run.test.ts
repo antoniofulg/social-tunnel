@@ -1,7 +1,8 @@
 import { afterEach, expect, test } from "bun:test";
-import { existsSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { cli, sleep, spawnCli } from "./helpers";
+import { cli, sleep, spawnCli, testIo } from "./helpers";
+import { main } from "../src/cli";
 import { readJson, setup, stateIs, type TestServer } from "./ssh-server";
 
 const servers: TestServer[] = [];
@@ -197,4 +198,31 @@ test("[C116] several runs started at once over one dead-pid run.lock: exactly on
   expect(env.ssh.requests.filter((r) => r.name === "tcpip-forward").length).toBe(1);
   winner.kill("SIGTERM");
   expect((await winner.exit()).code).toBe(0);
+}, 30_000);
+
+test("[C117] a live connected run whose state.json is gone keeps its run.lock past the stale threshold: a second run exits 2", async () => {
+  const env = await setup();
+  servers.push(env.ssh);
+  const timings = { heartbeatMs: 50, staleMs: 400 };
+  let stopA = () => {};
+  const a = testIo({ ...timings, onSignal: (stop) => (stopA = stop) });
+  const runA = main(["run", "--json", "--config", env.path], a.io);
+  try {
+    await stateIs(env.statePath, "connected");
+    // state.json goes missing and stays missing: a directory in its place makes every rewrite fail.
+    rmSync(env.statePath);
+    mkdirSync(env.statePath);
+    await sleep(timings.staleMs * 3);
+
+    const second = cli(["run", "--json", "--config", env.path], timings);
+    const result = await Promise.race([second, sleep(3000).then(() => null)]);
+    expect(result).not.toBeNull();
+    expect(result!.code).toBe(2);
+    expect(result!.json().error.code).toBe("already_running");
+    expect(env.ssh.clients.length).toBe(1);
+    expect(env.ssh.requests.filter((r) => r.name === "tcpip-forward").length).toBe(1);
+  } finally {
+    stopA();
+    await runA;
+  }
 }, 30_000);

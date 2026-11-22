@@ -9,7 +9,7 @@ import { DEFAULTS, EXIT } from "./defaults";
 import { runDoctor } from "./doctor";
 import { createLogger, sanitize } from "./log";
 import { createProxy, type Dialer, type Resolver } from "./proxy";
-import { claimRun, lockPath, pidAlive, readState, releaseRun, statePath } from "./state";
+import { claimRun, lockPath, pidAlive, readState, refreshRun, releaseRun, statePath } from "./state";
 import { evaluateStatus, isLiveRun } from "./status";
 import { startTunnel } from "./tunnel";
 
@@ -27,6 +27,9 @@ export interface Io {
   onSignal: (stop: () => void) => void;
   // Tests shorten doctor's network timeout; production leaves it at the default.
   connectTimeoutMs?: number;
+  // Tests shorten run's heartbeat and the stale threshold; production leaves them at the defaults.
+  heartbeatMs?: number;
+  staleMs?: number;
 }
 
 const USAGE = `usage: social-tunnel <command> [options]
@@ -164,11 +167,10 @@ export async function main(argv: string[], io: Io): Promise<number> {
 
     // The state.json check above cannot see a run that started a moment ago and has not written yet.
     const lock = lockPath(configPath);
-    const holder = claimRun(lock, (pid, ageMs) => {
-      if (!pidAlive(pid)) return false;
-      const state = readState(statePath(configPath));
-      return state?.pid === pid ? isLiveRun(state, pidAlive, Date.now()) : ageMs <= DEFAULTS.staleMs;
-    });
+    // A running holder refreshes its lock on every heartbeat, so only a dead pid or a lock left
+    // unrefreshed past the stale threshold is taken over; state.json plays no part (criterion 93).
+    const staleMs = io.staleMs ?? DEFAULTS.staleMs;
+    const holder = claimRun(lock, (pid, ageMs) => pidAlive(pid) && ageMs <= staleMs);
     if (holder !== null) {
       return fail(
         EXIT.usage,
@@ -189,6 +191,8 @@ export async function main(argv: string[], io: Io): Promise<number> {
           log: (entry) => log("proxy request", entry),
         }).handle,
         log,
+        heartbeatMs: io.heartbeatMs,
+        onHeartbeat: () => refreshRun(lock),
       });
       io.onSignal(() => void tunnel.stop());
       const end = await tunnel.done;

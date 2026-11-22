@@ -106,6 +106,8 @@ export interface TunnelOptions extends ConnectOptions {
   // Retry timer; returns a cancel function. Tests replace it to read the delay.
   schedule?: (fn: () => void, ms: number) => () => void;
   heartbeatMs?: number;
+  // Called on every heartbeat, after state.json is rewritten.
+  onHeartbeat?: () => void;
   backoffMs?: readonly number[];
   blockedRetryMs?: number;
   stopWaitMs?: number;
@@ -167,6 +169,7 @@ export function startTunnel(options: TunnelOptions): Tunnel {
   const heartbeat = setInterval(() => {
     current = { ...current, updatedAt: new Date().toISOString() };
     persist();
+    options.onHeartbeat?.();
   }, options.heartbeatMs ?? DEFAULTS.heartbeatMs);
   const end = () => {
     clearInterval(heartbeat);

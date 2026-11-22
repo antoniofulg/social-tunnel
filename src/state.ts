@@ -1,4 +1,4 @@
-import { linkSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { linkSync, readFileSync, renameSync, rmSync, statSync, utimesSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 
 export type TunnelState =
@@ -124,6 +124,16 @@ function tryLink(from: string, to: string): boolean {
     if ((err as NodeJS.ErrnoException).code === "EEXIST") return false;
     throw err;
   }
+}
+
+// Marks the lock as still held, while it names this process; a failed refresh is left for the next
+// heartbeat.
+export function refreshRun(path: string): void {
+  try {
+    if (readLock(path)?.pid !== process.pid) return;
+    const now = new Date();
+    utimesSync(path, now, now);
+  } catch {}
 }
 
 // Removes the lock only while it still names this process.
