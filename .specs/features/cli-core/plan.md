@@ -112,6 +112,9 @@ The proxy handler, given a forwarded stream, relays only allowlisted `host:443` 
 58. The system SHALL ship these defaults: request-head timeout 10 s, DNS and connect timeout 10 s, relay idle timeout 300 s, relay cap 256, keepalive 15 s with 3 misses, state heartbeat 30 s, stale threshold 90 s
 61. The relay cap of criterion 16 SHALL count a channel from the moment it opens, so a channel still sending its request head holds a slot and the next channel past 256 gets `503 Service Unavailable` (added after verification round 1; clarifies 16)
 66. WHEN one side of a relay closes THEN the system SHALL deliver the bytes already accepted for the other side before closing it, bounded by the idle timeout of criterion 47 (added after deep review round 1; clarifies 7)
+73. IF the server closes a forwarded channel, or its SSH connection is lost, while the lookup or connect of criteria 8-12 is pending THEN the system SHALL open no outbound connection once the lookup answers, SHALL close a connection that completes afterwards, SHALL log no `200` for it and SHALL free its relay slot; this SHALL hold on the tunnel's own SSH channels, which report a close late while they are not being read (added after deep review round 4)
+74. IF the server has not taken a refusal (`400`, `403`, `405`, `408`, `502`, `503` or `504`) within the request-head timeout of criterion 58 THEN the system SHALL close the channel anyway, and it SHALL discard bytes that arrive on a refused channel; a refused channel holds no relay slot and is bounded by this deadline instead of the cap of criterion 16 (added after deep review round 4)
+77. The embedded forms of criterion 11 SHALL also include the IPv4-translated form `::ffff:0:0:0/96` (added after deep review round 4)
 
 **Independent test:** feed the handler in-memory duplex streams with allowed, refused, IP-literal, private-resolving, malformed and oversized requests; assert status lines and that refused cases made no lookup or connection.
 
@@ -181,6 +184,8 @@ The user or an agent learns which hop failed and what to do about it.
 65. The local-forward attempt of criterion 53 SHALL target the server's own SSH port (`server.port`) and count a "connect failed" answer as allowed, and the remote-forward attempt SHALL try `<remotePort + 2>` when `<remotePort + 1>` is refused, because a refusal on one port can mean the port is taken (added after deep review round 1; refines 53)
 67. The system SHALL quote paths for a POSIX shell in every `fix` that is a runnable command, the `config` hop's fix for a missing or non-JSON file SHALL say to create it, and the `lockdown` fix SHALL name a restriction for each access it probes, including `PermitOpen none` for local forwards (added after deep review round 1)
 72. The `lockdown` fix of criterion 67 SHALL also name `AllowStreamLocalForwarding no` (added after deep review round 2)
+75. IF the SSH connection closes during the `lockdown` hop and no attempt was allowed before it closed THEN the hop SHALL fail with exit 10, a detail saying the checks did not finish and a fix saying to run `doctor` again; an attempt left unanswered by the closed connection SHALL NOT count as refused (added after deep review round 4; refines 41 and 53)
+76. WHEN `<remotePort + 2>` is above 65535 THEN the remote-forward attempts of criteria 53 and 65 SHALL use `<remotePort - 1>` and then `<remotePort - 2>` (added after deep review round 4; refines 53 and 65)
 
 **Independent test:** run `doctor --json` against the in-process test server with a good setup, a wrong host key, a refused forward and an unlisted `--domain`; assert hop list and exit code.
 
@@ -198,10 +203,10 @@ The user or an agent learns which hop failed and what to do about it.
 | ID | Slice | Criteria | Status |
 | --- | --- | --- | --- |
 | CFG-01 | S1 | 1, 2, 3, 4, 5, 6, 55, 56, 68, 69 | Done |
-| PRX-01 | S2 | 7-17, 44, 45, 46, 47, 58, 61, 66 | Done |
+| PRX-01 | S2 | 7-17, 44, 45, 46, 47, 58, 61, 66, 73, 74, 77 | Done |
 | TUN-01 | S3 | 18-28, 48, 49, 50, 57, 60, 62, 70, 71 | Done |
 | STA-01 | S4 | 29-34, 51, 63 | Done |
-| DOC-01 | S5 | 35-41, 52, 53, 54, 59, 64, 65, 67, 72 | Done |
+| DOC-01 | S5 | 35-41, 52, 53, 54, 59, 64, 65, 67, 72, 75, 76 | Done |
 | CLI-01 | S6 | 42, 43 | Done |
 
 ## Security Surfaces
@@ -290,3 +295,4 @@ The user or an agent learns which hop failed and what to do about it.
 - Revision after verification round 1 (2026-11-21): criteria 59 (lockdown also probes a shell without a PTY and `exec`, counting only an evaluated marker), 60 (a stale `state.json` does not block `run`) and 61 (a channel holds a relay slot from open) appended to close verifier findings F1, F3 and F7; reported to the user in the coordinating chat. No capability added or removed
 - Revision after deep review round 1 (2026-11-21): criteria 62-70 and one Surface row appended for the defects in `.wtk-deep-review/cli-core/review.md`. Approver: none recorded. This revision and the two above were directed by the coordinating agent and reported to the user; the user's recorded approval covers only the revision named under "Reviewed revision"
 - Revision after deep review round 2 (2026-11-21): criteria 71 and 72 appended. Approver: none recorded; directed by the coordinating agent
+- Revision after deep review round 4 (2026-11-22): criteria 73-77 appended for the round 4 defects (a channel lost during the lookup on a real SSH channel, a refusal the server never takes, a connection lost during the lockdown hop, other-port probes at the top of the port range) and the IPv4-translated address form. Approver: none recorded; directed by the coordinating agent
