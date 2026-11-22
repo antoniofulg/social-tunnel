@@ -240,3 +240,32 @@ test("[C119] an empty or corrupt run.lock names no live run: run takes it over a
     expect(existsSync(lock)).toBe(false);
   }
 }, 30_000);
+
+test("[C120] a fresh run.lock naming a live pid refuses even when that pid's state.json is not live", async () => {
+  const env = await setup({}, (config) => (config.server.hostKey = "SHA256:" + "A".repeat(43)));
+  servers.push(env.ssh);
+  const lock = join(env.path, "..", "run.lock");
+  for (const state of ["stopped", "connected"]) {
+    const updatedAt = new Date(Date.now() - (state === "stopped" ? 0 : 91_000)).toISOString();
+    writeFileSync(
+      env.statePath,
+      JSON.stringify({
+        version: 1,
+        pid: process.ppid,
+        state,
+        reason: null,
+        since: updatedAt,
+        retryAt: null,
+        server: { host: "127.0.0.1", port: env.ssh.port },
+        remotePort: env.remotePort,
+        updatedAt,
+      }),
+    );
+    writeFileSync(lock, `${process.ppid}\n`);
+    const refused = await cli(["run", "--json", "--config", env.path]);
+    expect(refused.code).toBe(2);
+    expect(refused.json().error.code).toBe("already_running");
+    expect(env.ssh.clients.length).toBe(0);
+    expect(existsSync(lock)).toBe(true);
+  }
+}, 30_000);

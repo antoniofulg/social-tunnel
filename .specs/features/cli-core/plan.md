@@ -156,6 +156,7 @@ The home machine keeps a reverse tunnel to the server and records connected, los
 93. WHILE `run` holds its `run.lock` THEN it SHALL refresh the lock's modification time on every heartbeat of criterion 49 that rewrites `state.json`, and a `run.lock` SHALL be taken over only when its pid is dead or the lock has not been refreshed within the stale threshold of criterion 58; a missing or unreadable `state.json` SHALL never make a lock eligible (added after deep review round 9; refines 90)
 95. WHEN a text-mode log line (without `--json`) carries a field value that is empty or contains whitespace, `=`, `"` or `\` THEN the system SHALL print that value as a double-quoted JSON string, so server-supplied text cannot read as another field (added after deep review round 9; refines 50)
 96. IF `run.lock` holds no positive pid (empty, non-numeric or `0`) THEN `run` SHALL treat it as naming no live run and take it over at once, because a lock is published only after its pid is written (added after deep review round 10; refines 90 and 93)
+97. IF a `run.lock` names a live pid and was refreshed within the stale threshold of criterion 58 THEN `run` SHALL exit 2 with `already_running` whatever that pid's `state.json` says; where criteria 90 and 93 differ on when a lock may be taken over, criterion 93 SHALL govern (added after deep review round 11; supersedes the takeover conditions of 90)
 28. The system SHALL write no private key material and no passphrase to stdout, stderr, `state.json` or `--json` output
 
 **Independent test:** start `run` against an in-process `ssh2` test server; kill the server, watch `state.json` go `connected` -> `disconnected` -> `reconnecting` -> `connected`; present a wrong host key and see exit 13.
@@ -224,7 +225,7 @@ The user or an agent learns which hop failed and what to do about it.
 | --- | --- | --- | --- |
 | CFG-01 | S1 | 1, 2, 3, 4, 5, 6, 55, 56, 68, 69, 91 | Done |
 | PRX-01 | S2 | 7-17, 44, 45, 46, 47, 58, 61, 66, 73, 74, 77, 78, 79, 94 | Done |
-| TUN-01 | S3 | 18-28, 48, 49, 50, 57, 60, 62, 70, 71, 80, 81, 86, 89, 90, 92, 93, 95, 96 | Done |
+| TUN-01 | S3 | 18-28, 48, 49, 50, 57, 60, 62, 70, 71, 80, 81, 86, 89, 90, 92, 93, 95, 96, 97 | Done |
 | STA-01 | S4 | 29-34, 51, 63, 84 | Done |
 | DOC-01 | S5 | 35-41, 52, 53, 54, 59, 64, 65, 67, 72, 75, 76, 82, 83, 85, 87, 88 | Done |
 | CLI-01 | S6 | 42, 43 | Done |
@@ -238,7 +239,7 @@ The user or an agent learns which hop failed and what to do about it.
 | S5 | SSH private key and server host key | Key file permission check, dedicated-key advice, no key material in output, one pinned connect path for `run` and `doctor` | SEC-005, SEC-006; criteria 6, 19, 28, 52, 54, 91 |
 | S6 | Untrusted CONNECT request head and server-supplied text | 8 KiB / 10 s head bounds, strict hostname and port grammar, post-head bytes never parsed, sanitised logs, generic refusal bodies | SEC-007, SEC-010; criteria 13, 14, 44, 45, 46, 50, 71, 84, 94, 95 |
 | S9 | Server-side tunnel user restrictions (configured by hand in v0.1) | `doctor` lockdown hop proves shell, sftp, local forward and other ports are refused | SEC-008; criteria 53, 59, 64, 65, 72, 75, 76, 82, 85, 87 |
-| S11 | Long-running process on the user's laptop | 256-relay cap, DNS/connect and idle timeouts, single-instance guard, stale-state detection | SEC-009; criteria 15, 16, 27, 47, 49, 51, 61, 73, 74, 78, 79, 88, 90, 92, 93 |
+| S11 | Long-running process on the user's laptop | 256-relay cap, DNS/connect and idle timeouts, single-instance guard, stale-state detection | SEC-009; criteria 15, 16, 27, 47, 49, 51, 61, 73, 74, 78, 79, 88, 90, 92, 93, 96, 97 |
 
 ## Out of scope
 
@@ -325,3 +326,4 @@ The user or an agent learns which hop failed and what to do about it.
 - Approval of criteria 90-92 (2026-11-22): Decision: "Approve 90–92 (Recommended)", plus the user's standing delegation to proceed without asking for approval of fix-round criteria. Source: user in the coordinating chat, 2026-11-22, as relayed by the coordinating agent
 - Revision after deep review round 9 (2026-11-22): criteria 93-95 appended: 93 for a live `run` whose `run.lock` was never refreshed, so a second `run` took it over once `state.json` was missing and the lock was older than 90 s, and 94 to settle that a well-formed port other than 443 gets `403` (criterion 9) while only a malformed port gets `400` (criterion 44), and (advisory) 95 to quote text-mode log values so a server banner cannot forge a field; criterion 91 moved above S1's independent-test line, text unchanged. Approved under the user's standing delegation to proceed without asking for approval of fix-round criteria. Source: user in the coordinating chat, 2026-11-22
 - Revision after deep review round 10 (2026-11-22): criterion 96 appended for an empty or corrupt `run.lock` read as pid 0, which `run` treated as a live holder for up to 90 s. Approved under the user's standing delegation to proceed without asking for approval of fix-round criteria. Source: user in the coordinating chat, 2026-11-22
+- Revision after deep review round 11 (2026-11-22): criterion 97 appended so criterion 93 governs where criteria 90 and 93 disagree on lock takeover (the code already followed 93; check C120 pins the case where they differ). Criteria 93-97 were written at commits eae0468 (93), 0bb9478 (94), 4cec53f (95), 4dd97ac (96) and the round 11 fix commit (97). Approved under the user's standing delegation to proceed without asking for approval of fix-round criteria. Source: user in the coordinating chat, 2026-11-22

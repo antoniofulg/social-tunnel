@@ -103,7 +103,7 @@ export function claimRun(path: string, live: (pid: number, ageMs: number) => boo
       }
       try {
         const again = readLock(path);
-        if (again && again.ino === held.ino && !live(again.pid, again.ageMs)) rmSync(path);
+        if (again && again.ino === held.ino && !live(again.pid, again.ageMs)) rmSync(path, { force: true });
         if (tryLink(temp, path)) return null;
       } finally {
         rmSync(takeover, { force: true });

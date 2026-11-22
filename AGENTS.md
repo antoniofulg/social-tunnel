@@ -33,7 +33,7 @@ These are the product. Every change that touches the proxy, tunnel, server setup
 
 Installed project-scoped in `.agents/skills/` (Claude links in `.claude/skills/`), pinned in `skills-lock.json`. Update with `npx skills@latest update --project`.
 
-- **Flow:** start feature and fix work with `wtk`; it routes to the right phase skill (`wtk-lean`, `wtk-plan`, `wtk-deep-review`, `wtk-ship`, …). Run `wtk-setup` to adopt project guidelines once code exists.
+- **Flow:** start feature and fix work with `wtk`; it routes to the right phase skill (`wtk-lean`, `wtk-plan`, `wtk-deep-review`, `wtk-ship`, …). Run `wtk-setup` to adopt project guidelines.
 - **Security:** `security-threat-model` before building v0.1 and whenever a trust boundary changes (keys, tunnel, proxy, remote root setup, sidecar); `security-spec` to turn a feature into abuse cases and negative tests; `security-implementation` while writing that code; `security-review` on every diff that touches the invariants above.
 - **Tray UI:** `frontend-craft` for design, review and accessibility of the settings and setup screens; `react` and `tailwindcss` for code; `tauri-v2` for commands, capabilities, tray, sidecar and updater.
 - **Bun and `ssh2`:** no skill installed; read the current docs before relying on an API or flag.
