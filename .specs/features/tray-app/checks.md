@@ -456,6 +456,12 @@ Append-only notes on approved rows; the rows above stay as approved.
 - Claude S4 builder `a8469fbd47e8f0421` is finished (native owner metadata and quota stop). Its S4 edits are uncommitted. No bundle, installed app, or native S4 captures were found. Prior C78 fake and C79 temporary-HOME results passed; the last filtered Clippy result is not a reliable proof.
 - S4 recovery, Run `run_61744c2ca329`, starting revision `37ca08d`: OMP `implementer-risk`, `openai-codex/gpt-6.2-sol` / `xhigh`, pending dispatch in this checkout. Scope: finish C75–C82 and installed C11/C56, adopt the known Claude edits, retain local proof. Local install and capture are approved; no push, production/VPS changes, second tunnel, tunnel signals/restarts, or enabling Open at Login.
 - Orca accepted the S4 assignment: Task `task_ce994d158297`, Dispatch `ctx_c47cad1e791d`, worker `term_bc57f8d3-0868-4ade-aed2-4967d1c3e863`, state `ready`. The worker owns S4 in this checkout; wait for its evidence before final verification.
+- S4 returned blocked at `1811eeb81e`: C75–C81 passed and the app is installed, not launched. Orca reported `screen_locked`. Opening live Settings would run `doctor` against the VPS; keep it out of live native proof. The existing tunnel stayed at the same PID and start time, with one matching process and an unchanged plist. Open at Login stayed off.
+- Independent S4 risk review is pending at `37ca08d..1811eeb81e` in Run `run_61744c2ca329`; it does not replace the full `ui` verifier or missing native evidence.
+- Orca accepted the independent, read-only S4 risk review: Task `task_cf13b1c25277`, Dispatch `ctx_c1a7e6add984`, state `ready`.
+- S4 risk review returned with a **FAIL** verdict at `1811eeb81e`: C75–C77, C79, and serial C80 hold. C81 relied on textual argv and concurrent replacement could nest a bundle. C78 used the current executable without ensuring it was the installed app. Native launch is unsafe under the current guardrails: C37/C50/C62 can act after the read-only preflight, so no launch or live Settings click is authorized as verification.
+- S4 remediation pending dispatch to the settled OMP builder: fix the C80/C81 installer races and C78 installed-target guard; verify with isolated fixtures. Preserve S2/S3 behavior and leave the installed app closed, tunnel untouched, and Open at Login off.
+- Orca reopened the settled S4 builder for remediation: Task `task_12e55ddc82a5`, Dispatch `ctx_f8343c707f01`, state `ready`. Native proof and aggregate verification remain blocked.
 
 ### S4 recovery proof
 
@@ -485,3 +491,30 @@ verified; ordinary bundle-level `codesign --verify` reported no sealed resources
 skipped, while `--ignore-resources` exited 0. Native launch was not tested.
 
 Native captures: none; no `.specs/features/tray-app/captures/s4-*.png` files were created.
+
+### S4 remediation proof
+
+Tested on `main` at base `1811eeb81e` plus the remediation committed with this record. Approved
+check rows and both prior amendments remain unchanged.
+
+| Check | Result | Command and evidence |
+| --- | --- | --- |
+| C80–C81 | Pass | Gated `env -u CI -u CLAUDECODE taskpolicy -b nice -n 10 bun test tests/install-local.test.ts`: 3 passed. A ready Mach-O fixture invoked by absolute path, relative path, hard link and symlink was refused with the exact diagnostic and unchanged bundle. A second installer could neither stage nor replace while another process held the destination directory lock; it replaced the bundle after release. `/bin/sh -n app/scripts/install-local.sh` passed. |
+| C78, C5, C10 | Pass (scoped) | Gated `cargo test --locked -j 2 --test login -- --test-threads=1`: 5 passed. The production enable guard accepted the canonical installed target and an alias resolving to it; it rejected development, build, copied, missing, hard-link alias and redirected install paths without calling the backend. Disable and read-back still passed. Gated `cargo test --locked -j 2 --test policy tray_c5_ -- --test-threads=1`: 1 passed; no autostart permission. The C10 source policy passed; canonicalization resolves paths without reading config or key contents. C79 evidence above applies to the unchanged plugin backend and label. |
+| Static | Pass (scoped) | Gated `bun run typecheck` and `cargo clippy --locked -j 2 --lib --test login -- -D warnings` exited 0. `validate_checks.py tray-app` and `check_commit.py --message 'fix(tray-app): guard install replacement and login paths'` exited 0. |
+| C75–C77, C80 actual copy | Pass | Gated `CARGO_BUILD_JOBS=2 taskpolicy -b nice -n 10 bunx tauri build --bundles app --no-sign --no-binary-patching -- --locked` from `app/`; `env -u CI -u CLAUDECODE taskpolicy -b nice -n 10 bun test ./bun-tests/bundle.test.ts`: 3 passed. `app/scripts/install-local.sh` replaced only the prior verified copy at `~/Applications/social-tunnel.app`, and `diff -qr` against the rebuilt bundle exited 0. |
+| C11, C56 (native), C82 | Blocked as before | No desktop interaction or native launch was authorized. Opening Settings would trigger live `doctor` (C62); the preflight does not rule out a later status-driven action. No native captures, aggregate WTK gate, or full root suite. |
+
+`/usr/sbin/lsof -a -d txt` matches the installed executable by device/inode before staging and
+immediately before the swap. `/usr/bin/lockf` holds the physical Applications directory across
+staging, publishing and rollback, with no lock path to remove. A competing installer fails without
+copying. The OS launcher does not take this lock: a launch after the final probe can still race
+the rename. If publication fails and the destination has appeared, rollback preserves the backup
+instead of replacing the new destination.
+
+`app/scripts/smoke-installed.sh preflight` (read-only) reported the installed sidecar connected.
+Before and after replacement: external PID `19886`, start `Sun Nov 22 13:07:58 2026`, one matching
+process, plist SHA-256 `86a4a528b4f23c8c1845bd3f0ab4f9b05162ce32a40903ae0fed66a448d99b5e`.
+The tray executable was closed and the tray login plist and launchd job were absent both times.
+Installed executable SHA-256: `db404940a0dc29d53277de25dfb75a22e4699aebe5161affef3b2b8cf3c2c6fc`;
+sidecar: `d36fe1bcdce756464afde7b1d1483f8a322ffdde1a63e463940217269e93d753`.
