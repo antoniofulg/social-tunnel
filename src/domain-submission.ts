@@ -1,6 +1,6 @@
 import { Database } from "bun:sqlite";
 import { closeSync, constants, lstatSync, openSync } from "node:fs";
-import { join } from "node:path";
+import { dirname } from "node:path";
 import type { ManagedEnrollment } from "./domain-enrollment";
 import { protectedDirectory, syncDirectory } from "./domain-policy";
 import { domainUInt, operationIdFormat, wireObject, type ProposalBody } from "./domain-wire";
@@ -12,9 +12,9 @@ const LIMIT = 2048;
 type Change = { claim: Submission } | { clear: Submission };
 
 export function domainSubmission(enrollment: ManagedEnrollment, change?: Change): { saved: Submission | null; claimed: boolean } {
-  const { directory, binding, epoch } = enrollment;
-  const dir = protectedDirectory(directory, true);
-  const path = join(directory, "submission.sqlite");
+  const { submissionPath: path, binding, epoch, proxyGeneration } = enrollment;
+  const directory = dirname(path);
+  const dir = protectedDirectory(directory);
   if (!lstatSync(path, { throwIfNoEntry: false })) {
     if (!change || !("claim" in change)) return { saved: null, claimed: false };
     try {
@@ -47,27 +47,24 @@ export function domainSubmission(enrollment: ManagedEnrollment, change?: Change)
       db.run("CREATE TABLE IF NOT EXISTS submission (slot INTEGER PRIMARY KEY CHECK (slot = 1), body TEXT NOT NULL CHECK (length(body) <= 2048)) STRICT");
       const row = db.query<{ body: string | null }, [number]>("SELECT CASE WHEN length(CAST(body AS BLOB)) <= ? THEN body END AS body FROM submission WHERE slot = 1").get(LIMIT);
       let saved: Submission | null = null;
-      let oldEpoch = false;
+      const stored = { version: 1, binding, enrollment: enrollment.enrollment, epoch, proxyGeneration };
       if (row) {
         const entry = row.body === null ? null : wireObject(JSON.parse(row.body));
         const p = wireObject(entry?.proposal);
-        if (!entry || entry.version !== 1 || entry.binding !== binding || entry.enrollment !== enrollment.enrollment ||
-            !domainUInt(entry.epoch) || entry.epoch > epoch || (entry.kind !== "add" && entry.kind !== "remove") ||
+        if (!entry || entry.version !== stored.version || entry.binding !== binding || entry.enrollment !== stored.enrollment ||
+            entry.epoch !== epoch || entry.proxyGeneration !== proxyGeneration || (entry.kind !== "add" && entry.kind !== "remove") ||
             !p || p.version !== 1 || !operationIdFormat(p.operationId) || !domainUInt(p.expectedRevision) ||
             !p.operationId.startsWith(`${entry.epoch}.${p.expectedRevision}.`) || typeof p.host !== "string" || normalizeManagedDomain(p.host) !== p.host) {
           throw new Error("invalid managed submission journal");
         }
-        oldEpoch = entry.epoch < epoch;
-        if (!oldEpoch) saved = { kind: entry.kind, proposal: { version: 1, operationId: p.operationId, expectedRevision: p.expectedRevision, host: p.host } };
+        saved = { kind: entry.kind, proposal: { version: 1, operationId: p.operationId, expectedRevision: p.expectedRevision, host: p.host } };
       }
       if (change && "clear" in change && saved?.proposal.operationId === change.clear.proposal.operationId) {
         db.run("DELETE FROM submission WHERE slot = 1");
         return { saved: null, claimed: false };
       }
       if (change && "claim" in change && !saved) {
-        // The caller has authenticated the higher epoch before replacing a retired slot.
-        if (oldEpoch) db.run("DELETE FROM submission WHERE slot = 1");
-        db.run("INSERT INTO submission VALUES (1, ?)", [JSON.stringify({ version: 1, binding, enrollment: enrollment.enrollment, epoch, ...change.claim })]);
+        db.run("INSERT INTO submission VALUES (1, ?)", [JSON.stringify({ ...stored, ...change.claim })]);
         return { saved: change.claim, claimed: true };
       }
       return { saved, claimed: false };

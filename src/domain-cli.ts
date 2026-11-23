@@ -84,12 +84,12 @@ export async function domainAction(
   function clear(submission: Submission) {
     if (changed()) return false;
     try { domainSubmission(enrollment!, { clear: submission }); } catch { return false; }
-    return true;
+    return !changed();
   }
   if (!read.ok) {
     const recovery = read.code === "fenced" || read.code === "recovery_required";
     if (reconcile && (read.code === "operation_cancelled" || read.code === "superseded")) {
-      return clear(reconcile) ? wireFailure(read.code) : fail("unavailable");
+      return clear(reconcile) ? wireFailure(read.code) : changed() ? conflict() : fail("unavailable");
     }
     if (action.kind === "list") {
       return ok(read.code === "unsupported" && !saved ? SETUP_REQUIRED : unconfirmed(saved, recovery));
@@ -111,13 +111,14 @@ export async function domainAction(
     if (state === "recovery_required" || history?.disposition === "recovery_required") return fail("recovery_required");
     if (pending?.operationId === action.id) return ok(view);
     if (history?.disposition === "cancelled") {
-      return !reconcile || clear(reconcile) ? fail("operation_cancelled") : fail("unavailable");
+      return !reconcile || clear(reconcile) ? fail("operation_cancelled") : changed() ? conflict() : fail("unavailable");
     }
     if (history?.disposition === "applied" && active?.revision === history.revision) {
-      return !reconcile || clear(reconcile) ? ok({ ...view, state: "applied", pending: null }) : fail("unavailable");
+      return !reconcile || clear(reconcile) ? ok({ ...view, state: "applied", pending: null }) : changed() ? conflict() : fail("unavailable");
     }
     if (reconcile) {
       if (history && active && active.revision > history.revision && clear(reconcile)) return ok(view);
+      if (changed()) return conflict();
       return ok(unconfirmed(reconcile));
     }
     return history ? ok(view) : fail("unknown_operation");
@@ -135,7 +136,7 @@ export async function domainAction(
   if (changed()) return conflict();
   if (!claim.ok && (claim.code === "fenced" || claim.code === "recovery_required")) return ok(unconfirmed(submission, true));
   if (!claim.ok && claim.code !== "unavailable" && claim.code !== "unsupported") {
-    return clear(submission) ? wireFailure(claim.code) : ok(unconfirmed(submission));
+    return clear(submission) ? wireFailure(claim.code) : changed() ? conflict() : ok(unconfirmed(submission));
   }
   const response = claim.ok && wireObject(claim.value);
   const accepted = response && response.operationId === operationId && domainUInt(response.revision) && response.revision > expected &&

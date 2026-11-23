@@ -1,12 +1,12 @@
 import { expect, test } from "bun:test";
-import { mkdirSync, readFileSync, readdirSync, renameSync, writeFileSync } from "node:fs";
+import { lstatSync, mkdirSync, readFileSync, readdirSync, renameSync, writeFileSync } from "node:fs";
 import net from "node:net";
 import { join } from "node:path";
 import { Server, utils, type Connection, type ServerChannel } from "ssh2";
 import { main } from "../src/cli";
 import { domainAction } from "../src/domain-cli";
 import { loadConfig } from "../src/config";
-import { enrollmentBinding, managedKeyFingerprint, readDomainEnrollment, readDomainRole, writeDomainLocal } from "../src/domain-enrollment";
+import { captureTrayEnrollment, enrollmentBinding, managedKeyFingerprint, readDomainEnrollment, readDomainRole, writeDomainLocal } from "../src/domain-enrollment";
 import { dialManagedAddress, resolveManagedHost } from "../src/domain-network";
 import { DOMAIN_COMMAND_UNAVAILABLE } from "../src/domain-protocol";
 import { domainSubmission } from "../src/domain-submission";
@@ -559,7 +559,7 @@ test("[domains C12] the real sidecar rejects equal-revision file substitution be
     const id = "1.0." + "b".repeat(32);
     const proposal = { version: 1 as const, operationId: id, expectedRevision: 0, host: "wipo.int" };
     expect(domainSubmission(replacement, { claim: { kind: "add", proposal } }).claimed).toBe(true);
-    const journal = join(f.folder, "submission.sqlite");
+    const journal = replacement.submissionPath;
     const beforeRetry = readFileSync(journal);
     expect(await invoke(["domains", "retry", id, ...stale])).toMatchObject(conflict);
     expect(readFileSync(journal)).toEqual(beforeRetry);
@@ -602,7 +602,7 @@ test("[domains C12] replacement during Retry authentication cannot send reconcil
     const id = "1.0." + "d".repeat(32);
     const proposal = { version: 1 as const, operationId: id, expectedRevision: 0, host: "wipo.int" };
     expect(domainSubmission(enrollment, { claim: { kind: "add", proposal } }).claimed).toBe(true);
-    const journal = join(f.folder, "submission.sqlite");
+    const journal = enrollment.submissionPath;
     const before = readFileSync(journal);
     const scope = (await runCli(f.path, ["status", "--tray-scope"])).payload.trayEnrollment;
     const result = await runCli(f.path, ["domains", "retry", id, "--expected-enrollment", scope]);
@@ -612,6 +612,68 @@ test("[domains C12] replacement during Retry authentication cannot send reconcil
     expect(readFileSync(journal)).toEqual(before);
   } finally { await f.close(); }
 });
+
+for (const change of ["claim", "clear"] as const) for (const swap of ["directory", "generation"] as const) {
+  test(`[domains C12] final ${change} check cannot write ${swap} replacement storage`, async () => {
+    const f = await sshFixture(() => {});
+    try {
+      const original = f.enroll();
+      const captured = captureTrayEnrollment(f.path, () => f.dir)!;
+      expect(captured.enrollment?.submissionPath).toBe(original.submissionPath);
+      const id = "1.0." + "f".repeat(32);
+      const saved = { kind: "add" as const, proposal: { version: 1 as const, operationId: id, expectedRevision: 0, host: "wipo.int" } };
+      if (change === "clear") expect(domainSubmission(original, { claim: saved }).claimed).toBe(true);
+      let replacement: typeof original | undefined;
+      const readReplacementFiles = () => readdirSync(f.folder).sort().map((name) => [name, hashBytes(readFileSync(join(f.folder, name)).toString("base64"))]);
+      let replacementFiles: ReturnType<typeof readReplacementFiles> = [];
+      let replacementJournal = "";
+      let boundary = 0;
+      let proposals = 0;
+      const reconciles: string[] = [];
+      const noop = async () => error("unauthorized");
+      const result = await domainAction(change === "claim"
+        ? { kind: "add", host: "wipo.int", expected: "0" } : { kind: "retry", id }, captured.enrollment, {
+        inspect: async () => ok(readyAtZero),
+        reconcile: async (operationId) => { reconciles.push(operationId); boundary = 2; return error("operation_cancelled"); },
+        propose: async () => { proposals++; return noop(); }, begin: noop, receipt: noop, attest: noop,
+      }, () => { boundary = 1; return INITIAL; }, () => {
+        const fresh = captured.current();
+        if (boundary > 0 && --boundary === 0 && fresh) {
+          const dir = lstatSync(f.folder);
+          if (swap === "directory") {
+            renameSync(f.folder, `${f.folder}.old`);
+            mkdirSync(f.folder, { mode: 0o700 });
+            writeFileSync(join(f.folder, "replacement-only"), "untouched");
+            expect(lstatSync(f.folder).ino).not.toBe(dir.ino);
+          } else {
+            const metadata = JSON.parse(readFileSync(f.metadata, "utf8"));
+            writeFileSync(f.metadata, JSON.stringify({ ...metadata, proxyGeneration: "same-directory-replacement" }));
+            expect(lstatSync(f.folder).ino).toBe(dir.ino);
+          }
+          replacement = readDomainEnrollment(f.path, f.config)!;
+          expect(replacement.submissionPath).not.toBe(original.submissionPath);
+          if (change === "clear") {
+            expect(domainSubmission(replacement, { claim: saved }).claimed).toBe(true);
+            replacementJournal = readFileSync(replacement.submissionPath).toString("base64");
+          }
+          replacementFiles = readReplacementFiles();
+        }
+        return fresh; // Replacement happens after the last successful freshness measurement.
+      });
+      expect(result).toMatchObject({ ok: false, error: { code: "conflict" } });
+      expect(proposals).toBe(0);
+      expect(reconciles).toEqual(change === "clear" ? [id] : []);
+      expect(replacement).toBeDefined();
+      expect(readReplacementFiles()).toEqual(replacementFiles);
+      if (change === "clear") {
+        expect(readFileSync(replacement!.submissionPath).toString("base64")).toBe(replacementJournal);
+        expect(domainSubmission(replacement!, { clear: saved }).saved).toBeNull();
+      } else expect(domainSubmission(replacement!).saved).toBeNull();
+      expect(domainSubmission(replacement!, { claim: saved }).claimed).toBe(true);
+      expect(domainSubmission(replacement!).saved).toEqual(saved);
+    } finally { await f.close(); }
+  });
+}
 
 test("[domains C2] only explicit unsupported returns setup required for a recognized enrollment", async () => {
   let code = 1;

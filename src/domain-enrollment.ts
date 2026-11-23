@@ -11,6 +11,7 @@ import { fingerprint, type SshTarget } from "./tunnel";
 interface RoleKey { user: string; fingerprint: string }
 export interface ManagedEnrollment {
   readonly directory: string;
+  readonly submissionPath: string;
   readonly binding: string;
   readonly enrollment: string;
   readonly epoch: number;
@@ -45,6 +46,7 @@ function bytesFrom(fd: number, size: number): Buffer {
 }
 
 const inode = (info: BigIntStats) => `${info.dev}:${info.ino}`;
+const directoryIdentity = (info: BigIntStats) => `${inode(info)}:${info.birthtimeNs}`;
 const fileStamp = (info: BigIntStats) => `${inode(info)}:${info.ctimeNs}:${info.mtimeNs}:${info.size}`;
 
 function safeRead(file: string, limit: number, expected?: string): Buffer {
@@ -67,14 +69,20 @@ function roleKey(value: unknown): RoleKey | null {
     ? { user: o.user, fingerprint: o.fingerprint } : null;
 }
 
-export function readDomainEnrollment(configPath: string, config: Config, expectedMetadata?: string): ManagedEnrollment | null | undefined {
+export function readDomainEnrollment(
+  configPath: string, config: Config, captured?: { metadata: string; directory: string },
+): ManagedEnrollment | null | undefined {
   const metadata = `${configPath}.domains.json`;
   const directory = `${configPath}.domains`;
   try {
     if (!lstatSync(metadata, { throwIfNoEntry: false }) && !lstatSync(directory, { throwIfNoEntry: false })) return undefined;
     protectedDirectory(dirname(configPath));
     protectedDirectory(directory, true);
-    const o = wireObject(JSON.parse(utf8.decode(safeRead(metadata, METADATA_LIMIT, expectedMetadata))));
+    const dir = lstatSync(directory, { bigint: true });
+    if (!dir.isDirectory() || dir.uid !== BigInt(process.geteuid?.() ?? -1) || (dir.mode & 0o077n) !== 0n) return null;
+    const identity = directoryIdentity(dir);
+    if (captured && identity !== captured.directory) return null;
+    const o = wireObject(JSON.parse(utf8.decode(safeRead(metadata, METADATA_LIMIT, captured?.metadata))));
     if (!o || Object.keys(o).length !== 9 || o.version !== 1 || !domainTag(o.enrollment) || !domainUInt(o.epoch) ||
         !domainTag(o.proxyGeneration) || !domainDigest(o.binding) || o.binding !== enrollmentBinding(configPath, config) || !fp(o.tunnelKey)) return null;
     const editor = roleKey(o.editor);
@@ -84,7 +92,12 @@ export function readDomainEnrollment(configPath: string, config: Config, expecte
     if (!editor || !proxy || !parsed || !parsed.ok || editor.user === proxy.user || editor.user === config.server.user ||
         proxy.user === config.server.user || editor.fingerprint === proxy.fingerprint || editor.fingerprint === o.tunnelKey ||
         proxy.fingerprint === o.tunnelKey) return null;
-    return { directory, binding: o.binding, enrollment: o.enrollment, epoch: o.epoch, proxyGeneration: o.proxyGeneration,
+    // SQLite opens rollback files by pathname, including during recovery. Put
+    // the entire slot outside the replaceable enrollment directory and bind its name
+    // to this captured identity. A later selection never opens this slot.
+    const slot = hashBytes(JSON.stringify([o.binding, o.enrollment, o.epoch, o.proxyGeneration, identity]));
+    return { directory, submissionPath: join(dirname(directory), `.st-submission-${slot}.sqlite`),
+      binding: o.binding, enrollment: o.enrollment, epoch: o.epoch, proxyGeneration: o.proxyGeneration,
       tunnelKey: o.tunnelKey, editor, proxy, baseline: parsed.snapshot };
   } catch { return null; }
 }
@@ -97,7 +110,7 @@ export function captureTrayEnrollment(path: string, homedir: () => string) {
     const meta = lstatSync(`${path}.domains.json`, { bigint: true, throwIfNoEntry: false });
     const dir = lstatSync(`${path}.domains`, { bigint: true, throwIfNoEntry: false });
     if (!config.isFile() || config.size > 1024n * 1024n) throw new Error("invalid tray config file");
-    return [fileStamp(config), meta ? fileStamp(meta) : "", dir ? inode(dir) : ""];
+    return [fileStamp(config), meta ? fileStamp(meta) : "", dir ? directoryIdentity(dir) : ""];
   }
 
   try {
@@ -114,7 +127,7 @@ export function captureTrayEnrollment(path: string, homedir: () => string) {
     }, homedir);
     if (!loaded.ok) return null;
     const config = loaded.config;
-    const enrollment = readDomainEnrollment(path, config, metadataStamp);
+    const enrollment = readDomainEnrollment(path, config, { metadata: metadataStamp, directory: directoryStamp });
     if (enrollment === null) return null;
     const current = () => {
       try {
