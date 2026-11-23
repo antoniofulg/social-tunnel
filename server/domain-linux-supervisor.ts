@@ -9,7 +9,7 @@ import { setTimeout as sleep } from "node:timers/promises";
 import { openDomainAuthority } from "./domain-authority";
 import { DIRECT_WITNESS_MAPPING } from "./domain-direct-witness";
 import { ADMIN_SOCKET, CHROME, JOURNAL, POLICY, PROFILE, ROOT, SETPRIV, SSH_LAUNCH, SSH_RUN, SSH_SNAPSHOT, STAGING,
-  dropped, exact, guardedPlatform, guardedSshd, inspectBindHooks, loadManifest, policyScope, proc, readSshConfig, roleDirectory,
+  dropped, exact, guardedPlatform, guardedSshd, inspectBindHooks, inspectLegacyPolicy, loadManifest, policyScope, proc, readSshConfig, roleDirectory,
   type Epoch, type Manifest } from "./domain-linux-platform";
 import { DOMAIN_POLICY_FILE, fileDomainPolicySink, hashBytes, protectedDirectory, renderDomainPolicy, syncDirectory } from "../src/domain-policy";
 import { domainUInt, operationIdFormat } from "../src/domain-wire";
@@ -516,17 +516,24 @@ if (import.meta.main) {
         if (op === "stage") stage(m); else await serve(m, platform);
       } else if ((op === "status" || op === "bootstrap") && !arg) await sendAdmin({ op });
       else if ((op === "disable" || op === "prepare") && arg && /^\d{1,16}$/.test(arg) && domainUInt(Number(arg))) await sendAdmin({ op, epoch: Number(arg) });
-      else if (op === "recover" && !arg) {
+      else if ((op === "recover" || op === "legacy-preflight") && !arg) {
         let bytes = 0;
         const input: Buffer[] = [];
         for await (const chunk of process.stdin) {
-          if ((bytes += chunk.length) > CONTROL_LIMIT) throw new Error("recovery request too large");
+          if ((bytes += chunk.length) > CONTROL_LIMIT) throw new Error(`${op} request too large`);
           input.push(chunk);
         }
-        const req = exact(JSON.parse(utf8.decode(Buffer.concat(input, bytes))), "epoch operationId expectedRecovery domains releaseDirect");
-        if (!req) throw new Error("invalid recovery request");
-        await sendAdmin({ ...req, op });
-      } else throw new Error("use attest-bind <cgroup> <ipv4-tag> <ipv6-tag>, stage, serve, serve-sshd, status, bootstrap, disable <epoch>, prepare <epoch>, or recover (JSON stdin)");
+        let inputJson: unknown;
+        try { inputJson = JSON.parse(utf8.decode(Buffer.concat(input, bytes))); }
+        catch { throw new Error(`invalid ${op} request`); }
+        if (op === "legacy-preflight") {
+          console.log(JSON.stringify({ ok: true, ...inspectLegacyPolicy(inputJson) }));
+        } else {
+          const req = exact(inputJson, "epoch operationId expectedRecovery domains releaseDirect");
+          if (!req) throw new Error("invalid recovery request");
+          await sendAdmin({ ...req, op });
+        }
+      } else throw new Error("use legacy-preflight (domain array stdin), attest-bind <cgroup> <ipv4-tag> <ipv6-tag>, stage, serve, serve-sshd, status, bootstrap, disable <epoch>, prepare <epoch>, or recover (JSON stdin)");
     }
   } catch (e) { console.error(e instanceof Error ? e.message : "managed supervisor unavailable"); process.exitCode = 1; }
 }

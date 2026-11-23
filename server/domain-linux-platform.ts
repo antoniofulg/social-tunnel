@@ -339,11 +339,51 @@ function sshMaster(cgroup: string, scope: string) {
   return `${launch.pid}:${child.start}`;
 }
 
-export function policyScope() {
+const LEGACY_POLICY_FILE = "agentes-meta-proxy.json";
+const legacyPolicy = /^\s*\{\s*"ProxySettings"\s*:\s*\{\s*"ProxyMode"\s*:\s*"pac_script"\s*,\s*"ProxyPacUrl"\s*:\s*"data:application\/x-ns-proxy-autoconfig;base64,([A-Za-z0-9+/]+={0,2})"\s*,\s*"ProxyPacMandatory"\s*:\s*true\s*\}\s*\}\s*$/;
+
+function verifyLegacyPolicy(bytes: string, home: unknown) {
+  if (/[^\t\r\n -~]/.test(bytes)) throw new Error("unsupported legacy Chrome policy");
+  const encoded = legacyPolicy.exec(bytes)?.[1];
+  if (!encoded) throw new Error("unsupported legacy Chrome policy");
+  const data = Buffer.from(encoded, "base64");
+  if (data.toString("base64") !== encoded) throw new Error("invalid legacy PAC encoding");
+  let decoded: string;
+  try { decoded = UTF8.decode(data); } catch { throw new Error("invalid legacy PAC encoding"); }
+  const lines = decoded.trim().split(/\r?\n/).map((line) => line.trim());
+  const list = /^var d = (\[[^\]]*\]);$/.exec(lines[2] ?? "")?.[1];
+  if (!list || lines.length !== 7 || lines[0] !== "function FindProxyForURL(url, host) {" ||
+      lines[1] !== "host = host.toLowerCase();" || lines[3] !== "for (var i = 0; i < d.length; i++)" ||
+      lines[4] !== 'if (host == d[i] || dnsDomainIs(host, "." + d[i])) return "PROXY 127.0.0.1:8888";' ||
+      lines[5] !== 'return "DIRECT";' || lines[6] !== "}") throw new Error("unsupported legacy PAC");
+  let names: unknown;
+  try { names = JSON.parse(list); } catch { throw new Error("invalid legacy domain list"); }
+  const server = parseManagedDomainSnapshot(0, names);
+  const mac = parseManagedDomainSnapshot(0, home);
+  if (!server.ok || !mac.ok || !Array.isArray(names) || names.some((name) => typeof name !== "string" || !server.snapshot.domains.includes(name))) {
+    throw new Error("invalid legacy domain list");
+  }
+  const domains = server.snapshot.domains;
+  if (domains.length !== mac.snapshot.domains.length || domains.some((name, index) => name !== mac.snapshot.domains[index])) {
+    throw new Error("legacy policy and Mac domain lists differ");
+  }
+  return { domains: domains.length, policySha256: hashBytes(bytes) };
+}
+
+export function inspectLegacyPolicy(home: unknown) {
+  checkPolicyScope(LEGACY_POLICY_FILE);
+  return verifyLegacyPolicy(protectedFile(`${POLICY}/${LEGACY_POLICY_FILE}`, 64 * 1024).toString("utf8"), home);
+}
+
+function checkPolicyScope(expected: typeof DOMAIN_POLICY_FILE | typeof LEGACY_POLICY_FILE) {
   checkDirectories(POLICY);
   const entries = readdirSync(POLICY);
-  if (entries.some((name) => name !== DOMAIN_POLICY_FILE) || lstatSync(recommended, { throwIfNoEntry: false }) &&
+  if (entries.some((name) => name !== expected) || lstatSync(recommended, { throwIfNoEntry: false }) &&
       (checkDirectories(recommended), readdirSync(recommended).length > 0)) throw new Error("competing Chrome policy sources");
+}
+
+export function policyScope() {
+  checkPolicyScope(DOMAIN_POLICY_FILE);
 }
 
 // No effective BPF capabilities are needed by the service. Root's boot-scoped
