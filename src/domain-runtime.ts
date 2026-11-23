@@ -26,6 +26,7 @@ interface AuthorityView {
   state: "ready" | "pending" | "activation_unknown" | "recovery_required";
   active: ManagedDomainSnapshot | null;
   activeForMs: number;
+  homeMatcher: { revision: number; domainsDigest: string; forMs: number } | null;
   pending: unknown;
   history: ArchivedOperation[];
 }
@@ -65,6 +66,13 @@ export function parseAuthorityView(value: unknown, enrollment: ManagedEnrollment
   const active = o.active === null ? null : parseDomainRevision(o.active);
   if (!domainUInt(o.activeForMs) || o.activeForMs > 10000 || (active !== null) !== (o.activeForMs > 0)) return null;
   if ((o.active !== null && (!active || active.revision !== o.lastRevision)) || (o.pending !== null && !pendingDomains(o.pending))) return null;
+  let homeMatcher: AuthorityView["homeMatcher"] = null;
+  if (o.homeMatcher !== undefined) {
+    const match = wireObject(o.homeMatcher);
+    if (!match || Object.keys(match).length !== 3 || match.revision !== o.lastRevision || !domainDigest(match.domainsDigest) ||
+        !domainUInt(match.forMs) || match.forMs === 0 || match.forMs > 10000 || o.state === "recovery_required") return null;
+    homeMatcher = { revision: o.lastRevision, domainsDigest: match.domainsDigest, forMs: match.forMs };
+  }
   const history: ArchivedOperation[] = [];
   for (const raw of o.history) {
     const h = wireObject(raw);
@@ -72,7 +80,7 @@ export function parseAuthorityView(value: unknown, enrollment: ManagedEnrollment
         (h.disposition !== "cancelled" && h.disposition !== "recovery_required" && h.disposition !== "applied" && h.disposition !== "reconciled")) return null;
     history.push({ operationId: h.operationId, revision: h.revision, disposition: h.disposition });
   }
-  return { state: o.state, active, activeForMs: o.activeForMs, pending: o.pending, history };
+  return { state: o.state, active, activeForMs: o.activeForMs, homeMatcher, pending: o.pending, history };
 }
 
 const digest = (snapshot: DomainRevision) => hashBytes(JSON.stringify(snapshot.domains));
@@ -163,6 +171,7 @@ export function createManagedRun(options: ManagedRunOptions) {
   let active = boot.active;
   let interrupted = boot.interrupted;
   let allow = false;
+  let matcherUntil = 0;
   let connected = false;
   let incarnation = 0;
   let stopping = false;
@@ -185,7 +194,8 @@ export function createManagedRun(options: ManagedRunOptions) {
   });
 
   const proxy = createManagedProxy({
-    resolve: options.resolve, dial: options.dial, trafficReady: () => allow && !stopping,
+    resolve: options.resolve, dial: options.dial,
+    trafficReady: () => !stopping && (allow || performance.now() < matcherUntil),
     log: ({ status, host }) => {
       if (status !== 403 || !proofHost(host) || !connected || stopping || settling) return;
       canaries.observe({ enrollment: enrollment.enrollment, epoch: enrollment.epoch, generation: enrollment.proxyGeneration,
@@ -202,6 +212,9 @@ export function createManagedRun(options: ManagedRunOptions) {
     const elapsed = performance.now() - started;
     const live = !interrupted && view && (!pending || pending.phase === "claimed") ? matchingActive(view, active, elapsed) : null;
     recordLive(live, live && view ? view.activeForMs - elapsed : 0);
+    const matcher = view?.homeMatcher;
+    matcherUntil = !interrupted && (!pending || pending.phase === "claimed") && matcher &&
+      matcher.revision === active.revision && matcher.domainsDigest === digest(active) ? started + matcher.forMs : 0;
     if (live) allow = true;
     if (!view) return;
     if (!pending) { acknowledged = undefined; return; }
@@ -240,7 +253,10 @@ export function createManagedRun(options: ManagedRunOptions) {
 
   function kick() {
     if (busy || !connected || stopping) return;
-    busy = poll(incarnation).catch(() => { try { recordLive(null); } catch {} }).finally(() => {
+    busy = poll(incarnation).catch(() => {
+      matcherUntil = 0;
+      try { recordLive(null); } catch {}
+    }).finally(() => {
       busy = undefined;
       if (connected && !stopping) timer = setTimeout(kick, options.pollMs ?? POLL_MS);
     });
@@ -249,6 +265,7 @@ export function createManagedRun(options: ManagedRunOptions) {
   return {
     handle: proxy.handle,
     onState(state: TunnelState) {
+      matcherUntil = 0;
       if (state === "connected" && !stopping) {
         connected = true;
         incarnation++;

@@ -37,6 +37,7 @@ const invalid = Object.freeze({ ok: false as const, code: "invalid_request" as c
 
 export function openDomainAuthority(enrollment: DomainEnrollment, now = () => performance.now()) {
   const { browserRoster, forwardOwnership, policy, proxyPort } = enrollment;
+  const guarded = enrollment.currentIdleReservation !== undefined;
   const forward = createForwardAttestation(enrollment.enrollment, proxyPort, forwardOwnership, now);
   const bootstrap = Object.freeze({ ...enrollment.forward });
   let recoveryScope: ForwardScope | undefined;
@@ -59,6 +60,8 @@ export function openDomainAuthority(enrollment: DomainEnrollment, now = () => pe
     return !!expected && live?.generation === expected.generation && live.revision === expected.revision &&
       live.domainsDigest === expected.domainsDigest;
   };
+  // A healthy installed matcher can outlive a quiet window; browser proof cannot.
+  const forwardWithoutBrowser = (v: PublisherView | undefined) => guarded && !!v?.editingEnabled && !v.recovery;
   function ready(v: PublisherView): boolean {
     const owned = observer.alive();
     if (!closing && owned && v.editingEnabled && !v.recovery && proven && observer.valid(proven.evidence) &&
@@ -72,7 +75,13 @@ export function openDomainAuthority(enrollment: DomainEnrollment, now = () => pe
     const lifetime = ready(v) && proven ? Math.floor(Math.min(proven.evidence.expiresAt - now(), forward.freshFor(scope))) : 0;
     const active = lifetime > 0 ? { revision: v.lastProven.policy.revision, domains: v.lastProven.domains } : null;
     const pending = v.pending;
+    const homeForMs = role === "proxy" && forwardWithoutBrowser(v) && (!pending || pending.phase === "claimed") &&
+      current(v.lastProven, v.proxyGeneration) && policy.read() === renderDomainPolicy(proxyPort, v.lastProven.policy)
+      ? forward.freshFor(scope) : 0;
     return {
+      ...(homeForMs > 0 ? {
+        homeMatcher: { revision: v.lastProven.policy.revision, domainsDigest: v.lastProven.domainsDigest, forMs: homeForMs },
+      } : {}),
       epoch: v.epoch, proxyGeneration: v.proxyGeneration, active,
       activeForMs: active ? lifetime : 0,
       lastRevision: v.lastProven.policy.revision,
@@ -96,7 +105,7 @@ export function openDomainAuthority(enrollment: DomainEnrollment, now = () => pe
       const v = checked?.ok ? checked.value : undefined;
       const scope = recoveryScope ?? (v ? { epoch: v.epoch, generation: v.proxyGeneration } : bootstrap);
       if (closing || identity.role !== "proxy" || identity.epoch !== scope.epoch ||
-          identity.generation !== scope.generation || !observer.alive()) return unavailable;
+          identity.generation !== scope.generation || (!forwardWithoutBrowser(v) && !observer.alive())) return unavailable;
       try {
         return forward.attest(identity, JSON.parse(utf8.decode(body))) ? { ok: true, value: null } :
           { ok: false, code: "receipt_mismatch" };
@@ -223,7 +232,7 @@ export function openDomainAuthority(enrollment: DomainEnrollment, now = () => pe
       const checked = view();
       const v = checked?.ok ? checked.value : undefined;
       const scope = recoveryScope ?? (v ? { epoch: v.epoch, generation: v.proxyGeneration } : bootstrap);
-      if (!scope || closing || !observer.alive() || !(await forward.refresh(scope))) return false;
+      if (!scope || closing || (!forwardWithoutBrowser(v) && !observer.alive()) || !(await forward.refresh(scope))) return false;
       // Only the protected scheduler can renew the browser baseline. A durable
       // ordinary claim made under still-valid evidence can wait here unchanged;
       // the home runner and begin CAS still require a fresh matching baseline.

@@ -320,6 +320,81 @@ test("[domains C6] [domains C7] [domains C12] CLI and managed run reconcile one 
   }
 }, 15000);
 
+test.each(["matching", "expiry", "wrong digest", "activating", "interrupted"] as const)(
+  "[domains C6] [domains C11] guarded reconnect with %s matcher never grants an edit or claims active routing",
+  async (scenario) => {
+    const f = await sshFixture(() => {});
+    const enrollment = f.enroll();
+    if (scenario === "interrupted") writeDomainLocal(enrollment, "journal", {
+      version: 1, binding: enrollment.binding, enrollment: ENROLL, epoch: EPOCH,
+      active: INITIAL, applying: { revision: 1, domains: ["wikipedia.org", "wipo.int"] },
+    });
+    const id = `${EPOCH}.0.${"a".repeat(32)}`;
+    let reads = 0;
+    let grants = 0;
+    let reportMatcher = true;
+    const pendingRead = Promise.withResolvers<ReturnType<typeof ok>>();
+    const admitted = scenario === "matching" || scenario === "expiry";
+    const dials: string[] = [];
+    const noop = async () => error("unavailable");
+    const managed = createManagedRun({ enrollment, pollMs: 10, client: {
+      async inspect() {
+        reads++;
+        if (scenario === "expiry" && reads > 1) return pendingRead.promise;
+        return ok({
+          epoch: EPOCH, proxyGeneration: GEN, lastRevision: 0, active: null, activeForMs: 0,
+          ...(reportMatcher ? { homeMatcher: { revision: 0, forMs: scenario === "expiry" ? 700 : 5000,
+            domainsDigest: hashBytes(JSON.stringify(scenario === "wrong digest" ? ["wipo.int"] : INITIAL.domains)) },
+          } : {}),
+          state: "activation_unknown", history: [],
+          pending: { operationId: id, expectedRevision: 0, proxyGeneration: GEN,
+            phase: scenario === "activating" ? "activating" : "claimed",
+            intent: { kind: "add", proposal: { host: "wipo.int", operationId: id, expectedRevision: 0 } },
+            target: { domains: ["wikipedia.org", "wipo.int"], domainsDigest: hashBytes('["wikipedia.org","wipo.int"]'),
+              policy: { epoch: EPOCH, revision: 1 } } },
+        });
+      },
+      async begin() { grants++; return noop(); },
+      receipt: noop, attest: noop, propose: noop, reconcile: noop,
+    }, resolve: async (host) => { dials.push(host); return ["157.240.1.1"]; }, dial: async () => pair()[0] });
+    const status = async (host: string) => {
+      const [client, stream] = pair();
+      managed.handle(stream);
+      try {
+        const reply = new Promise<string>((resolve) => client.once("data", (b: Buffer) => resolve(b.toString())));
+        client.write(`CONNECT ${host}:443 HTTP/1.1\r\n\r\n`);
+        return (await reply).split("\r\n")[0];
+      } finally { client.destroy(); }
+    };
+    try {
+      managed.onState("connected");
+      await until(() => reads >= 2);
+      expect(readActiveHome(enrollment, process.pid)).toBeNull();
+      expect(await status("wikipedia.org")).toBe(admitted ? "HTTP/1.1 200 Connection Established" : DENY);
+      expect(await status("wipo.int")).toBe(DENY);
+      expect(grants).toBe(0);
+      expect(dials).toEqual(admitted ? ["wikipedia.org"] : []);
+      if (scenario === "matching") {
+        const before = reads;
+        reportMatcher = false;
+        await until(() => reads >= before + 2);
+        expect(await status("wikipedia.org")).toBe(DENY);
+      }
+      if (scenario === "expiry") {
+        await Bun.sleep(700);
+        expect(await status("wikipedia.org")).toBe(DENY);
+        pendingRead.resolve(ok(null));
+      }
+      await managed.stop();
+      expect(await status("wikipedia.org")).toBe(DENY);
+    } finally {
+      pendingRead.resolve(ok(null));
+      await managed.stop();
+      await f.close();
+    }
+  },
+);
+
 test("[domains C6] [domains C10] interrupted runtime neither replays a grant nor reopens its uncertain removal", async () => {
   const f = await sshFixture(() => {});
   const enrollment = f.enroll();
