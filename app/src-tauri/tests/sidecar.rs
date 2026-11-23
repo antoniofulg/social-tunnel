@@ -24,7 +24,7 @@ fn v(items: &[&str]) -> Vec<String> {
 }
 
 #[test]
-fn tray_c6_argv_builder_returns_only_the_four_shapes() {
+fn tray_c6_legacy_argv_shapes_stay_unchanged() {
     let doctor_domain = SidecarCall::Doctor { domain: Some("instagram.com".into()) };
     let cases = [
         (SidecarCall::Status, v(&["status", "--json"])),

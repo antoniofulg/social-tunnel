@@ -9,8 +9,7 @@ const TYPES: Record<string, string> = { ".html": "text/html", ".js": "text/javas
 
 export const csp: string = JSON.parse(readFileSync(join(root, "src-tauri", "tauri.conf.json"), "utf8")).app.security.csp;
 
-export async function serveDist(): Promise<{ url: string; server: Server }> {
-  const dist = join(root, "dist");
+export async function serveDist(dist = join(root, "dist")): Promise<{ url: string; server: Server }> {
   const server = createServer((req, res) => {
     const path = new URL(req.url ?? "/", "http://localhost").pathname;
     const file = normalize(join(dist, path === "/" ? "index.html" : path));

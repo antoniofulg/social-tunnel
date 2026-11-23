@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-edit-domain"
+description = "Enables the edit_domain command without any pre-configured scope."
+commands.allow = ["edit_domain"]
+
+[[permission]]
+identifier = "deny-edit-domain"
+description = "Denies the edit_domain command without any pre-configured scope."
+commands.deny = ["edit_domain"]

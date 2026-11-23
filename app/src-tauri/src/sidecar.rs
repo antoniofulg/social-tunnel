@@ -13,12 +13,15 @@ pub enum SidecarCall {
     Status,
     Doctor { domain: Option<String> },
     Run,
+    Domains(crate::domains::DomainCall),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ArgvError {
     InvalidHost,
     InvalidConfigPath,
+    InvalidRevision,
+    InvalidOperation,
 }
 
 /// The CLI's hostname grammar (`src/host.ts`): lower-cased, one trailing dot dropped, at most 253
@@ -51,6 +54,25 @@ pub fn argv(call: &SidecarCall, config: Option<&str>) -> Result<Vec<String>, Arg
                 return Err(ArgvError::InvalidHost);
             }
             vec!["doctor".into(), "--json".into(), "--domain".into(), host.clone()]
+        }
+        SidecarCall::Domains(domain) => {
+            use crate::domains::{self, DomainCall, EditOperation};
+            let mut args = vec!["domains".into()];
+            match domain {
+                DomainCall::List => args.push("list".into()),
+                DomainCall::Edit(edit) => {
+                    if !domains::valid_host(&edit.host) { return Err(ArgvError::InvalidHost); }
+                    if edit.expected_revision > domains::MAX_SAFE_REVISION { return Err(ArgvError::InvalidRevision); }
+                    args.push(match edit.operation { EditOperation::Add => "add", EditOperation::Remove => "remove" }.into());
+                    args.extend([edit.host.clone(), "--expected-revision".into(), edit.expected_revision.to_string()]);
+                }
+                DomainCall::Retry(retry) => {
+                    if !domains::valid_operation(&retry.operation_id) { return Err(ArgvError::InvalidOperation); }
+                    args.extend(["retry".into(), retry.operation_id.clone()]);
+                }
+            }
+            args.push("--json".into());
+            args
         }
     };
     if let Some(path) = config {

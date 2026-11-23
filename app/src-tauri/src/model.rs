@@ -262,12 +262,24 @@ pub fn view(tracker: &Tracker, i: &Inputs) -> TrayModel {
     }
     if layout == Layout::Connected {
         menu.push(Entry::Separator);
-        menu.push(info("Through home"));
-        let list = &run.expect("connected has a run").allowlist;
-        menu.extend(list.iter().take(DOMAIN_ROWS).map(info));
-        if list.len() > DOMAIN_ROWS {
-            menu.push(info(format!("{} more in Settings", list.len() - DOMAIN_ROWS)));
+        let status = run.expect("connected has a run");
+        let selected = match &status.managed_domains {
+            Some(domains) => domains.active.as_ref().map(|active| active.domains.as_slice()),
+            None => Some(status.allowlist.as_slice()),
+        };
+        match selected {
+            None => menu.push(info("Managed domain routing isn't verified.")),
+            Some([]) if status.managed_domains.is_some() => menu.push(info("No domains use the tunnel.")),
+            Some(list) => {
+                menu.push(info("Through home"));
+                menu.extend(list.iter().take(DOMAIN_ROWS).map(info));
+                if list.len() > DOMAIN_ROWS {
+                    menu.push(info(format!("{} more in Settings", list.len() - DOMAIN_ROWS)));
+                }
+            }
         }
+    } else if run.or(last).is_some_and(|r| r.managed_domains.is_some()) {
+        menu.push(info("Managed domain routing isn't verified."));
     } else if let Some(n) = last.map(|r| r.domains) {
         menu.push(info(if n == 1 {
             "1 domain paused. Nothing goes direct.".to_string()

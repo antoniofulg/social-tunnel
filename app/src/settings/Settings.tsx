@@ -72,7 +72,7 @@ export function Settings({ initialView = null }: { initialView?: View | null }) 
       >
         {tab === "status" && <StatusTab snapshot={snapshot} busy={busy} onCheck={onCheck} />}
         {tab === "server" && <ServerTab snapshot={snapshot} />}
-        {tab === "domains" && <DomainsTab snapshot={snapshot} />}
+        {tab === "domains" && <DomainsTab key={snapshot?.configPath ?? ""} snapshot={snapshot} />}
         {tab === "general" && <GeneralTab snapshot={snapshot} />}
       </main>
     </div>

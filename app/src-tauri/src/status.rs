@@ -1,5 +1,6 @@
 //! Reads one `status --json` call into what the tray may trust (plan criteria 13 and 90).
 
+use crate::domains::{self, DomainView};
 use crate::sidecar::CallOutput;
 use serde::Serialize;
 use serde_json::{Map, Value};
@@ -33,6 +34,8 @@ pub struct RunStatus {
     pub allowlist: Vec<String>,
     pub key_path: Option<String>,
     pub config_path: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub managed_domains: Option<DomainView>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -133,6 +136,10 @@ fn run_status(exit: i32, o: &Map<String, Value>) -> Option<RunStatus> {
         allowlist,
         key_path: opt_string(o, "keyPath")?,
         config_path: opt_string(o, "configPath")?,
+        managed_domains: o.get("managedDomains").map(|raw| {
+            let view = domains::read_view(raw.clone()).unwrap_or_else(DomainView::unknown);
+            if exit != 0 && view.active.is_some() { DomainView::unknown() } else { view }
+        }),
     })
 }
 

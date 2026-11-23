@@ -14,6 +14,31 @@ export interface Doctor {
   startedAt: number;
 }
 
+export interface DomainRevision {
+  revision: number;
+  domains: string[];
+}
+
+export interface PendingDomain {
+  operationId: string;
+  operation: "add" | "remove" | "recovery";
+  host: string | null;
+  phase: "claimed" | "activating" | "publishing" | "published" | "unconfirmed";
+  pendingMayGoDirect: boolean;
+}
+
+export interface DomainView {
+  state: "setup_required" | "ready" | "pending" | "activation_unknown" | "recovery_required" | "applied";
+  active: DomainRevision | null;
+  pending: PendingDomain | null;
+}
+
+export interface DomainEdit {
+  operation: "add" | "remove";
+  host: string;
+  expectedRevision: number;
+}
+
 export interface RunStatus {
   exit: number;
   state: string;
@@ -26,6 +51,7 @@ export interface RunStatus {
   allowlist: string[];
   keyPath: string | null;
   configPath: string | null;
+  managedDomains?: DomainView;
 }
 
 export type TrayState = "notSetUp" | "connected" | "reconnecting" | "disconnected" | "blocked";

@@ -2,6 +2,7 @@
 //! crate runs it as a sidecar and draws its state (AGENTS.md).
 
 pub mod doctor;
+pub mod domains;
 pub mod driver;
 pub mod login;
 pub mod model;
@@ -13,6 +14,7 @@ pub mod supervisor;
 
 use driver::{Driver, Icon, PollGate, Snapshot, TraySink, FRAME_MS, POLL_MS};
 use doctor::{Clipboard, Doctors};
+use domains::{DomainCall, DomainError, DomainView, ErrorCode};
 use model::{Doctor, Entry, Inputs, TrayImage, Tracker};
 use sidecar::{CancellableRunner, SidecarCall};
 use status::{read_status, StatusRead, MAX_STDOUT, STATUS_TIMEOUT_MS};
@@ -85,6 +87,7 @@ struct Core {
 struct AppState {
     core: Mutex<Core>,
     gate: PollGate,
+    domain_gate: PollGate,
     doctors: Doctors,
     /// Set by Quit: kills running status and doctor calls (criterion 46).
     quitting: Arc<AtomicBool>,
@@ -333,12 +336,61 @@ async fn set_open_at_login(app: AppHandle, enabled: bool) -> Result<bool, String
         .map_err(|_| "autostart_failed".to_string())?
 }
 
+fn domain_sender(window: &tauri::WebviewWindow) -> Result<(), DomainError> {
+    if window.url().is_ok_and(|url| domains::settings_sender(window.label(), &url)) {
+        Ok(())
+    } else {
+        Err(ErrorCode::Unavailable.error())
+    }
+}
+
+async fn call_domains(app: AppHandle, command: DomainCall) -> Result<DomainView, DomainError> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let state = app.state::<AppState>();
+        if !state.domain_gate.try_start() {
+            return Err(ErrorCode::Conflict.error());
+        }
+        let result = domains::run(&CancellableRunner(state.quitting.clone()), &state.sidecar, command);
+        state.domain_gate.finish();
+        result
+    }).await.map_err(|_| ErrorCode::Internal.error())?
+}
+
+fn domain_payload<'a>(window: &tauri::WebviewWindow, request: &'a tauri::ipc::Request<'_>) -> Result<&'a serde_json::Value, DomainError> {
+    domain_sender(window)?;
+    match request.body() {
+        tauri::ipc::InvokeBody::Json(value) => Ok(value),
+        _ => Err(ErrorCode::Unavailable.error()),
+    }
+}
+
+#[tauri::command]
+async fn get_domains(window: tauri::WebviewWindow, request: tauri::ipc::Request<'_>) -> Result<DomainView, DomainError> {
+    let payload = domain_payload(&window, &request)?;
+    if !payload.as_object().is_some_and(|o| o.is_empty()) { return Err(ErrorCode::Unavailable.error()); }
+    call_domains(window.app_handle().clone(), DomainCall::List).await
+}
+
+#[tauri::command]
+async fn edit_domain(window: tauri::WebviewWindow, request: tauri::ipc::Request<'_>) -> Result<DomainView, DomainError> {
+    let edit = domains::edit_request(domain_payload(&window, &request)?)?;
+    call_domains(window.app_handle().clone(), DomainCall::Edit(edit)).await
+}
+
+#[tauri::command]
+async fn retry_domain_edit(window: tauri::WebviewWindow, request: tauri::ipc::Request<'_>) -> Result<DomainView, DomainError> {
+    let retry = domains::retry_request(domain_payload(&window, &request)?)?;
+    call_domains(window.app_handle().clone(), DomainCall::Retry(retry)).await
+}
+
 pub fn run() {
     let builder = tauri::Builder::default().plugin(tauri_plugin_clipboard_manager::init());
     #[cfg(not(target_os = "macos"))]
     let builder = builder.plugin(login::plugin());
     builder
-        .invoke_handler(tauri::generate_handler![get_snapshot, run_check, copy_fix, set_open_at_login])
+        .invoke_handler(tauri::generate_handler![
+            get_snapshot, run_check, copy_fix, set_open_at_login, get_domains, edit_domain, retry_domain_edit,
+        ])
         .setup(|app| {
             #[cfg(target_os = "macos")]
             app.set_activation_policy(tauri::ActivationPolicy::Accessory);
@@ -357,6 +409,7 @@ pub fn run() {
                     open_at_login: login::read(&login::Autostart(app.handle())),
                 }),
                 gate: PollGate::default(),
+                domain_gate: PollGate::default(),
                 doctors: Doctors::default(),
                 quitting: Arc::new(AtomicBool::new(false)),
                 sidecar: program,

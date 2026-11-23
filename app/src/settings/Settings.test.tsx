@@ -145,11 +145,11 @@ describe("Server, Domains and General tabs", () => {
     expect(container.querySelector("input")).toBeNull();
   });
 
-  it("[tray-app C66] lists the domains in order under their count, with no control to change them", async () => {
+  it("[tray-app C66] lists legacy config rows as unverified and exposes no editing control", async () => {
     const { container, unmount } = await open(snapshot());
     select("Domains");
-    expect(screen.getByRole("heading", { name: "5 domains use home internet" })).toBeTruthy();
-    const items = within(screen.getByRole("list", { name: "Domains that use home internet" })).getAllByRole("listitem");
+    expect(screen.getByRole("heading", { name: "Configured domains (not verified)" })).toBeTruthy();
+    const items = within(screen.getByRole("list", { name: "Configured domains (not verified)" })).getAllByRole("listitem");
     expect(items.map((li) => li.textContent)).toEqual(DOMAINS);
     expect(container.querySelector("input, textarea, select")).toBeNull();
     expect(within(screen.getByRole("tabpanel")).queryAllByRole("button")).toHaveLength(0);
@@ -160,7 +160,7 @@ describe("Server, Domains and General tabs", () => {
     one.status!.allowlist = ["instagram.com"];
     const single = await open(one);
     select("Domains");
-    expect(screen.getByRole("heading", { name: "1 domain uses home internet" })).toBeTruthy();
+    expect(within(screen.getByRole("list", { name: "Configured domains (not verified)" })).getByRole("listitem").textContent).toBe("instagram.com");
     single.unmount();
   });
 

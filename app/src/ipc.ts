@@ -1,7 +1,7 @@
-// The only place the webview talks to Rust: the four commands and two events (capability `default`).
+// The only place Settings invokes the Rust commands and subscribes to app events.
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import type { Snapshot, View } from "./types";
+import type { DomainEdit, DomainView, Snapshot, View } from "./types";
 
 export const VIEWS: readonly View[] = ["status", "server", "domains", "general", "setup"];
 
@@ -11,6 +11,10 @@ export const getSnapshot = () => invoke<Snapshot | null>("get_snapshot");
 export const runCheck = () => invoke<unknown>("run_check");
 export const copyFix = (hop: string) => invoke<void>("copy_fix", { hop });
 export const setOpenAtLogin = (enabled: boolean) => invoke<boolean>("set_open_at_login", { enabled });
+export const getDomains = () => invoke<DomainView>("get_domains");
+export const editDomain = ({ operation, host, expectedRevision }: DomainEdit) =>
+  invoke<DomainView>("edit_domain", { operation, host, expectedRevision });
+export const retryDomainEdit = (operationId: string) => invoke<DomainView>("retry_domain_edit", { operationId });
 
 export const onSnapshot = (handler: (snapshot: Snapshot) => void) =>
   listen<Snapshot>("snapshot", (event) => handler(event.payload));

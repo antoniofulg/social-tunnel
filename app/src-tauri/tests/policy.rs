@@ -18,7 +18,7 @@ fn capabilities() -> Vec<Value> {
         .collect()
 }
 
-const COMMANDS: [&str; 4] = ["get_snapshot", "run_check", "copy_fix", "set_open_at_login"];
+const COMMANDS: [&str; 7] = ["get_snapshot", "run_check", "copy_fix", "set_open_at_login", "get_domains", "edit_domain", "retry_domain_edit"];
 
 fn names_in(text: &str, open: &str, close: char) -> BTreeSet<String> {
     let start = text.find(open).unwrap_or_else(|| panic!("{open} not found")) + open.len();
@@ -31,10 +31,12 @@ fn names_in(text: &str, open: &str, close: char) -> BTreeSet<String> {
 }
 
 #[test]
-fn tray_c5_webview_gets_core_events_and_four_commands_only() {
+fn tray_c5_webview_gets_only_local_settings_commands_and_core_events() {
     let forbidden = ["shell:", "fs:", "http:", "opener:", "process:", "clipboard-manager:", "autostart:", "dialog:", "updater:"];
     let mut union = BTreeSet::new();
     for cap in capabilities() {
+        assert_eq!(cap["windows"], serde_json::json!(["settings"]));
+        assert!(cap.get("webviews").is_none() && cap.get("remote").is_none());
         for p in cap["permissions"].as_array().unwrap() {
             let id = p.as_str().map(String::from).unwrap_or_else(|| p["identifier"].as_str().unwrap().to_string());
             for prefix in forbidden {
@@ -50,6 +52,9 @@ fn tray_c5_webview_gets_core_events_and_four_commands_only() {
         "allow-run-check",
         "allow-copy-fix",
         "allow-set-open-at-login",
+        "allow-get-domains",
+        "allow-edit-domain",
+        "allow-retry-domain-edit",
     ]
     .map(String::from)
     .into();
