@@ -458,6 +458,8 @@ Append-only notes on approved rows; the rows above stay as approved.
 - C55 (Landing 16, user-approved): the fixed native size is now 640×560 pt. Verify the healthy
   Status route, seven check rows, and `Check Again` fit without scrolling. Keep scroll for
   diagnostic content that exceeds the panel; no change to single-window and focus behavior.
+- C55 follow-up: prevent root and panel edge overscroll without disabling real overflow. The
+  focused WebKit check covers fitted Status/Server panels and wheel access to a long diagnostic.
 
 ## Handoff
 
@@ -498,6 +500,8 @@ Append-only notes on approved rows; the rows above stay as approved.
 - Orca accepted the scoped foreground pacing follow-up `ctx_54ad6c1a672d` (`task_c7a1dd4c128d`), state `ready`. Do not repeat an inactive A/B or make a shipping change without foreground evidence.
 - Antonio clarified the ordinary-priority script did open Settings and felt much more fluid. The foreground log confirms the exact-binary disposable copy launched with normal priority, used local fixture output (33 `status`, one synthetic `doctor`, zero runs), then exited without timing results; original external state matched. No measured speedup or causal attribution. Antonio asked for the final visual adjustment only: make Settings slightly taller so healthy Status does not scroll. Height implementation proceeds at the coordinator; performance dispatch must only settle the observed evidence.
 - Height follow-up at `f286f7f7a9` code base: `cargo test --locked -j 2 --test settings tray_c55_ -- --test-threads=1` (3 passed); WebKit `e2e/csp.spec.ts --project=webkit --workers=1 -g '\[tray-app C55\]'` (1 passed; tab panel overflow 0 and `Check Again` fully in view). The unsigned bundle built with `tauri build --bundles app --no-sign --no-binary-patching -- --locked`. Native isolated PID `10296` reported a visible 640×560 pt Settings window; all seven rows and the full button fit in the [native capture](captures/s4-status-560.png). Fixture cleanup: 200 `status`, one synthetic `doctor`, zero `run`. Replaced the closed local install with the tested bundle (`diff -qr` clean) without opening it; packaged read-only preflight found one external run at PID `19886`, same start/plist hash, and no tray login job/plist. No visual-material or scheduling change. Live C82 and aggregate WTK not run.
+- After trying the taller native fixture, Antonio still reported slow scroll gestures over Status and Server. His requested scope is to suppress empty scroll movement without trapping longer or future content. No further performance profiling, Login expansion or domain editing in this follow-up.
+- Overscroll follow-up: the two focused WebKit C55 cases passed against the bundled UI. Fitted Status/Server have no overflow, edge overscroll is disabled, and wheel input still reaches `Check Again` below a long diagnostic. The rebuilt unsigned app was installed without launching the real copy. The temporary native copy started and was removed with seven synthetic `status` calls and zero `run`; System Events could not open its menu (`-1719`), so physical trackpad bounce was not re-measured. Local read-only preflight still found one external run at PID `19886`, same start/plist hash and tray login off.
 
 ### S4 recovery proof
 

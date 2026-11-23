@@ -45,7 +45,7 @@ export function Settings({ initialView = null }: { initialView?: View | null }) 
 
   if (view === "setup") {
     return (
-      <div className="surface h-screen overflow-y-auto px-[22px] py-4" data-surface={surface}>
+      <div className="surface h-screen overflow-y-auto overscroll-none px-[22px] py-4" data-surface={surface}>
         <SetUp snapshot={snapshot} busy={busy} onCheck={onCheck} />
       </div>
     );
@@ -64,7 +64,12 @@ export function Settings({ initialView = null }: { initialView?: View | null }) 
       <div className="flex justify-center px-[22px] py-3">
         <Tabs selected={tab} onSelect={setRequested} />
       </div>
-      <main role="tabpanel" id={panelId(tab)} aria-labelledby={tabId(tab)} className="min-h-0 flex-1 overflow-y-auto px-[22px] pb-[18px]">
+      <main
+        role="tabpanel"
+        id={panelId(tab)}
+        aria-labelledby={tabId(tab)}
+        className="min-h-0 flex-1 overflow-y-auto overscroll-none px-[22px] pb-[18px]"
+      >
         {tab === "status" && <StatusTab snapshot={snapshot} busy={busy} onCheck={onCheck} />}
         {tab === "server" && <ServerTab snapshot={snapshot} />}
         {tab === "domains" && <DomainsTab snapshot={snapshot} />}

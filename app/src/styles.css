@@ -115,6 +115,12 @@
 }
 
 @layer base {
+  html {
+    /* Only the Settings panels scroll; do not move the WKWebView viewport at their edges. */
+    overflow: hidden;
+    overscroll-behavior: none;
+  }
+
   html,
   body {
     margin: 0;

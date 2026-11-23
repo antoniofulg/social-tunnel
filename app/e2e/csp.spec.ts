@@ -2,7 +2,7 @@
 import { expect, test, type Page } from "@playwright/test";
 import { mkdirSync } from "node:fs";
 import { join } from "node:path";
-import { keyChanged, notSetUp, snapshot } from "../src/fixtures";
+import { doctor, keyChanged, notSetUp, snapshot } from "../src/fixtures";
 import type { Snapshot } from "../src/types";
 import { serveDist } from "./serve";
 
@@ -61,6 +61,23 @@ test("[tray-app C55] healthy Status fits the native Settings content area withou
   await expect(page.getByRole("button", { name: "Check Again" })).toBeInViewport({ ratio: 1 });
   const overflow = await page.getByRole("tabpanel").evaluate((panel) => panel.scrollHeight - panel.clientHeight);
   expect(overflow).toBe(0);
+  const panel = page.getByRole("tabpanel");
+  await expect(panel).toHaveCSS("overscroll-behavior", "none");
+  await expect(page.locator("html")).toHaveCSS("overscroll-behavior", "none");
+  await page.getByRole("tab", { name: "Server" }).click();
+  expect(await panel.evaluate((el) => el.scrollHeight - el.clientHeight)).toBe(0);
+});
+
+test("[tray-app C55] a long Status diagnostic can still be scrolled", async ({ page }) => {
+  await page.setViewportSize({ width: 640, height: 528 });
+  const fix = "Compare the expected restrictions with the server configuration. ".repeat(12).trim();
+  await open(page, snapshot({ doctor: doctor({ failAt: "lockdown", exit: 14, fix }) }));
+  await expect(page.getByText(fix)).toBeVisible();
+  const panel = page.getByRole("tabpanel");
+  expect(await panel.evaluate((el) => el.scrollHeight - el.clientHeight)).toBeGreaterThan(0);
+  await panel.hover();
+  await page.mouse.wheel(0, 500);
+  await expect(page.getByRole("button", { name: "Check Again" })).toBeInViewport({ ratio: 1 });
 });
 
 for (const scheme of ["light", "dark"] as const) {

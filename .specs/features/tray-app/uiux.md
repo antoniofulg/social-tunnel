@@ -30,6 +30,7 @@
 | Setup | three-step assistant | read-only Set Up view with README steps | setup assistant out of scope | AC 68 |
 | `Check Again` placement (resolved in S3 build, coordinator decision 2026-11-22) | B places it beside the route summary | one `Check Again` at the end of the Status tab, right-aligned | Composition above; one button per C61 | AC 61 |
 | Settings height | 520 pt | 560 pt; 640 pt width unchanged | user follow-up: fit normal Status without scrolling | retain spacing, material and overflow for long fixes |
+| Settings wheel/trackpad edges | native bounce not specified | no elastic bounce or scroll chaining; panels can still scroll when their content overflows | user follow-up: eliminate motion on static tabs without clipping long or future content | healthy Status and Server stay put, longer Status diagnostics remain reachable |
 
 ## Screens
 
