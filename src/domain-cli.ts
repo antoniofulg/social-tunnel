@@ -1,5 +1,5 @@
 import { randomBytes } from "node:crypto";
-import type { ManagedEnrollment } from "./domain-enrollment";
+import type { SelectedEnrollment } from "./domain-enrollment";
 import { domainSubmission, type Submission } from "./domain-submission";
 import { normalizeManagedDomain } from "./managed-domains";
 import { matchingActive, parseAuthorityView, pendingDomains, SETUP_REQUIRED, UNKNOWN_DOMAINS,
@@ -53,7 +53,7 @@ function unconfirmed(saved: Submission | null, recovery = false): DomainView {
 }
 
 export async function domainAction(
-  action: DomainAction, enrollment: ManagedEnrollment | null | undefined,
+  action: DomainAction, enrollment: SelectedEnrollment | undefined,
   client: DomainClient | null, local: () => DomainRevision | null,
   currentSelection?: () => boolean,
 ): Promise<Outcome> {

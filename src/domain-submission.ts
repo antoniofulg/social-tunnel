@@ -1,7 +1,7 @@
 import { Database } from "bun:sqlite";
 import { closeSync, constants, lstatSync, openSync } from "node:fs";
 import { dirname } from "node:path";
-import type { ManagedEnrollment } from "./domain-enrollment";
+import type { SelectedEnrollment } from "./domain-enrollment";
 import { protectedDirectory, syncDirectory } from "./domain-policy";
 import { domainUInt, operationIdFormat, wireObject, type ProposalBody } from "./domain-wire";
 import { normalizeManagedDomain } from "./managed-domains";
@@ -11,8 +11,8 @@ const LIMIT = 2048;
 
 type Change = { claim: Submission } | { clear: Submission };
 
-export function domainSubmission(enrollment: ManagedEnrollment, change?: Change): { saved: Submission | null; claimed: boolean } {
-  const { submissionPath: path, binding, epoch, proxyGeneration } = enrollment;
+export function domainSubmission(enrollment: SelectedEnrollment, change?: Change): { saved: Submission | null; claimed: boolean } {
+  const { submissionPath: path, submissionScope: scope, binding, epoch, proxyGeneration } = enrollment;
   const directory = dirname(path);
   const dir = protectedDirectory(directory);
   if (!lstatSync(path, { throwIfNoEntry: false })) {
@@ -47,11 +47,11 @@ export function domainSubmission(enrollment: ManagedEnrollment, change?: Change)
       db.run("CREATE TABLE IF NOT EXISTS submission (slot INTEGER PRIMARY KEY CHECK (slot = 1), body TEXT NOT NULL CHECK (length(body) <= 2048)) STRICT");
       const row = db.query<{ body: string | null }, [number]>("SELECT CASE WHEN length(CAST(body AS BLOB)) <= ? THEN body END AS body FROM submission WHERE slot = 1").get(LIMIT);
       let saved: Submission | null = null;
-      const stored = { version: 1, binding, enrollment: enrollment.enrollment, epoch, proxyGeneration };
+      const stored = { version: 1, scope, binding, enrollment: enrollment.enrollment, epoch, proxyGeneration };
       if (row) {
         const entry = row.body === null ? null : wireObject(JSON.parse(row.body));
         const p = wireObject(entry?.proposal);
-        if (!entry || entry.version !== stored.version || entry.binding !== binding || entry.enrollment !== stored.enrollment ||
+        if (!entry || entry.version !== stored.version || entry.scope !== scope || entry.binding !== binding || entry.enrollment !== stored.enrollment ||
             entry.epoch !== epoch || entry.proxyGeneration !== proxyGeneration || (entry.kind !== "add" && entry.kind !== "remove") ||
             !p || p.version !== 1 || !operationIdFormat(p.operationId) || !domainUInt(p.expectedRevision) ||
             !p.operationId.startsWith(`${entry.epoch}.${p.expectedRevision}.`) || typeof p.host !== "string" || normalizeManagedDomain(p.host) !== p.host) {

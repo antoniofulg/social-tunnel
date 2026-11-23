@@ -6,7 +6,7 @@ import { Server, utils, type Connection, type ServerChannel } from "ssh2";
 import { main } from "../src/cli";
 import { domainAction } from "../src/domain-cli";
 import { loadConfig } from "../src/config";
-import { captureTrayEnrollment, enrollmentBinding, managedKeyFingerprint, readDomainEnrollment, readDomainRole, writeDomainLocal } from "../src/domain-enrollment";
+import { captureDomainSelection, enrollmentBinding, managedKeyFingerprint, readDomainEnrollment, readDomainRole, writeDomainLocal } from "../src/domain-enrollment";
 import { dialManagedAddress, resolveManagedHost } from "../src/domain-network";
 import { DOMAIN_COMMAND_UNAVAILABLE, DOMAIN_RESPONSE_LIMIT } from "../src/domain-protocol";
 import { domainSubmission } from "../src/domain-submission";
@@ -117,7 +117,7 @@ async function sshFixture(dispatch: Dispatch, beforeReady?: () => void) {
       editor: { user: "editor", fingerprint: managedKeyFingerprint(Buffer.from(editor.private)) },
       proxy: { user: "proxy", fingerprint: managedKeyFingerprint(Buffer.from(proxy.private)) },
     }), { mode: 0o600 });
-    const result = readDomainEnrollment(files.path, config);
+    const result = captureDomainSelection(files.path, () => files.dir)?.enrollment;
     if (!result) throw new Error("invalid fixture enrollment");
     return result;
   }
@@ -446,12 +446,14 @@ test("[domains C10] a killed fixture CLI exposes the durably saved ID and Retry 
     expect(await new Response(child.stdout).text()).toBe("");
     const recovered = (await runCli(f.path, ["domains", "list"])).payload.pending;
     expect(recovered).toMatchObject({ operationId: proposal.operationId, host: "wipo.int" });
+    const scope = (await runCli(f.path, ["status", "--tray-scope"])).payload.trayEnrollment;
+    expect((await runCli(f.path, ["domains", "list", "--expected-enrollment", scope])).payload.pending.operationId).toBe(proposal.operationId);
     const refused = (await runCli(f.path, ["domains", "add", "mozilla.org", "--expected-revision", "0"])).payload;
     expect(refused.error.code).toBe("conflict");
     const wrong = "1.0." + "e".repeat(32);
     expect((await runCli(f.path, ["domains", "retry", wrong])).payload.error.code).toBe("unknown_operation");
     expect(reconciled).toEqual([]);
-    expect((await runCli(f.path, ["domains", "retry", proposal.operationId])).payload.pending.operationId).toBe(proposal.operationId);
+    expect((await runCli(f.path, ["domains", "retry", proposal.operationId, "--expected-enrollment", scope])).payload.pending.operationId).toBe(proposal.operationId);
     expect(reconciled).toEqual([proposal.operationId]);
     expect(proposals).toBe(1);
   } finally {
@@ -514,7 +516,7 @@ function replaceEnrollment(f: Awaited<ReturnType<typeof sshFixture>>) {
   writeFileSync(metadata, JSON.stringify({ ...JSON.parse(readFileSync(f.metadata, "utf8")), enrollment: "replacement" }), { mode: 0o600 });
   renameSync(cfg, f.path);
   renameSync(metadata, f.metadata);
-  const replacement = readDomainEnrollment(f.path, f.config);
+  const replacement = captureDomainSelection(f.path, () => f.dir)?.enrollment;
   if (!replacement) throw new Error("replacement fixture did not load");
   return replacement;
 }
@@ -574,7 +576,7 @@ test("[domains C12] the real sidecar rejects equal-revision file substitution be
   } finally { await f.close(); }
 }, 10000);
 
-test("[domains C12] a replacement during SSH preflight cannot reserve or send a bound edit", async () => {
+for (const scoped of [true, false]) test(`[domains C12] replacement during SSH preflight cannot reserve or send a ${scoped ? "tray" : "standalone"} edit`, async () => {
   const requests: DomainVerb[] = [];
   const f = await sshFixture((_role, verb, _input, ch) => {
     requests.push(verb);
@@ -585,7 +587,8 @@ test("[domains C12] a replacement during SSH preflight cannot reserve or send a 
     fixtureActive(f, f.enroll());
     const scope = (await runCli(f.path, ["status", "--tray-scope"])).payload.trayEnrollment;
     const before = readdirSync(f.folder).sort();
-    const result = await runCli(f.path, ["domains", "remove", "wikipedia.org", "--expected-revision", "0", "--expected-enrollment", scope]);
+    const guard = scoped ? ["--expected-enrollment", scope] : [];
+    const result = await runCli(f.path, ["domains", "remove", "wikipedia.org", "--expected-revision", "0", ...guard]);
     expect(result).toMatchObject({ code: 10, payload: { error: { code: "conflict" } } });
     expect(requests).toEqual(["inspect"]);
     expect(readdirSync(f.folder).sort()).toEqual(before);
@@ -614,12 +617,12 @@ test("[domains C12] replacement during Retry authentication cannot send reconcil
   } finally { await f.close(); }
 });
 
-for (const change of ["claim", "clear"] as const) for (const swap of ["directory", "generation"] as const) {
+for (const change of ["claim", "clear"] as const) for (const swap of ["directory", "generation", "config"] as const) {
   test(`[domains C12] final ${change} check cannot write ${swap} replacement storage`, async () => {
     const f = await sshFixture(() => {});
     try {
       const original = f.enroll();
-      const captured = captureTrayEnrollment(f.path, () => f.dir)!;
+      const captured = captureDomainSelection(f.path, () => f.dir)!;
       expect(captured.enrollment?.submissionPath).toBe(original.submissionPath);
       const id = "1.0." + "f".repeat(32);
       const saved = { kind: "add" as const, proposal: { version: 1 as const, operationId: id, expectedRevision: 0, host: "wipo.int" } };
@@ -646,15 +649,26 @@ for (const change of ["claim", "clear"] as const) for (const swap of ["directory
             mkdirSync(f.folder, { mode: 0o700 });
             writeFileSync(join(f.folder, "replacement-only"), "untouched");
             expect(lstatSync(f.folder).ino).not.toBe(dir.ino);
+          } else if (swap === "config") {
+            const before = lstatSync(f.path);
+            const bytes = readFileSync(f.path);
+            const next = `${f.path}.next`;
+            const metadata = lstatSync(f.metadata);
+            writeFileSync(next, bytes);
+            renameSync(next, f.path);
+            expect(lstatSync(f.path).ino).not.toBe(before.ino);
+            expect(readFileSync(f.path)).toEqual(bytes);
+            expect(lstatSync(f.folder).ino).toBe(dir.ino);
+            expect(lstatSync(f.metadata).ino).toBe(metadata.ino);
           } else {
             const metadata = JSON.parse(readFileSync(f.metadata, "utf8"));
             writeFileSync(f.metadata, JSON.stringify({ ...metadata, proxyGeneration: "same-directory-replacement" }));
             expect(lstatSync(f.folder).ino).toBe(dir.ino);
           }
-          replacement = readDomainEnrollment(f.path, f.config)!;
-          expect(replacement.submissionPath).not.toBe(original.submissionPath);
+          replacement = captureDomainSelection(f.path, () => f.dir)?.enrollment;
+          if (!replacement) throw new Error("replacement fixture did not load");
           if (change === "clear") {
-            expect(domainSubmission(replacement, { claim: saved }).claimed).toBe(true);
+            if (!domainSubmission(replacement).saved) expect(domainSubmission(replacement, { claim: saved }).claimed).toBe(true);
             replacementJournal = readFileSync(replacement.submissionPath).toString("base64");
           }
           replacementFiles = readReplacementFiles();
@@ -664,12 +678,13 @@ for (const change of ["claim", "clear"] as const) for (const swap of ["directory
       expect(result).toMatchObject({ ok: false, error: { code: "conflict" } });
       expect(proposals).toBe(0);
       expect(reconciles).toEqual(change === "clear" ? [id] : []);
+      expect(f.auth).toEqual([]);
       expect(replacement).toBeDefined();
       expect(readReplacementFiles()).toEqual(replacementFiles);
       if (change === "clear") {
         expect(readFileSync(replacement!.submissionPath).toString("base64")).toBe(replacementJournal);
         expect(domainSubmission(replacement!, { clear: saved }).saved).toBeNull();
-      } else expect(domainSubmission(replacement!).saved).toBeNull();
+      } else expect(lstatSync(replacement!.submissionPath, { throwIfNoEntry: false })).toBeUndefined();
       expect(domainSubmission(replacement!, { claim: saved }).claimed).toBe(true);
       expect(domainSubmission(replacement!).saved).toEqual(saved);
     } finally { await f.close(); }

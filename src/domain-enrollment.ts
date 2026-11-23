@@ -11,7 +11,6 @@ import { fingerprint, type SshTarget } from "./tunnel";
 interface RoleKey { user: string; fingerprint: string }
 export interface ManagedEnrollment {
   readonly directory: string;
-  readonly submissionPath: string;
   readonly binding: string;
   readonly enrollment: string;
   readonly epoch: number;
@@ -20,6 +19,11 @@ export interface ManagedEnrollment {
   readonly editor: RoleKey;
   readonly proxy: RoleKey;
   readonly baseline: ManagedDomainSnapshot;
+}
+
+export interface SelectedEnrollment extends ManagedEnrollment {
+  readonly submissionPath: string;
+  readonly submissionScope: string;
 }
 
 const KEY_LIMIT = 16384;
@@ -92,19 +96,15 @@ export function readDomainEnrollment(
     if (!editor || !proxy || !parsed || !parsed.ok || editor.user === proxy.user || editor.user === config.server.user ||
         proxy.user === config.server.user || editor.fingerprint === proxy.fingerprint || editor.fingerprint === o.tunnelKey ||
         proxy.fingerprint === o.tunnelKey) return null;
-    // SQLite opens rollback files by pathname, including during recovery. Put
-    // the entire slot outside the replaceable enrollment directory and bind its name
-    // to this captured identity. A later selection never opens this slot.
-    const slot = hashBytes(JSON.stringify([o.binding, o.enrollment, o.epoch, o.proxyGeneration, identity]));
-    return { directory, submissionPath: join(dirname(directory), `.st-submission-${slot}.sqlite`),
+    return { directory,
       binding: o.binding, enrollment: o.enrollment, epoch: o.epoch, proxyGeneration: o.proxyGeneration,
       tunnelKey: o.tunnelKey, editor, proxy, baseline: parsed.snapshot };
   } catch { return null; }
 }
 
-// Private to the CLI/native sidecar boundary. Resolve and parse once, then only
-// compare identities; never choose another target in response to a change.
-export function captureTrayEnrollment(path: string, homedir: () => string) {
+// Shared by standalone domain commands and the native sidecar. Resolve and
+// parse once, then only check freshness; never select a replacement at mutation.
+export function captureDomainSelection(path: string, homedir: () => string) {
   function measure(): [string, string, string] {
     const config = statSync(path, { bigint: true });
     const meta = lstatSync(`${path}.domains.json`, { bigint: true, throwIfNoEntry: false });
@@ -138,7 +138,12 @@ export function captureTrayEnrollment(path: string, homedir: () => string) {
     if (!current()) return null;
     const token = hashBytes(JSON.stringify(["tray-enrollment-v1", enrollmentBinding(path, config), configStamp,
       metadataStamp, directoryStamp, enrollment?.enrollment, enrollment?.epoch, enrollment?.proxyGeneration]));
-    return { loaded, enrollment, token, current };
+    // SQLite opens rollback companions by pathname. Keep the whole slot outside
+    // the movable enrollment directory, scoped to the exact validated capture.
+    const selected: SelectedEnrollment | undefined = enrollment && {
+      ...enrollment, submissionScope: token, submissionPath: join(dirname(path), `.st-submission-${token}.sqlite`),
+    };
+    return { loaded, enrollment: selected, token, current };
   } catch { return null; }
 }
 

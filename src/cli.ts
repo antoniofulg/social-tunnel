@@ -8,7 +8,7 @@ import { loadConfig, loadKey, resolveConfigPath } from "./config";
 import { DEFAULTS, EXIT } from "./defaults";
 import { runDoctor } from "./doctor";
 import { domainAction, type DomainAction } from "./domain-cli";
-import { captureTrayEnrollment, managedKeyFingerprint, readDomainEnrollment, readDomainRole } from "./domain-enrollment";
+import { captureDomainSelection, managedKeyFingerprint, readDomainEnrollment, readDomainRole } from "./domain-enrollment";
 import { dialManagedAddress, resolveManagedHost } from "./domain-network";
 import { createManagedRun, readActiveHome, SETUP_REQUIRED, UNKNOWN_DOMAINS } from "./domain-runtime";
 import { domainDigest, domainRoleClient } from "./domain-wire";
@@ -156,15 +156,14 @@ export async function main(argv: string[], io: Io): Promise<number> {
       return exit;
     }
 
-    const selection = args.trayScope || args.expectedEnrollment !== undefined ? captureTrayEnrollment(configPath, io.homedir) : null;
+    const selection = args.trayScope || args.action ? captureDomainSelection(configPath, io.homedir) : null;
     if (args.expectedEnrollment !== undefined &&
         (!selection || selection.token !== args.expectedEnrollment || (args.action?.kind !== "list" && !selection.enrollment))) {
       return fail(EXIT.down, "conflict", "The selected managed enrollment changed.");
     }
-    const loaded = selection?.loaded ?? loadConfig(configPath, io.readFile, io.homedir);
     if (args.action) {
-      const config = loaded.ok ? loaded.config : null;
-      const enrollment = selection ? selection.enrollment : config && readDomainEnrollment(configPath, config);
+      const config = selection?.loaded.config;
+      const enrollment = selection?.enrollment;
       const editor = config && enrollment ? readDomainRole(enrollment, config, "editor") : null;
       try {
         const client = editor && domainRoleClient("editor", editor, io.connectTimeoutMs, selection?.current);
@@ -184,6 +183,7 @@ export async function main(argv: string[], io: Io): Promise<number> {
       } finally { editor?.key.fill(0); }
     }
     // The path it resolved tells a tray app "not set up" (no file there) from a broken config.
+    const loaded = selection?.loaded ?? loadConfig(configPath, io.readFile, io.homedir);
     if (!loaded.ok) return fail(EXIT.usage, "config_invalid", loaded.message, loaded.field, configPath);
     const config = loaded.config;
     const enrollment = selection ? selection.enrollment : readDomainEnrollment(configPath, config);
