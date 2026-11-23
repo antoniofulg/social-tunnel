@@ -16,7 +16,8 @@
     "build:sidecar": "bun app/scripts/build-sidecar.ts"
   },
   "dependencies": {
-    "ssh2": "1.17.0"
+    "ssh2": "1.17.0",
+    "tldts": "7.5.5"
   },
   "devDependencies": {
     "@types/bun": "1.4.5",

@@ -8,6 +8,10 @@ export function normalizeHost(raw: string): string | null {
 }
 
 // Label-boundary match: `evilinstagram.com` must not match `instagram.com`.
+export function matchesDomain(host: string, domain: string): boolean {
+  return host.endsWith(domain) && (host.length === domain.length || host[host.length - domain.length - 1] === ".");
+}
+
 export function isAllowed(host: string, domains: readonly string[]): boolean {
-  return domains.some((d) => host === d || host.endsWith("." + d));
+  return domains.some((domain) => matchesDomain(host, domain));
 }
