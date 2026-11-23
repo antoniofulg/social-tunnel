@@ -1,6 +1,6 @@
 //! Reads one `status --json` call into what the tray may trust (plan criteria 13 and 90).
 
-use crate::domains::{self, DomainView};
+use crate::domains::{self, DomainView, EnrollmentToken};
 use crate::sidecar::CallOutput;
 use serde::Serialize;
 use serde_json::{Map, Value};
@@ -36,6 +36,8 @@ pub struct RunStatus {
     pub config_path: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub managed_domains: Option<DomainView>,
+    #[serde(skip)]
+    pub(crate) tray_enrollment: Option<EnrollmentToken>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -140,6 +142,7 @@ fn run_status(exit: i32, o: &Map<String, Value>) -> Option<RunStatus> {
             let view = domains::read_view(raw.clone()).unwrap_or_else(DomainView::unknown);
             if exit != 0 && view.active.is_some() { DomainView::unknown() } else { view }
         }),
+        tray_enrollment: o.get("trayEnrollment").and_then(Value::as_str).and_then(EnrollmentToken::parse),
     })
 }
 

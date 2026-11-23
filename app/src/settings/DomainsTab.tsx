@@ -58,8 +58,9 @@ export function DomainsTab({ snapshot, visible = true }: { snapshot: Snapshot | 
   const revision = native?.active?.revision;
   const nativeState = native?.state;
   const readable = snapshot !== null && !snapshot.statusUnreadable;
-  const config = snapshot?.configPath;
-  const usable = readable && !!config;
+  const scope = snapshot?.domainsScope ?? 0;
+  const setup = nativeState === "setup_required" || (readable && snapshot?.status === null);
+  const usable = readable && scope > 0 && !!snapshot?.configPath && !setup;
   const recovering = nativeState === "recovery_required";
   const activity = useRef({ visible, usable, recovering });
   const evidence = useRef(0);
@@ -89,16 +90,16 @@ export function DomainsTab({ snapshot, visible = true }: { snapshot: Snapshot | 
     if (latestView.current?.active) {
       publish({ ...UNKNOWN, pending: latestView.current.pending });
     }
-  }, [visible, usable, nativeState, revision]);
+  }, [visible, usable, nativeState, revision, scope]);
 
   // Read on entry or when native evidence changes. Hidden tabs never start a call.
   useEffect(() => {
     if (!visible || !usable) return;
     if (inFlight.current) { queuedRead.current = true; return; }
     void refresh(pendingId());
-  }, [visible, usable, nativeState, revision]);
+  }, [visible, usable, nativeState, revision, scope]);
 
-  const current = view ?? (readable && !native ? SETUP : UNKNOWN);
+  const current = view ?? (setup || (readable && !native) ? SETUP : UNKNOWN);
   const pending = current.pending;
   const canRetry = pending !== null && current.state !== "setup_required" && current.state !== "recovery_required";
   const operationId = canRetry ? pending.operationId : null;
@@ -110,13 +111,13 @@ export function DomainsTab({ snapshot, visible = true }: { snapshot: Snapshot | 
       void refresh(operationId);
     }, RETRY_INTERVAL_MS);
     return () => clearTimeout(timer);
-  }, [visible, usable, operationId, working, attempts, nativeState]);
+  }, [visible, usable, operationId, working, attempts, nativeState, scope]);
 
   useEffect(() => {
     if (confirmation) confirmRef.current?.querySelector("button")?.focus();
   }, [confirmation]);
 
-  const verified = readable && native?.active && current.active && native.active.revision === current.active.revision &&
+  const verified = usable && native?.active && current.active && native.active.revision === current.active.revision &&
     native.active.domains.length === current.active.domains.length && native.active.domains.every((host, i) => host === current.active?.domains[i]) &&
     (current.state === "ready" || current.state === "applied") ? current.active : null;
   useLayoutEffect(() => {
@@ -145,7 +146,7 @@ export function DomainsTab({ snapshot, visible = true }: { snapshot: Snapshot | 
     const started = evidence.current;
     setWorking("read");
     try {
-      const next = await (id === undefined ? getDomains() : retryDomainEdit(id));
+      const next = await (id === undefined ? getDomains(scope) : retryDomainEdit(scope, id));
       if (instance.current !== owner) return;
       const ambiguous = next.pending ? id !== undefined && next.pending.operationId !== id :
         next.state === "activation_unknown" || next.state === "recovery_required" || (id !== undefined && next.state === "setup_required");
@@ -178,7 +179,7 @@ export function DomainsTab({ snapshot, visible = true }: { snapshot: Snapshot | 
     setConfirmation(null);
     let recheck = false;
     try {
-      const next = await editDomain({ operation, host, expectedRevision });
+      const next = await editDomain(scope, { operation, host, expectedRevision });
       if (instance.current !== owner) return;
       const fresh = started === evidence.current && activity.current.usable && activity.current.visible;
       publish(fresh ? next : { ...UNKNOWN, pending: next.pending });

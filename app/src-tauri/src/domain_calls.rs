@@ -1,5 +1,5 @@
 //! Bind managed CLI work to native configuration observations and drain it on Quit.
-use crate::domains::{DomainError, ErrorCode, DOMAINS_TIMEOUT};
+use crate::domains::{DomainError, EnrollmentToken, ErrorCode, DOMAINS_TIMEOUT};
 use std::fs::{self, Metadata};
 use std::io;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -52,6 +52,8 @@ impl ConfigStamp {
 #[derive(Default)]
 struct State {
     config: Option<ConfigStamp>,
+    enrollment: Option<EnrollmentToken>,
+    last_enrollment: Option<EnrollmentToken>,
     scope: u64,
     readable: bool,
     closed: bool,
@@ -63,6 +65,12 @@ impl State {
     fn permits(&self, scope: u64) -> bool {
         !self.closed && self.readable && self.scope == scope
     }
+
+    fn authorize(&self, scope: u64) -> Result<(), DomainError> {
+        if self.closed || !self.readable { return Err(unavailable()); }
+        if self.scope != scope { return Err(ErrorCode::Conflict.error()); }
+        Ok(())
+    }
 }
 
 #[derive(Default)]
@@ -72,14 +80,18 @@ pub(crate) struct DomainCalls {
 }
 
 impl DomainCalls {
-    pub(crate) fn observe(&self, config: Option<ConfigStamp>) {
+    pub(crate) fn observe(&self, config: Option<ConfigStamp>, enrollment: Option<EnrollmentToken>) {
         let mut state = self.state.lock().unwrap();
         state.readable = config.is_some();
+        state.enrollment = enrollment;
         // Missing status is not evidence of another configuration.
         if let Some(config) = config {
-            if state.config.as_ref() != Some(&config) {
+            if state.config.as_ref() != Some(&config) ||
+                (enrollment.is_some() && state.last_enrollment != enrollment)
+            {
                 state.scope += 1;
                 state.config = Some(config);
+                state.last_enrollment = enrollment;
             }
         }
         self.changed.notify_all();
@@ -89,14 +101,14 @@ impl DomainCalls {
         self.state.lock().unwrap().scope
     }
 
-    pub(crate) fn ticket(&self) -> Result<u64, DomainError> {
-        let state = self.state.lock().unwrap();
-        state.permits(state.scope).then_some(state.scope).ok_or_else(unavailable)
+    pub(crate) fn ticket(&self, displayed: u64) -> Result<u64, DomainError> {
+        self.state.lock().unwrap().authorize(displayed)?;
+        Ok(displayed)
     }
 
-    pub(crate) fn run<T>(&self, scope: u64, list: bool, call: impl FnOnce() -> Result<T, DomainError>) -> Result<T, DomainError> {
+    pub(crate) fn run<T>(&self, scope: u64, list: bool, call: impl FnOnce(EnrollmentToken) -> Result<T, DomainError>) -> Result<T, DomainError> {
         let mut state = self.state.lock().unwrap();
-        if !state.permits(scope) { return Err(unavailable()); }
+        state.authorize(scope)?;
         if state.running || state.waiting_list {
             // One fresh window can wait for a previous window's call to finish. Edits never queue.
             if !list || state.waiting_list { return Err(ErrorCode::Conflict.error()); }
@@ -105,16 +117,18 @@ impl DomainCalls {
                 |state| state.running && state.permits(scope)).unwrap();
             state = next;
             state.waiting_list = false;
-            if timeout.timed_out() || !state.permits(scope) { return Err(unavailable()); }
+            if timeout.timed_out() { return Err(unavailable()); }
+            state.authorize(scope)?;
         }
         let config = state.config.clone().ok_or_else(unavailable)?;
+        let enrollment = state.enrollment.ok_or_else(unavailable)?;
         state.running = true;
         let _lease = Running(self);
         drop(state);
-        if !config.unchanged() { return Err(unavailable()); }
-        let result = call();
+        if !config.unchanged() { return Err(ErrorCode::Conflict.error()); }
+        let result = call(enrollment);
         // A response read under a retired identity may not populate a new window.
-        if !config.unchanged() || self.scope() != scope { return Err(unavailable()); }
+        if !config.unchanged() || self.scope() != scope { return Err(ErrorCode::Conflict.error()); }
         result
     }
 
@@ -164,36 +178,69 @@ mod tests {
     }
 
     #[test]
+    fn domains_c12_native_scope_advances_before_settings_receives_equal_revision() {
+        use crate::domains::{edit_request, retry_request};
+        use serde_json::json;
+
+        let dir = Fixture::new("displayed");
+        let path = dir.0.join("config.json");
+        let config = || ConfigStamp::read(path.to_str().unwrap()).unwrap();
+        let original = EnrollmentToken::parse(&"a".repeat(64));
+        let replacement = EnrollmentToken::parse(&"b".repeat(64));
+        let calls = DomainCalls::default();
+        fs::write(&path, r#"{"revision":7,"enrollment":"A"}"#).unwrap();
+        calls.observe(Some(config()), original);
+        let displayed = calls.scope();
+        let edit = edit_request(&json!({ "scope": displayed, "operation": "add", "host": "wipo.int", "expectedRevision": 7 })).unwrap();
+        let retry = retry_request(&json!({ "scope": displayed, "operationId": "1.7.0123456789abcdef0123456789abcdef" })).unwrap();
+        let admitted = calls.ticket(displayed).unwrap();
+
+        let next = dir.0.join("next");
+        fs::write(&next, r#"{"revision":7,"enrollment":"B"}"#).unwrap();
+        fs::rename(next, &path).unwrap();
+        calls.observe(Some(config()), replacement);
+        assert_eq!(calls.ticket(edit.scope), Err(ErrorCode::Conflict.error()));
+        assert_eq!(calls.ticket(retry.scope), Err(ErrorCode::Conflict.error()));
+        assert_eq!(calls.run::<()>(admitted, false, |_| panic!("retired edit launched a child")), Err(ErrorCode::Conflict.error()));
+        assert_ne!(calls.scope(), displayed);
+        assert_eq!(calls.run(calls.scope(), true, |token| Ok(Some(token))), Ok(replacement));
+    }
+
+    #[test]
     fn domains_c12_config_replacement_retires_inflight_and_queued_identity() {
         let dir = Fixture::new("scope");
         let path = dir.0.join("config.json");
         let config = || ConfigStamp::read(path.to_str().unwrap()).unwrap();
         fs::write(&path, "{}").unwrap();
         let calls = DomainCalls::default();
-        calls.observe(Some(config()));
-        let a = calls.ticket().unwrap();
-        calls.observe(None);
+        let enrollment = EnrollmentToken::parse(&"a".repeat(64));
+        calls.observe(Some(config()), enrollment);
+        let a = calls.scope();
+        calls.observe(None, None);
         assert_eq!(calls.scope(), a);
-        assert!(calls.ticket().is_err());
-        calls.observe(Some(config()));
-        assert_eq!(calls.ticket(), Ok(a));
+        assert!(calls.ticket(a).is_err());
+        calls.observe(Some(config()), None);
+        assert_eq!(calls.scope(), a);
+        assert!(calls.run::<()>(a, false, |_| panic!("missing CLI binding started a child")).is_err());
+        calls.observe(Some(config()), enrollment);
+        assert_eq!(calls.ticket(a), Ok(a));
 
         let replacement = dir.0.join("replacement");
         fs::write(&replacement, r#"{"different":"enrollment"}"#).unwrap();
-        assert_eq!(calls.run(a, true, || {
+        assert_eq!(calls.run(a, true, |_| {
             fs::rename(&replacement, &path).unwrap();
             Ok("old reply")
-        }), Err(unavailable()));
-        assert_eq!(calls.run::<()>(a, false, || panic!("stale config started a child")), Err(unavailable()));
-        calls.observe(Some(config()));
-        let b = calls.ticket().unwrap();
+        }), Err(ErrorCode::Conflict.error()));
+        assert_eq!(calls.run::<()>(a, false, |_| panic!("stale config started a child")), Err(ErrorCode::Conflict.error()));
+        calls.observe(Some(config()), enrollment);
+        let b = calls.scope();
         assert_ne!(b, a);
-        assert_eq!(calls.run::<()>(a, true, || panic!("retired ticket started a child")), Err(unavailable()));
-        assert_eq!(calls.run(b, true, || Ok("new reply")), Ok("new reply"));
+        assert_eq!(calls.run::<()>(a, true, |_| panic!("retired ticket started a child")), Err(ErrorCode::Conflict.error()));
+        assert_eq!(calls.run(b, true, |_| Ok("new reply")), Ok("new reply"));
 
         fs::write(dir.0.join("config.json.domains.json"), "{}").unwrap();
-        calls.observe(Some(config()));
-        assert_ne!(calls.ticket(), Ok(b));
+        calls.observe(Some(config()), enrollment);
+        assert_ne!(calls.scope(), b);
     }
 
     #[test]
@@ -202,14 +249,15 @@ mod tests {
         let marker = dir.0.join("owned.pid");
         let calls = DomainCalls::default();
         let cancel = Arc::new(AtomicBool::new(false));
-        calls.observe(Some(ConfigStamp::read(dir.0.join("config.json").to_str().unwrap()).unwrap()));
-        let ticket = calls.ticket().unwrap();
+        calls.observe(Some(ConfigStamp::read(dir.0.join("config.json").to_str().unwrap()).unwrap()),
+            EnrollmentToken::parse(&"a".repeat(64)));
+        let ticket = calls.ticket(calls.scope()).unwrap();
         std::thread::scope(|threads| {
             let (reaped, result) = mpsc::channel();
             let child_cancel = cancel.clone();
             let child_marker = marker.clone();
             let gate = &calls;
-            let job = threads.spawn(move || gate.run(ticket, false, || {
+            let job = threads.spawn(move || gate.run(ticket, false, |_| {
                 let runner = CancellableRunner(child_cancel);
                 let args = ["-c".into(), "printf '%s\\n' \"$$\" > \"$1\"; exec /bin/sleep 30".into(),
                     "owned-fixture".into(), child_marker.to_str().unwrap().into()];
@@ -229,9 +277,9 @@ mod tests {
             assert!(!calls.drained());
             let started = Instant::now();
             calls.close(&cancel);
-            assert_eq!(calls.ticket(), Err(unavailable()));
+            assert_eq!(calls.ticket(ticket), Err(unavailable()));
             for list in [true, false] {
-                assert_eq!(calls.run::<()>(ticket, list, || panic!("Quit admitted work")), Err(unavailable()));
+                assert_eq!(calls.run::<()>(ticket, list, |_| panic!("Quit admitted work")), Err(unavailable()));
             }
             let output = result.recv_timeout(Duration::from_secs(2)).unwrap();
             assert!(output.timed_out && output.exit.is_none());

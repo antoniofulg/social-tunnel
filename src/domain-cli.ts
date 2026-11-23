@@ -55,7 +55,11 @@ function unconfirmed(saved: Submission | null, recovery = false): DomainView {
 export async function domainAction(
   action: DomainAction, enrollment: ManagedEnrollment | null | undefined,
   client: DomainClient | null, local: () => DomainRevision | null,
+  currentSelection?: () => boolean,
 ): Promise<Outcome> {
+  const changed = () => currentSelection?.() === false;
+  const conflict = () => fail("conflict");
+  if (changed()) return conflict();
   if (!enrollment) return ok(SETUP_REQUIRED);
   let saved: Submission | null;
   try { saved = domainSubmission(enrollment).saved; }
@@ -74,8 +78,11 @@ export async function domainAction(
   const reconcile = action.kind === "retry" && saved?.proposal.operationId === action.id ? saved : null;
   if (host && saved) return fail("conflict");
   const started = performance.now();
+  if (changed()) return conflict();
   const read = await (reconcile ? client.reconcile(reconcile.proposal.operationId) : client.inspect());
+  if (changed()) return conflict();
   function clear(submission: Submission) {
+    if (changed()) return false;
     try { domainSubmission(enrollment!, { clear: submission }); } catch { return false; }
     return true;
   }
@@ -120,9 +127,12 @@ export async function domainAction(
   if (pending || active.revision !== expected) return fail("conflict");
   const operationId = `${enrollment.epoch}.${expected}.${randomBytes(16).toString("hex")}`;
   const submission: Submission = { kind: action.kind, proposal: { version: 1, operationId, expectedRevision: expected, host: host! } };
+  if (changed()) return conflict();
   try { if (!domainSubmission(enrollment, { claim: submission }).claimed) return fail("conflict"); }
   catch { return fail("unavailable"); }
+  if (changed()) return conflict();
   const claim = await client.propose(action.kind, submission.proposal);
+  if (changed()) return conflict();
   if (!claim.ok && (claim.code === "fenced" || claim.code === "recovery_required")) return ok(unconfirmed(submission, true));
   if (!claim.ok && claim.code !== "unavailable" && claim.code !== "unsupported") {
     return clear(submission) ? wireFailure(claim.code) : ok(unconfirmed(submission));

@@ -199,6 +199,8 @@ Then log in to each platform yourself, in the agent's browser on the server.
 
 Options: `--json` (one JSON object on stdout), `--config <path>`, `--help`, `--version`. No command ever prompts or reads stdin.
 
+For the bundled tray sidecar, `status --json --tray-scope` supplies an internal enrollment token. The tray requires that token on `domains --json --expected-enrollment <token>` calls. If the selected configuration or managed enrollment changed, the CLI returns `conflict` (exit `10`) instead of proposing or reconciling against the replacement. Standalone commands do not require the token.
+
 ### Tunnel states
 
 | State | Meaning |

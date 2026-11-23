@@ -166,7 +166,7 @@ fn poll(app: &AppHandle) {
     let out = sidecar::call(
         &CancellableRunner(state.quitting.clone()),
         &state.sidecar,
-        &SidecarCall::Status,
+        &SidecarCall::TrayStatus,
         None,
         Duration::from_millis(STATUS_TIMEOUT_MS),
         MAX_STDOUT,
@@ -181,12 +181,16 @@ fn poll(app: &AppHandle) {
         StatusRead::Unreadable => None,
     };
     let config = config_path.and_then(|path| ConfigStamp::read(path).ok());
+    let enrollment = match &read {
+        StatusRead::Run(run) => run.tray_enrollment,
+        _ => None,
+    };
     let now = now_ms();
     let mut core = state.core.lock().unwrap();
     if state.quitting.load(Ordering::SeqCst) {
         return;
     }
-    state.domain_calls.observe(config);
+    state.domain_calls.observe(config, enrollment);
     core.tracker.observe(&read, now);
     // The spawn decision comes before the tray is judged (criterion 50).
     let Core { sup, spawner, .. } = &mut *core;
@@ -361,12 +365,12 @@ fn domain_sender(window: &tauri::WebviewWindow) -> Result<(), DomainError> {
     }
 }
 
-async fn call_domains(app: AppHandle, command: DomainCall) -> Result<DomainView, DomainError> {
-    let ticket = app.state::<AppState>().domain_calls.ticket()?;
+async fn call_domains(app: AppHandle, displayed: u64, command: DomainCall) -> Result<DomainView, DomainError> {
+    let ticket = app.state::<AppState>().domain_calls.ticket(displayed)?;
     tauri::async_runtime::spawn_blocking(move || {
         let state = app.state::<AppState>();
-        state.domain_calls.run(ticket, matches!(command, DomainCall::List), || {
-            domains::run(&CancellableRunner(state.quitting.clone()), &state.sidecar, command)
+        state.domain_calls.run(ticket, matches!(command, DomainCall::List), |enrollment| {
+            domains::run(&CancellableRunner(state.quitting.clone()), &state.sidecar, command, enrollment)
         })
     }).await.map_err(|_| ErrorCode::Internal.error())?
 }
@@ -382,20 +386,20 @@ fn domain_payload<'a>(window: &tauri::WebviewWindow, request: &'a tauri::ipc::Re
 #[tauri::command]
 async fn get_domains(window: tauri::WebviewWindow, request: tauri::ipc::Request<'_>) -> Result<DomainView, DomainError> {
     let payload = domain_payload(&window, &request)?;
-    if !payload.as_object().is_some_and(|o| o.is_empty()) { return Err(ErrorCode::Unavailable.error()); }
-    call_domains(window.app_handle().clone(), DomainCall::List).await
+    if !payload.as_object().is_some_and(|o| o.len() == 1) { return Err(ErrorCode::Unavailable.error()); }
+    call_domains(window.app_handle().clone(), domains::displayed_scope(payload)?, DomainCall::List).await
 }
 
 #[tauri::command]
 async fn edit_domain(window: tauri::WebviewWindow, request: tauri::ipc::Request<'_>) -> Result<DomainView, DomainError> {
     let edit = domains::edit_request(domain_payload(&window, &request)?)?;
-    call_domains(window.app_handle().clone(), DomainCall::Edit(edit)).await
+    call_domains(window.app_handle().clone(), edit.scope, DomainCall::Edit(edit)).await
 }
 
 #[tauri::command]
 async fn retry_domain_edit(window: tauri::WebviewWindow, request: tauri::ipc::Request<'_>) -> Result<DomainView, DomainError> {
     let retry = domains::retry_request(domain_payload(&window, &request)?)?;
-    call_domains(window.app_handle().clone(), DomainCall::Retry(retry)).await
+    call_domains(window.app_handle().clone(), retry.scope, DomainCall::Retry(retry)).await
 }
 
 pub fn run() {

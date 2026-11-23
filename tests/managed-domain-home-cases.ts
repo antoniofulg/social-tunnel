@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, readdirSync, renameSync, writeFileSync } from "node:fs";
 import net from "node:net";
 import { join } from "node:path";
 import { Server, utils, type Connection, type ServerChannel } from "ssh2";
@@ -17,7 +17,7 @@ import { DOMAIN_COMMANDS, domainRoleClient, type DomainAttestation, type DomainV
 import { fingerprint } from "../src/tunnel";
 import { writeState } from "../src/state";
 import { createForwardAttestation } from "../server/forward-attestation";
-import { cli, keyPair, testIo, until, writeConfig } from "./helpers";
+import { cli, keyPair, spawnCli, testIo, until, writeConfig } from "./helpers";
 import { pair } from "./proxy-harness";
 import { freePort } from "./ssh-server";
 
@@ -33,7 +33,7 @@ const reply = (channel: ServerChannel, value: unknown) => { channel.exit(0); cha
 const ok = (value: unknown) => ({ ok: true, value } as const);
 const error = <T extends WireError>(code: T) => ({ ok: false, code } as const);
 
-async function sshFixture(dispatch: Dispatch) {
+async function sshFixture(dispatch: Dispatch, beforeReady?: () => void) {
   const files = writeConfig();
   const host = keyPair();
   const editor = keyPair();
@@ -63,6 +63,7 @@ async function sshFixture(dispatch: Dispatch) {
       ctx.accept();
     });
     conn.on("ready", () => {
+      beforeReady?.();
       conn.on("request", (accept, reject, name, info) => {
         if (account !== "tunnel" || info.bindAddr !== "127.0.0.1" || info.bindPort !== port) return reject?.();
         if (name === "tcpip-forward" && !status) {
@@ -156,6 +157,10 @@ test("[domains C2] [domains C12] legacy and missing enrollment perform no domain
     const status = (await runCli(f.path, ["status"])).payload;
     expect(status).not.toHaveProperty("managedDomains");
     expect(status.allowlist).toEqual(["instagram.com"]);
+    expect(status).not.toHaveProperty("trayEnrollment");
+    const scopedStatus = (await runCli(f.path, ["status", "--tray-scope"])).payload;
+    expect(scopedStatus.trayEnrollment).toMatch(/^[a-f0-9]{64}$/);
+    expect((await runCli(f.path, ["domains", "list", "--expected-enrollment", scopedStatus.trayEnrollment])).payload).toEqual(expected);
     expect(readdirSync(f.dir).sort()).toEqual(before);
     expect(f.auth).toEqual([]);
   } finally { await f.close(); }
@@ -490,6 +495,121 @@ test("[domains C10] no-effect proof releases the crash-before-send slot and acce
     expect(results.filter((r) => r.ok)).toMatchObject([{ view: { state: "pending", active: null } }]);
     expect(results.filter((r) => !r.ok)).toMatchObject([{ error: { code: "conflict" } }]);
     expect(proposals).toBe(1);
+  } finally { await f.close(); }
+});
+
+function fixtureActive(f: Awaited<ReturnType<typeof sshFixture>>, enrollment: ReturnType<Awaited<ReturnType<typeof sshFixture>>["enroll"]>) {
+  const at = Date.now();
+  writeState(f.statePath, { version: 1, pid: process.pid, state: "connected", reason: null, since: new Date(at).toISOString(),
+    retryAt: null, updatedAt: new Date(at).toISOString(), server: f.config.server, remotePort: f.config.remotePort });
+  writeDomainLocal(enrollment, "state", { version: 1, binding: enrollment.binding, enrollment: enrollment.enrollment,
+    epoch: EPOCH, generation: GEN, pid: process.pid, at, expiresAt: at + 6500, active: INITIAL });
+}
+
+function replaceEnrollment(f: Awaited<ReturnType<typeof sshFixture>>) {
+  const cfg = `${f.path}.replacement`;
+  const metadata = `${f.metadata}.replacement`;
+  writeFileSync(cfg, readFileSync(f.path));
+  writeFileSync(metadata, JSON.stringify({ ...JSON.parse(readFileSync(f.metadata, "utf8")), enrollment: "replacement" }), { mode: 0o600 });
+  renameSync(cfg, f.path);
+  renameSync(metadata, f.metadata);
+  const replacement = readDomainEnrollment(f.path, f.config);
+  if (!replacement) throw new Error("replacement fixture did not load");
+  return replacement;
+}
+
+const readyAtZero = { epoch: EPOCH, proxyGeneration: GEN, active: INITIAL, lastRevision: 0, activeForMs: 6500,
+  state: "ready", pending: null, history: [] };
+
+test("[domains C12] the real sidecar rejects equal-revision file substitution before Add or same-ID Retry", async () => {
+  const requests: DomainVerb[] = [];
+  const f = await sshFixture((_role, verb, input, ch) => {
+    requests.push(verb);
+    if (verb === "reconcile") return reply(ch, error("operation_cancelled"));
+    if (verb === "add") return reply(ch, ok({ operationId: JSON.parse(input).operationId, revision: 1, phase: "claimed" }));
+    return reply(ch, ok(readyAtZero));
+  });
+  const invoke = async (words: string[]) => {
+    const r = await spawnCli(["--json", ...words], { SOCIAL_TUNNEL_CONFIG: f.path }).exit(4500);
+    return { code: r.code, payload: fromJson(r.stdout) };
+  };
+  try {
+    const original = f.enroll();
+    fixtureActive(f, original);
+    const a = (await invoke(["status", "--tray-scope"])).payload;
+    expect(a.managedDomains.active.revision).toBe(0);
+    expect(a.trayEnrollment).toMatch(/^[a-f0-9]{64}$/);
+
+    // Native approved A. Replace both files at the already-selected path before the CLI loads.
+    const replacement = replaceEnrollment(f);
+    fixtureActive(f, replacement);
+    const b = (await invoke(["status", "--tray-scope"])).payload;
+    expect(b.managedDomains.active).toEqual(a.managedDomains.active);
+    expect(b.trayEnrollment).not.toBe(a.trayEnrollment);
+    const stale = ["--expected-enrollment", a.trayEnrollment];
+    const bound = ["--expected-enrollment", b.trayEnrollment];
+    const add = ["domains", "add", "wipo.int", "--expected-revision", "0"];
+    const conflict = { code: 10, payload: { ok: false, command: "domains", error: { code: "conflict" } } };
+    const beforeEdit = readdirSync(f.folder).sort();
+    expect(await invoke([...add, ...stale])).toMatchObject(conflict);
+    expect(readdirSync(f.folder).sort()).toEqual(beforeEdit);
+    expect(f.auth).toEqual([]);
+
+    // A matching ID in B would trigger reconcile without the bound-selection check.
+    const id = "1.0." + "b".repeat(32);
+    const proposal = { version: 1 as const, operationId: id, expectedRevision: 0, host: "wipo.int" };
+    expect(domainSubmission(replacement, { claim: { kind: "add", proposal } }).claimed).toBe(true);
+    const journal = join(f.folder, "submission.sqlite");
+    const beforeRetry = readFileSync(journal);
+    expect(await invoke(["domains", "retry", id, ...stale])).toMatchObject(conflict);
+    expect(readFileSync(journal)).toEqual(beforeRetry);
+    expect(f.auth).toEqual([]);
+    expect(requests).toEqual([]);
+
+    expect((await invoke(["domains", "list", ...bound])).payload.pending.operationId).toBe(id);
+    expect((await invoke(["domains", "retry", id, ...bound])).payload.error.code).toBe("operation_cancelled");
+    expect((await invoke([...add, ...bound])).payload.state).toBe("pending");
+    expect(requests).toEqual(["inspect", "reconcile", "inspect", "add"]);
+  } finally { await f.close(); }
+}, 10000);
+
+test("[domains C12] a replacement during SSH preflight cannot reserve or send a bound edit", async () => {
+  const requests: DomainVerb[] = [];
+  const f = await sshFixture((_role, verb, _input, ch) => {
+    requests.push(verb);
+    if (verb === "inspect") replaceEnrollment(f);
+    reply(ch, ok(readyAtZero));
+  });
+  try {
+    fixtureActive(f, f.enroll());
+    const scope = (await runCli(f.path, ["status", "--tray-scope"])).payload.trayEnrollment;
+    const before = readdirSync(f.folder).sort();
+    const result = await runCli(f.path, ["domains", "remove", "wikipedia.org", "--expected-revision", "0", "--expected-enrollment", scope]);
+    expect(result).toMatchObject({ code: 10, payload: { error: { code: "conflict" } } });
+    expect(requests).toEqual(["inspect"]);
+    expect(readdirSync(f.folder).sort()).toEqual(before);
+  } finally { await f.close(); }
+});
+
+test("[domains C12] replacement during Retry authentication cannot send reconciliation", async () => {
+  const requests: DomainVerb[] = [];
+  const f = await sshFixture((_role, verb, _input, ch) => {
+    requests.push(verb);
+    reply(ch, error("operation_cancelled"));
+  }, () => { replaceEnrollment(f); });
+  try {
+    const enrollment = f.enroll();
+    const id = "1.0." + "d".repeat(32);
+    const proposal = { version: 1 as const, operationId: id, expectedRevision: 0, host: "wipo.int" };
+    expect(domainSubmission(enrollment, { claim: { kind: "add", proposal } }).claimed).toBe(true);
+    const journal = join(f.folder, "submission.sqlite");
+    const before = readFileSync(journal);
+    const scope = (await runCli(f.path, ["status", "--tray-scope"])).payload.trayEnrollment;
+    const result = await runCli(f.path, ["domains", "retry", id, "--expected-enrollment", scope]);
+    expect(result).toMatchObject({ code: 10, payload: { error: { code: "conflict" } } });
+    expect(f.auth).toContain("editor");
+    expect(requests).toEqual([]);
+    expect(readFileSync(journal)).toEqual(before);
   } finally { await f.close(); }
 });
 

@@ -36,14 +36,14 @@ it("[domains C12] submits the labelled form, waits for the same operation and ne
   fireEvent.change(field(), { target: { value: "wipo.int" } });
   fireEvent.submit(field().form!); // WebKit proof exercises actual Enter in the same form.
   await screen.findByText("Until applied, this domain may still go directly from the server.");
-  expect(ipc.calls("edit_domain")).toEqual([{ operation: "add", host: "wipo.int", expectedRevision: 7 }]);
+  expect(ipc.calls("edit_domain")).toEqual([{ scope: 1, operation: "add", host: "wipo.int", expectedRevision: 7 }]);
   expect(within(screen.getByRole("list", { name: "Last verified domains" })).queryByText("wipo.int")).toBeNull();
   expect(add().getAttribute("aria-disabled")).toBe("true");
   fireEvent.submit(field().form!);
   expect(ipc.calls("edit_domain")).toHaveLength(1);
   rerender(<DomainsTab snapshot={managed(next)} />);
   await screen.findByText("Applied to new connections in the enrolled browser.");
-  expect(ipc.calls("retry_domain_edit")).toEqual([{ operationId: id }]);
+  expect(ipc.calls("retry_domain_edit")).toEqual([{ scope: 1, operationId: id }]);
   expect(within(screen.getByRole("list", { name: "Domains that use home internet" })).getByText("wipo.int")).toBeTruthy();
   expect(field().value).toBe("");
 });
@@ -83,7 +83,7 @@ it("[domains C12] confirms a named removal, keeps covered routes clear, and supp
   expect(remove.textContent).toContain("may go directly from the server");
   fireEvent.click(within(remove).getByRole("button", { name: "Remove" }));
   await screen.findByText("Waiting for the tunnel and enrolled browser to confirm the change.");
-  expect(ipc.calls("edit_domain")).toEqual([{ operation: "remove", host: "example.com", expectedRevision: 7 }]);
+  expect(ipc.calls("edit_domain")).toEqual([{ scope: 1, operation: "remove", host: "example.com", expectedRevision: 7 }]);
 });
 
 it("[domains C12] distinguishes legacy, unknown, recovery and verified empty", async () => {
@@ -118,11 +118,11 @@ it("[domains C12] bounds pending refreshes and offers manual Retry of only the s
     fireEvent.submit(field().form!);
     await act(async () => {});
     for (let i = 0; i < 7; i++) await act(async () => { await vi.advanceTimersByTimeAsync(2500); });
-    expect(ipc.calls("retry_domain_edit")).toEqual(Array.from({ length: 4 }, () => ({ operationId: id })));
+    expect(ipc.calls("retry_domain_edit")).toEqual(Array.from({ length: 4 }, () => ({ scope: 1, operationId: id })));
     expect(screen.getByText("Couldn't confirm the new routing.")).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: "Retry" }));
     await act(async () => {});
-    expect(ipc.calls("retry_domain_edit").at(-1)).toEqual({ operationId: id });
+    expect(ipc.calls("retry_domain_edit").at(-1)).toEqual({ scope: 1, operationId: id });
     expect(ipc.calls("edit_domain")).toHaveLength(1);
   } finally { vi.useRealTimers(); }
 });
@@ -153,7 +153,7 @@ it("[domains C12] preserves the exact pending ID and historical rows across tab 
     expect(screen.getByRole("button", { name: "Retry" }).getAttribute("aria-disabled")).toBe("true");
     ipc.emit("snapshot", managed(null));
     await act(async () => {});
-    expect(ipc.calls("retry_domain_edit")).toEqual([{ operationId: id }]);
+    expect(ipc.calls("retry_domain_edit")).toEqual([{ scope: 1, operationId: id }]);
     expect(screen.getByText("wipo.int")).toBeTruthy();
     expect(ipc.calls("edit_domain")).toHaveLength(1);
   } finally { vi.useRealTimers(); }
@@ -178,7 +178,7 @@ it("[domains C12] reopens by reading the durable CLI intent before offering the 
   await screen.findByText("The authority cancelled that operation.");
   expect(screen.queryByRole("button", { name: "Retry" })).toBeNull();
   expect(ipc.calls("get_domains")).toHaveLength(2);
-  expect(ipc.calls("retry_domain_edit")).toEqual([{ operationId: id }]);
+  expect(ipc.calls("retry_domain_edit")).toEqual([{ scope: 1, operationId: id }]);
   expect(ipc.calls("edit_domain")).toHaveLength(1);
 });
 
@@ -202,7 +202,7 @@ it("[domains C12] same-path config replacement clears rows and pending and ignor
   expect(screen.queryByRole("list", { name: "Last verified domains" })).toBeNull();
   expect(screen.queryByText(/retired\.example\.com|wipo\.int|www\.example\.com/)).toBeNull();
   expect(screen.queryByRole("button", { name: "Retry" })).toBeNull();
-  expect(ipc.calls("retry_domain_edit")).toEqual([{ operationId: id }]);
+  expect(ipc.calls("retry_domain_edit")).toEqual([{ scope: 1, operationId: id }]);
   expect(field().readOnly).toBe(false);
 });
 
@@ -236,4 +236,26 @@ it("[domains C12] tab reentry keeps old rows historical until a fresh read confi
   await act(async () => onReturn.resolve(ready()));
   expect(screen.getByRole("list", { name: "Domains that use home internet" })).toBeTruthy();
   expect(field().readOnly).toBe(false);
+});
+
+it("[domains C12] confirms against the displayed scope, not an equal-revision replacement seen only by native", async () => {
+  let nativeScope = 1;
+  const check = (args: unknown) => {
+    if ((args as { scope: number }).scope !== nativeScope) throw { code: "conflict" };
+    return ready();
+  };
+  const ipc = installIpc({ snapshot: managed(), answers: { get_domains: check, edit_domain: check } });
+  render(<Settings initialView="domains" />);
+  await waitFor(() => expect(field().readOnly).toBe(false));
+  fireEvent.click(screen.getByRole("button", { name: "Remove www.example.com" }));
+  const confirmation = screen.getByRole("group", { name: "Remove www.example.com?" });
+  nativeScope = 2; // Status and the list have identical revisions and domains; the snapshot has not arrived.
+  fireEvent.click(within(confirmation).getByRole("button", { name: "Remove" }));
+  await screen.findByText("The managed revision changed or another operation is pending.");
+  expect(ipc.calls("edit_domain")).toEqual([{ scope: 1, operation: "remove", host: "www.example.com", expectedRevision: 7 }]);
+  ipc.emit("snapshot", { ...managed(), domainsScope: 2 });
+  await waitFor(() => expect(field().readOnly).toBe(false));
+  expect(ipc.calls("get_domains").at(-1)).toEqual({ scope: 2 });
+  expect(screen.queryByRole("group", { name: "Remove www.example.com?" })).toBeNull();
+  expect(ipc.calls("edit_domain")).toHaveLength(1);
 });

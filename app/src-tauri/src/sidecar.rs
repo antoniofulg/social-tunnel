@@ -11,9 +11,10 @@ use std::time::{Duration, Instant};
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SidecarCall {
     Status,
+    TrayStatus,
     Doctor { domain: Option<String> },
     Run,
-    Domains(crate::domains::DomainCall),
+    Domains(crate::domains::DomainCall, crate::domains::EnrollmentToken),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -47,6 +48,7 @@ fn valid_config_path(path: &str) -> bool {
 pub fn argv(call: &SidecarCall, config: Option<&str>) -> Result<Vec<String>, ArgvError> {
     let mut args: Vec<String> = match call {
         SidecarCall::Status => vec!["status".into(), "--json".into()],
+        SidecarCall::TrayStatus => vec!["status".into(), "--json".into(), "--tray-scope".into()],
         SidecarCall::Run => vec!["run".into(), "--json".into()],
         SidecarCall::Doctor { domain: None } => vec!["doctor".into(), "--json".into()],
         SidecarCall::Doctor { domain: Some(host) } => {
@@ -55,7 +57,7 @@ pub fn argv(call: &SidecarCall, config: Option<&str>) -> Result<Vec<String>, Arg
             }
             vec!["doctor".into(), "--json".into(), "--domain".into(), host.clone()]
         }
-        SidecarCall::Domains(domain) => {
+        SidecarCall::Domains(domain, enrollment) => {
             use crate::domains::{self, DomainCall, EditOperation};
             let mut args = vec!["domains".into()];
             match domain {
@@ -71,7 +73,7 @@ pub fn argv(call: &SidecarCall, config: Option<&str>) -> Result<Vec<String>, Arg
                     args.extend(["retry".into(), retry.operation_id.clone()]);
                 }
             }
-            args.push("--json".into());
+            args.extend(["--json".into(), "--expected-enrollment".into(), enrollment.as_str().into()]);
             args
         }
     };

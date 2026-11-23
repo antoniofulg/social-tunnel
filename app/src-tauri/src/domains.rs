@@ -11,6 +11,21 @@ pub const MAX_SAFE_REVISION: u64 = 9_007_199_254_740_991;
 pub const DOMAINS_TIMEOUT: Duration = Duration::from_secs(9);
 pub const DOMAINS_STDOUT: usize = 64 * 1024;
 
+/// Issued only by the bundled CLI status call; never deserialized from WebView IPC.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct EnrollmentToken([u8; 64]);
+
+impl EnrollmentToken {
+    pub fn parse(value: &str) -> Option<Self> {
+        let bytes: [u8; 64] = value.as_bytes().try_into().ok()?;
+        bytes.iter().all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(b)).then_some(Self(bytes))
+    }
+
+    pub(crate) fn as_str(&self) -> &str {
+        std::str::from_utf8(&self.0).expect("validated ASCII")
+    }
+}
+
 #[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum EditOperation {
@@ -24,12 +39,14 @@ pub struct EditRequest {
     pub operation: EditOperation,
     pub host: String,
     pub expected_revision: u64,
+    pub scope: u64,
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct RetryRequest {
     pub operation_id: String,
+    pub scope: u64,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -39,21 +56,28 @@ pub enum DomainCall {
     Retry(RetryRequest),
 }
 
+pub(crate) fn displayed_scope(value: &Value) -> Result<u64, DomainError> {
+    value["scope"].as_u64().filter(|&scope| (1..=MAX_SAFE_REVISION).contains(&scope))
+        .ok_or_else(|| ErrorCode::Conflict.error())
+}
+
 pub fn edit_request(value: &Value) -> Result<EditRequest, DomainError> {
-    let valid = value.as_object().is_some_and(|o| o.len() == 3 && o.contains_key("operation") &&
+    let valid = value.as_object().is_some_and(|o| o.len() == 4 && o.contains_key("operation") &&
         o.contains_key("host") && o.contains_key("expectedRevision"));
     if !valid || !value["host"].as_str().is_some_and(valid_host) { return Err(ErrorCode::InvalidDomain.error()); }
     if !value["expectedRevision"].as_u64().is_some_and(|rev| rev <= MAX_SAFE_REVISION) {
         return Err(ErrorCode::InvalidRevision.error());
     }
+    displayed_scope(value)?;
     EditRequest::deserialize(value).map_err(|_| ErrorCode::InvalidDomain.error())
 }
 
 pub fn retry_request(value: &Value) -> Result<RetryRequest, DomainError> {
-    if !value.as_object().is_some_and(|o| o.len() == 1) ||
+    if !value.as_object().is_some_and(|o| o.len() == 2) ||
         !value["operationId"].as_str().is_some_and(valid_operation) {
         return Err(ErrorCode::UnknownOperation.error());
     }
+    displayed_scope(value)?;
     RetryRequest::deserialize(value).map_err(|_| ErrorCode::UnknownOperation.error())
 }
 
@@ -243,8 +267,8 @@ pub fn settings_sender(label: &str, url: &Url) -> bool {
         matches!(url.path(), "/" | "/index.html")
 }
 
-pub fn run(runner: &dyn Runner, program: &Path, command: DomainCall) -> Result<DomainView, DomainError> {
-    let out = sidecar::call(runner, program, &SidecarCall::Domains(command), None, DOMAINS_TIMEOUT, DOMAINS_STDOUT).map_err(|e| match e {
+pub fn run(runner: &dyn Runner, program: &Path, command: DomainCall, enrollment: EnrollmentToken) -> Result<DomainView, DomainError> {
+    let out = sidecar::call(runner, program, &SidecarCall::Domains(command, enrollment), None, DOMAINS_TIMEOUT, DOMAINS_STDOUT).map_err(|e| match e {
         ArgvError::InvalidHost => ErrorCode::InvalidDomain,
         ArgvError::InvalidRevision => ErrorCode::InvalidRevision,
         ArgvError::InvalidOperation => ErrorCode::UnknownOperation,

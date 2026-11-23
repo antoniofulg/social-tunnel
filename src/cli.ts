@@ -8,10 +8,10 @@ import { loadConfig, loadKey, resolveConfigPath } from "./config";
 import { DEFAULTS, EXIT } from "./defaults";
 import { runDoctor } from "./doctor";
 import { domainAction, type DomainAction } from "./domain-cli";
-import { managedKeyFingerprint, readDomainEnrollment, readDomainRole } from "./domain-enrollment";
+import { captureTrayEnrollment, managedKeyFingerprint, readDomainEnrollment, readDomainRole } from "./domain-enrollment";
 import { dialManagedAddress, resolveManagedHost } from "./domain-network";
 import { createManagedRun, readActiveHome, SETUP_REQUIRED, UNKNOWN_DOMAINS } from "./domain-runtime";
-import { domainRoleClient } from "./domain-wire";
+import { domainDigest, domainRoleClient } from "./domain-wire";
 import { createLogger, sanitize } from "./log";
 import { createProxy, type Dialer, type Resolver } from "./proxy";
 import { claimRun, lockPath, pidAlive, readState, refreshRun, releaseRun, statePath } from "./state";
@@ -53,6 +53,8 @@ options:
   --json            print one JSON object on stdout
   --domain <host>   doctor only: also check that <host> is on the allowlist
   --expected-revision <uint>  required for domains add/remove
+  Native sidecar only: status --json --tray-scope; domains --json --expected-enrollment <scope>.
+  A changed enrollment refuses the scoped command with conflict (exit 10).
   --help, --version
 `;
 
@@ -64,6 +66,8 @@ interface Args {
   json: boolean;
   config?: string;
   domain?: string;
+  trayScope?: boolean;
+  expectedEnrollment?: string;
   action?: DomainAction;
 }
 
@@ -75,32 +79,40 @@ function parseArgs(argv: string[]): Args | "help" | "version" | null {
   let domain: string | undefined;
   const operands: string[] = [];
   let expected: string | undefined;
+  let trayScope = false;
+  let expectedEnrollment: string | undefined;
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i]!;
     if (arg === "--help" || arg === "-h") return "help";
     if (arg === "--version") return "version";
     if (arg === "--json") json = true;
-    else if (arg === "--config" || arg === "--domain" || arg === "--expected-revision") {
+    else if (arg === "--tray-scope" && !trayScope) trayScope = true;
+    else if (arg === "--config" || arg === "--domain" || arg === "--expected-revision" || arg === "--expected-enrollment") {
       const value = argv[++i];
       // An empty value is what an unset shell variable leaves behind; never fall back to another config.
       if (value === undefined || value === "") return null;
       if (arg === "--config") config = value;
       else if (arg === "--domain") domain = value;
-      else if (expected === undefined) expected = value;
+      else if (arg === "--expected-enrollment") {
+        if (expectedEnrollment !== undefined || !domainDigest(value)) return null;
+        expectedEnrollment = value;
+      } else if (expected === undefined) expected = value;
       else return null;
     } else if (!verb && (VERBS as readonly string[]).includes(arg)) verb = arg as Verb;
     else if (verb === "domains" && !arg.startsWith("-") && operands.length < 2) operands.push(arg);
     else return null;
   }
-  if (!verb || (domain !== undefined && verb !== "doctor")) return null;
-  if (verb !== "domains") return expected === undefined ? { verb, json, config, domain } : null;
+  if (!verb || (domain !== undefined && verb !== "doctor") ||
+      (trayScope && (!json || verb !== "status")) ||
+      (expectedEnrollment !== undefined && (!json || verb !== "domains"))) return null;
+  if (verb !== "domains") return expected === undefined ? { verb, json, config, domain, trayScope } : null;
   const [kind, subject] = operands;
   let action: DomainAction;
   if (kind === "list" && subject === undefined && expected === undefined) action = { kind };
   else if (kind === "retry" && subject && expected === undefined) action = { kind, id: subject };
   else if ((kind === "add" || kind === "remove") && subject) action = { kind, host: subject, expected };
   else return null;
-  return { verb, json, config, action };
+  return { verb, json, config, action, expectedEnrollment };
 }
 
 export async function main(argv: string[], io: Io): Promise<number> {
@@ -144,17 +156,23 @@ export async function main(argv: string[], io: Io): Promise<number> {
       return exit;
     }
 
-    const loaded = loadConfig(configPath, io.readFile, io.homedir);
+    const selection = args.trayScope || args.expectedEnrollment !== undefined ? captureTrayEnrollment(configPath, io.homedir) : null;
+    if (args.expectedEnrollment !== undefined &&
+        (!selection || selection.token !== args.expectedEnrollment || (args.action?.kind !== "list" && !selection.enrollment))) {
+      return fail(EXIT.down, "conflict", "The selected managed enrollment changed.");
+    }
+    const loaded = selection?.loaded ?? loadConfig(configPath, io.readFile, io.homedir);
     if (args.action) {
       const config = loaded.ok ? loaded.config : null;
-      const enrollment = config && readDomainEnrollment(configPath, config);
+      const enrollment = selection ? selection.enrollment : config && readDomainEnrollment(configPath, config);
       const editor = config && enrollment ? readDomainRole(enrollment, config, "editor") : null;
       try {
-        const result = await domainAction(args.action, enrollment, editor && domainRoleClient("editor", editor, io.connectTimeoutMs), () => {
+        const client = editor && domainRoleClient("editor", editor, io.connectTimeoutMs, selection?.current);
+        const result = await domainAction(args.action, enrollment, client, () => {
           if (!config || !enrollment) return null;
           const s = evaluateStatus(readState(statePath(configPath)), pidAlive, Date.now(), io.staleMs, config);
           return s.state === "connected" ? readActiveHome(enrollment, s.pid) : null;
-        });
+        }, selection?.current);
         if (!result.ok) {
           if (args.json) print({ ok: false, command: "domains", error: result.error });
           else io.stderr(`error: ${result.error.message}\n`);
@@ -168,7 +186,7 @@ export async function main(argv: string[], io: Io): Promise<number> {
     // The path it resolved tells a tray app "not set up" (no file there) from a broken config.
     if (!loaded.ok) return fail(EXIT.usage, "config_invalid", loaded.message, loaded.field, configPath);
     const config = loaded.config;
-    const enrollment = readDomainEnrollment(configPath, config);
+    const enrollment = selection ? selection.enrollment : readDomainEnrollment(configPath, config);
 
     if (args.verb === "status") {
       const view = evaluateStatus(readState(statePath(configPath)), pidAlive, Date.now(), DEFAULTS.staleMs, config);
@@ -191,6 +209,7 @@ export async function main(argv: string[], io: Io): Promise<number> {
           domains: config.domains.length,
           keyPath: config.keyPath,
           allowlist: config.domains,
+          ...(args.trayScope && selection?.current() ? { trayEnrollment: selection.token } : {}),
           ...managed,
         });
       } else {

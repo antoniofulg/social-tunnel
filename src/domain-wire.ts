@@ -28,18 +28,21 @@ const errors = {
 } satisfies Record<WireError, true>;
 const unavailable = { ok: false, code: "unavailable" } as const;
 
-export function domainRoleClient(role: DomainRole, target: SshTarget, timeoutMs = 4000): DomainClient {
+export function domainRoleClient(role: DomainRole, target: SshTarget, timeoutMs = 4000, currentSelection?: () => boolean): DomainClient {
+  const changed = { ok: false, code: "conflict" } as const;
   async function request(verb: DomainVerb, message?: unknown): Promise<WireResult> {
     const edit = verb === "add" || verb === "remove" || verb === "reconcile";
     if (verb !== "inspect" && edit !== (role === "editor")) {
       return { ok: false, code: "unauthorized" };
     }
+    if (currentSelection?.() === false) return changed;
     const body = message === undefined ? "" : JSON.stringify(message);
     if (Buffer.byteLength(body) > DOMAIN_REQUEST_LIMIT) return { ok: false, code: "limit" };
     const end = performance.now() + timeoutMs;
     try {
       const client = await withTimeout(connectSsh(target, { readyTimeoutMs: timeoutMs }), timeoutMs, (late) => late.destroy());
       try {
+        if (currentSelection?.() === false) return changed;
         const remaining = end - performance.now();
         if (remaining <= 0) return unavailable;
         const result = Promise.withResolvers<WireResult>();
@@ -53,6 +56,11 @@ export function domainRoleClient(role: DomainRole, target: SshTarget, timeoutMs 
         client.exec(DOMAIN_COMMANDS[verb], (err, channel) => {
           if (err) return result.resolve(unavailable);
           if (stopped) return channel.destroy();
+          if (currentSelection?.() === false) {
+            result.resolve(changed);
+            channel.destroy();
+            return;
+          }
           let bytes = 0;
           let stderr = false;
           const chunks: Buffer[] = [];

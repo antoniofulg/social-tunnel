@@ -86,10 +86,10 @@ for (const scheme of ["light", "dark"] as const) {
         const fixture = window as unknown as TestWindow;
         return fixture.__domainCalls;
       });
-      expect(calls.filter(([cmd]) => cmd === "edit_domain")).toEqual([["edit_domain", { operation: "add", host: "wipo.int", expectedRevision: 7 }]]);
+      expect(calls.filter(([cmd]) => cmd === "edit_domain")).toEqual([["edit_domain", { scope: snap.domainsScope, operation: "add", host: "wipo.int", expectedRevision: 7 }]]);
       const retries = calls.filter(([cmd]) => cmd === "retry_domain_edit");
       expect(retries.length).toBeGreaterThanOrEqual(1);
-      for (const [, args] of retries) expect(args).toEqual({ operationId: id });
+      for (const [, args] of retries) expect(args).toEqual({ scope: snap.domainsScope, operationId: id });
       expect(external).toEqual([]);
     } finally {
       await page.goto("about:blank");
