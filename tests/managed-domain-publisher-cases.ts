@@ -10,7 +10,7 @@ import {
 } from "../src/domain-policy";
 import {
   openDomainPublisher, provisionDomainPublisher,
-  type PublisherOperation, type PublisherPrincipal, type PublisherResult, type ProxyPublicationReceipt,
+  type IdleReservationScope, type PublisherOperation, type PublisherOptions, type PublisherPrincipal, type PublisherResult, type ProxyPublicationReceipt,
 } from "../src/domain-publisher";
 import { tmp } from "./helpers";
 
@@ -36,7 +36,10 @@ function value<T>(result: PublisherResult<T>): T {
   return result.value;
 }
 
-function fixture(domains = ["amazonaws.com", "mozilla.org", "wikipedia.org"]) {
+function fixture(
+  domains = ["amazonaws.com", "mozilla.org", "wikipedia.org"],
+  currentIdleReservation?: PublisherOptions<object>["currentIdleReservation"],
+) {
   const root = tmp();
   const journalDir = join(root, "journal");
   const policyDir = join(root, "managed");
@@ -57,7 +60,8 @@ function fixture(domains = ["amazonaws.com", "mozilla.org", "wikipedia.org"]) {
   const proxy = session({ role: "proxy", epoch: EPOCH, generation: "proxy-1" });
   const admin = session({ role: "local_admin" });
   const sink = fileDomainPolicySink(policyDir, journalDir);
-  const options = { enrollment: ENROLLMENT, journalDir, proxyPort: PORT, policy: sink, identify: (ticket: object) => identities.get(ticket) ?? null };
+  const options = { enrollment: ENROLLMENT, journalDir, proxyPort: PORT, policy: sink,
+    identify: (ticket: object) => identities.get(ticket) ?? null, currentIdleReservation };
   provisionDomainPublisher(options, { epoch: EPOCH, revision: INIT, domains, proxyGeneration: "proxy-1" });
   const open = (policy: DomainPolicySink = sink, identify = options.identify) => {
     const p = openDomainPublisher({ ...options, policy, identify });
@@ -97,6 +101,58 @@ function pac(bytes: string) {
   const find = runInNewContext(`${source}\nFindProxyForURL`) as (url: string, host: string) => string;
   return (host: string) => find(`https://${host}/`, host);
 }
+
+test("[domains C9] a guarded publisher grants, publishes and finalizes only under the same durable idle reservation", () => {
+  let held: { scope: IdleReservationScope; id: string } | undefined;
+  let remainingChecks = Infinity;
+  const f = fixture(["wikipedia.org"], scope => {
+    if (--remainingChecks < 0 || !held) return null;
+    const expected = held.scope;
+    return scope.enrollment === expected.enrollment && scope.epoch === expected.epoch &&
+      scope.operationId === expected.operationId && scope.revision === expected.revision &&
+      scope.domainsDigest === expected.domainsDigest && scope.policyPreimageDigest === expected.policyPreimageDigest
+      ? held.id : null;
+  });
+  let p = f.open();
+  const edit = value(p.propose(f.editor, "add", wire("wipo.int")));
+  expect(() => openDomainPublisher({ ...f.options, currentIdleReservation: undefined }))
+    .toThrow("wrong journal binding");
+  const beforeGrant = f.bytes();
+  expect(p.beginActivation(f.proxy, edit.operationId)).toEqual(err("not_ready"));
+  expect(f.bytes()).toEqual(beforeGrant);
+  const scope = {
+    enrollment: ENROLLMENT, epoch: EPOCH, operationId: edit.operationId, revision: INIT + 1,
+    domainsDigest: edit.target.domainsDigest, policyPreimageDigest: hashBytes(f.initial),
+  };
+  held = { id: "wrong-operation-lease", scope: { ...scope, operationId: id(9) } };
+  expect(p.beginActivation(f.proxy, edit.operationId)).toEqual(err("not_ready"));
+  held = { id: "old-pac-lease", scope: { ...scope, policyPreimageDigest: "0".repeat(64) } };
+  expect(p.beginActivation(f.proxy, edit.operationId)).toEqual(err("not_ready"));
+  held = { scope, id: "exact-lease" };
+  value(p.beginActivation(f.proxy, edit.operationId));
+  p.close();
+  p = f.open();
+  held = { scope, id: "replacement-lease" };
+  expect(p.publish(f.proxy, receipt(edit))).toEqual(err("not_ready"));
+  expect(f.sink.read()).toBe(f.initial);
+  held = { scope, id: "exact-lease" };
+  remainingChecks = 1;
+  expect(p.publish(f.proxy, receipt(edit))).toEqual(err("not_ready"));
+  expect(f.sink.read()).toBe(f.initial);
+  remainingChecks = Infinity;
+  value(p.publish(f.proxy, receipt(edit)));
+  const observed = {
+    ...receipt(edit), browserGeneration: "verified-chrome", policyDigest: hashBytes(f.sink.read()),
+    positive: `${"a".repeat(32)}.e${EPOCH}.r${INIT + 1}.pac.invalid`,
+    negative: `${"b".repeat(32)}.e${EPOCH - 1}.r${INIT + 1}.pac.invalid`,
+  };
+  const observer = f.session({ role: "observer", epoch: EPOCH, generation: observed.browserGeneration });
+  held = undefined;
+  expect(p.finalize(observer, observed)).toEqual(err("not_ready"));
+  expect(value(p.inspect(f.admin)).lastProven.policy.revision).toBe(INIT);
+  held = { scope, id: "exact-lease" };
+  expect(value(p.finalize(observer, observed)).domains).toEqual(["wikipedia.org", "wipo.int"]);
+});
 
 test("[domains C4] publisher rejects noncanonical or stale proposals and admits one durable winning projection", async () => {
   const f = fixture();
@@ -368,6 +424,33 @@ test("[domains C10] only fresh protected publication proof can re-enable a no-ef
   expect(state.lastBrowserProof).toEqual(proof);
   expect(state.history.find((item) => item.operationId === prior.operationId)?.disposition).toBe("cancelled");
   expect(value(reopened.propose(editor, "add", wire("wipo.int", id(2, epoch, revision), revision))).phase).toBe("claimed");
+});
+
+test("[domains C10] losing the idle reservation during recovery sync cannot issue a home grant", () => {
+  let held = true;
+  const f = fixture(["wikipedia.org"], () => held ? "idle-lease" : null);
+  const interrupted = f.open({ ...f.sink, replace(old, next) {
+    f.sink.replace(old, next);
+    throw new Error("interrupted after rename");
+  } });
+  const edit = value(interrupted.propose(f.editor, "remove", wire("wikipedia.org")));
+  value(interrupted.beginActivation(f.proxy, edit.operationId));
+  expect(interrupted.publish(f.proxy, receipt(edit))).toEqual(err("unavailable"));
+  const epoch = value(interrupted.disable(f.admin, EPOCH));
+  interrupted.close();
+  const p = f.open({ ...f.sink, replace(old, next) {
+    f.sink.replace(old, next);
+    if (old === next) held = false;
+  } });
+  const recovered = value(p.authorizeRecovery(f.admin, {
+    epoch, operationId: id(3, epoch), proxyGeneration: "proxy-2", domains: [], releaseDirect: [],
+  }));
+  const proxy = f.session({ role: "proxy", epoch, generation: "proxy-2" });
+  const beforeGrant = f.bytes();
+  expect(p.beginActivation(proxy, recovered.operationId)).toEqual(err("not_ready"));
+  expect(f.bytes()).toEqual(beforeGrant);
+  expect(value(p.inspectPolicy(f.admin))).toBe("interrupted");
+  expect(value(p.inspect(f.admin)).pending?.phase).toBe("claimed");
 });
 
 test("[domains C10] administrator recovery stays narrower, retains uncertain routes, and requires a fresh receipt", () => {

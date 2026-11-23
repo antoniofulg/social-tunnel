@@ -18,6 +18,15 @@ export type PublisherPrincipal =
   | { role: "observer"; enrollment: string; epoch: number; generation: string }
   | { role: "local_admin"; enrollment: string };
 
+export interface IdleReservationScope {
+  enrollment: string;
+  epoch: number;
+  operationId: string;
+  revision: number;
+  domainsDigest: string;
+  policyPreimageDigest: string;
+}
+
 export interface PublisherOptions<Session> {
   journalDir: string;
   enrollment: string;
@@ -26,6 +35,9 @@ export interface PublisherOptions<Session> {
   // Trusted transport context, not JSON supplied by a request. An epoch belongs to the session
   // at authentication, never to the last epoch read from the journal.
   identify: (session: Session) => PublisherPrincipal | null;
+  // Protected local runner only. It must hold admissions until the grant can
+  // no longer take effect, including across disconnect, abort and restart.
+  currentIdleReservation?: (scope: Readonly<IdleReservationScope>) => string | null;
 }
 
 export interface VerifiedPublisherBaseline {
@@ -83,7 +95,7 @@ type Archived = { operationId: string; revision: number; disposition: "cancelled
 type Recovery = { operationId: string; ceiling: readonly string[]; retainRoutes: readonly string[] };
 
 type JournalState = {
-  version: 1;
+  version: 1 | 2;
   enrollment: string;
   proxyPort: number;
   epoch: number;
@@ -94,6 +106,7 @@ type JournalState = {
   recordedPolicy: PolicyRevision;
   possiblyWritten: PolicyRevision | null;
   syncInterruptedRecovery?: true;
+  idleReservation?: { id: string; policyPreimageDigest: string };
   pending: PublisherOperation | null;
   recovery: Recovery | null;
   history: Archived[];
@@ -149,6 +162,7 @@ function target(epoch: number, domains: ManagedDomainSnapshot, routes = domains.
 function journal<Session>(options: PublisherOptions<Session>, initial?: JournalState) {
   const { journalDir, enrollment, proxyPort } = options;
   if (!tag(enrollment) || !Number.isInteger(proxyPort) || proxyPort < 1 || proxyPort > 65535) throw new Error("invalid publisher enrollment");
+  const version = options.currentIdleReservation === undefined ? 1 : 2;
   const dir = protectedDirectory(journalDir, true);
   const path = join(journalDir, JOURNAL);
   if (initial) closeSync(openSync(path, constants.O_CREAT | constants.O_EXCL | constants.O_WRONLY | constants.O_NOFOLLOW, 0o600));
@@ -195,7 +209,9 @@ function journal<Session>(options: PublisherOptions<Session>, initial?: JournalS
       const saved = row.get(MAX_STATE);
       if (!saved || typeof saved.body !== "string" || hashBytes(saved.body) !== saved.digest) throw new Error("invalid managed journal");
       const state: JournalState = JSON.parse(saved.body);
-      if (state.version !== 1 || state.enrollment !== enrollment || state.proxyPort !== proxyPort) throw new Error("wrong journal binding");
+      if (state.version !== version || state.enrollment !== enrollment || state.proxyPort !== proxyPort) {
+        throw new Error("wrong journal binding");
+      }
       return state;
     };
     load();
@@ -225,14 +241,15 @@ export function provisionDomainPublisher<Session>(options: PublisherOptions<Sess
   const lastProven = target(baseline.epoch, domains);
   if (options.policy.read() !== renderDomainPolicy(options.proxyPort, lastProven.policy)) throw new Error("publisher baseline policy differs");
   journal(options, {
-    version: 1, enrollment: options.enrollment, proxyPort: options.proxyPort, epoch: baseline.epoch,
+    version: options.currentIdleReservation === undefined ? 1 : 2,
+    enrollment: options.enrollment, proxyPort: options.proxyPort, epoch: baseline.epoch,
     proxyGeneration: baseline.proxyGeneration, editingEnabled: true, allocatedRevision: domains.revision,
     lastProven, recordedPolicy: lastProven.policy, possiblyWritten: null, pending: null, recovery: null, history: [],
   }).close();
 }
 
 export function openDomainPublisher<Session>(options: PublisherOptions<Session>) {
-  const { policy, proxyPort, identify } = options;
+  const { policy, proxyPort, identify, currentIdleReservation } = options;
   const store = journal(options);
   let windowStart = performance.now();
   let proposals = 0;
@@ -244,6 +261,19 @@ export function openDomainPublisher<Session>(options: PublisherOptions<Session>)
     if (identity.role === "proxy" && identity.generation !== state.proxyGeneration) return fail("fenced");
     return null;
   };
+
+  function reservationId(state: JournalState, operation: PublisherOperation, policyPreimageDigest: string) {
+    return currentIdleReservation?.({
+      enrollment: state.enrollment, epoch: state.epoch, operationId: operation.operationId,
+      revision: operation.target.policy.revision, domainsDigest: operation.target.domainsDigest, policyPreimageDigest,
+    });
+  }
+
+  function holdsReservation(state: JournalState, operation: PublisherOperation) {
+    if (state.version === 1) return true;
+    const bound = state.idleReservation;
+    return !!bound && reservationId(state, operation, bound.policyPreimageDigest) === bound.id;
+  }
 
   function policyImage(state: JournalState, bytes: string) {
     if (bytes === rendered(state.recordedPolicy)) return "recorded";
@@ -353,10 +383,17 @@ export function openDomainPublisher<Session>(options: PublisherOptions<Session>)
       if (!selected) return fail("not_ready");
       const expected = rendered(selected);
       if (policy.read() !== expected) return fail("not_ready");
+      if (state.version === 2) {
+        const policyPreimageDigest = hashBytes(expected);
+        const reservation = reservationId(state, operation, policyPreimageDigest);
+        if (!tag(reservation)) return fail("not_ready");
+        state.idleReservation = { id: reservation, policyPreimageDigest };
+      }
       if (sync) {
         // The claim is read-only with respect to PAC. Make the recognized
         // interrupted image durable before changing the journal or granting home.
         policy.replace(expected, expected);
+        if (!holdsReservation(state, operation)) return fail("not_ready");
         state.recordedPolicy = selected;
         delete state.syncInterruptedRecovery;
       }
@@ -386,6 +423,7 @@ export function openDomainPublisher<Session>(options: PublisherOptions<Session>)
       const checked = verifyReceipt(state, session, receipt);
       if (!checked.ok) return checked;
       const operation = checked.value;
+      if (!holdsReservation(state, operation)) return fail("not_ready");
       if (operation.phase === "activating") {
         if (policy.read() !== rendered(state.recordedPolicy)) return fail("not_ready");
         operation.phase = "publishing";
@@ -402,6 +440,7 @@ export function openDomainPublisher<Session>(options: PublisherOptions<Session>)
       const found = policy.read();
       if (operation.phase === "published") return found === next ? ok(operation) : fail("unavailable");
       if (operation.phase !== "publishing" || (found !== rendered(state.recordedPolicy) && found !== next)) return fail("unavailable");
+      if (!holdsReservation(state, operation)) return fail("not_ready");
       policy.replace(found, next);
       if (policy.read() !== next) return fail("unavailable");
       state.recordedPolicy = operation.target.policy;
@@ -433,6 +472,7 @@ export function openDomainPublisher<Session>(options: PublisherOptions<Session>)
           proof.positive.slice(0, 32) === proof.negative.slice(0, 32)) return fail("receipt_mismatch");
       const expected = rendered(pending.target.policy);
       if (hashBytes(expected) !== proof.policyDigest || policy.read() !== expected) return fail("not_ready");
+      if (!holdsReservation(state, pending)) return fail("not_ready");
       if (pending.intent.kind === "recovery") {
         const recovery = state.recovery;
         if (recovery) {
@@ -449,6 +489,7 @@ export function openDomainPublisher<Session>(options: PublisherOptions<Session>)
       delete state.cancelledUnadmitted;
       state.lastBrowserProof = proof;
       state.pending = null;
+      delete state.idleReservation;
       save();
       return ok(state.lastProven);
     });
@@ -479,6 +520,7 @@ export function openDomainPublisher<Session>(options: PublisherOptions<Session>)
         state.pending = null;
       }
       state.epoch++;
+      delete state.idleReservation;
       delete state.syncInterruptedRecovery;
       delete state.cancelledUnadmitted;
       state.editingEnabled = false;
