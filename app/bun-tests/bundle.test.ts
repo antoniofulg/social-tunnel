@@ -3,7 +3,7 @@ import { expect, test } from "bun:test";
 import { accessSync, constants, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 
-const app = join(import.meta.dir, "..", "src-tauri", "target", "release", "bundle", "macos", "social-tunnel.app");
+const app = join(import.meta.dir, "..", "src-tauri", "target", "release", "bundle", "macos", "Social Tunnel.app");
 const plist = join(app, "Contents", "Info.plist");
 const read = (key: string) => Bun.spawnSync(["plutil", "-extract", key, "raw", "-o", "-", plist]).stdout.toString().trim();
 
@@ -16,9 +16,11 @@ test("[tray-app C75] the bundle holds executable Contents/MacOS/social-tunnel-ap
   expect(read("CFBundleExecutable")).toBe("social-tunnel-app");
 });
 
-test("[tray-app C76] Info.plist sets CFBundleIdentifier tech.antoniofulg.social-tunnel.tray and LSUIElement true", () => {
+test("[tray-app C76] Info.plist names the app Social Tunnel and preserves its tray identity", () => {
   expect(read("CFBundleIdentifier")).toBe("tech.antoniofulg.social-tunnel.tray");
   expect(read("LSUIElement")).toBe("true");
+  expect(read("CFBundleName")).toBe("Social Tunnel");
+  expect(read("CFBundleDisplayName")).toBe("Social Tunnel");
 });
 
 test("[tray-app C77] Contents/Resources/icon.icns is non-empty and named by CFBundleIconFile", () => {

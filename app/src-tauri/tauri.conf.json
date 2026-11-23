@@ -1,6 +1,6 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "social-tunnel",
+  "productName": "Social Tunnel",
   "version": "0.0.0",
   "identifier": "tech.antoniofulg.social-tunnel.tray",
   "build": {
@@ -15,7 +15,7 @@
     "windows": [
       {
         "label": "settings",
-        "title": "social-tunnel",
+        "title": "Social Tunnel",
         "url": "index.html",
         "width": 640,
         "height": 560,

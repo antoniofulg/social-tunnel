@@ -44,13 +44,13 @@ fn tray_c79_login_agent_on_and_off_leaves_the_users_launch_agent_plist_unchanged
         assert_eq!(std::fs::read(home.join(USER_PLIST)).unwrap(), b"external fixture");
         let real_plist = PathBuf::from(std::env::var_os("SOCIAL_TUNNEL_C79_REAL_PLIST").unwrap());
         let before = sha(&real_plist);
-        let installed = home.join("Applications/social-tunnel.app/Contents/MacOS/social-tunnel-app");
+        let installed = home.join("Applications/Social Tunnel.app/Contents/MacOS/social-tunnel-app");
         std::fs::create_dir_all(installed.parent().unwrap()).unwrap();
         std::fs::copy(&exe, &installed).unwrap();
         let installed = installed.canonicalize().unwrap();
         let dev = home.join("target/debug/social-tunnel-app");
-        let build = home.join("build/social-tunnel.app/Contents/MacOS/social-tunnel-app");
-        let copy = home.join("Desktop/social-tunnel.app/Contents/MacOS/social-tunnel-app");
+        let build = home.join("build/Social Tunnel.app/Contents/MacOS/social-tunnel-app");
+        let copy = home.join("Desktop/Social Tunnel.app/Contents/MacOS/social-tunnel-app");
         for executable in [&dev, &build, &copy] {
             std::fs::create_dir_all(executable.parent().unwrap()).unwrap();
             std::fs::hard_link(&installed, executable).unwrap();
@@ -92,7 +92,7 @@ fn tray_c79_login_agent_on_and_off_leaves_the_users_launch_agent_plist_unchanged
     let real_plist = home.join(USER_PLIST);
     let before = sha(&real_plist);
     if override_exe.is_some() {
-        assert_eq!(exe, home.join("Applications/social-tunnel.app/Contents/MacOS/social-tunnel-app").canonicalize().unwrap());
+        assert_eq!(exe, home.join("Applications/Social Tunnel.app/Contents/MacOS/social-tunnel-app").canonicalize().unwrap());
         assert!(before.is_some(), "installed smoke needs the existing user plist");
     }
     let scratch = Command::new("/usr/bin/mktemp")

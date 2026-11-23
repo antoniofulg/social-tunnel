@@ -2,7 +2,7 @@
 # Run the isolated login proof, then the installed tray's native menu and Quit.
 # `login` and `preflight` are also runnable separately; neither launches the tray.
 set -eu
-app="$HOME/Applications/social-tunnel.app"
+app="$HOME/Applications/Social Tunnel.app"
 exe="$app/Contents/MacOS/social-tunnel-app"
 sidecar="$app/Contents/MacOS/social-tunnel"
 label=tech.antoniofulg.social-tunnel
@@ -10,7 +10,7 @@ agent="gui/$(id -u)/$label"
 plist="$HOME/Library/LaunchAgents/$label.plist"
 login_plist="$HOME/Library/LaunchAgents/$label.tray.plist"
 here=$(cd "$(dirname "$0")" && pwd)
-built="$here/../src-tauri/target/release/bundle/macos/social-tunnel.app"
+built="$here/../src-tauri/target/release/bundle/macos/Social Tunnel.app"
 
 fail() { printf 'FAIL [tray-app %s] %s\n' "$1" "$2" >&2; exit 1; }
 agent_pid() { /bin/launchctl print "$agent" 2>/dev/null | awk '$1 == "pid" && $2 == "=" { print $3 }'; }
@@ -21,8 +21,16 @@ app_pid() {
   }'
 }
 runs() {
+  # Use the executable column to find packaged sidecars before inspecting argv:
+  # their absolute paths can contain spaces and need not be the installed path.
+  /bin/ps -axo pid=,comm= | awk '/[[:space:]\/]social-tunnel$/ {print $1}' |
+    while IFS= read -r pid; do
+      cmd=$(/bin/ps -p "$pid" -o command=) || continue
+      case "$cmd" in
+        "social-tunnel run"|"social-tunnel run "*|*/"social-tunnel run"|*/"social-tunnel run "*) printf '%s\n' "$pid" ;;
+      esac
+    done
   /bin/ps -axo pid=,command= | awk '
-    $2 ~ /(^|\/)social-tunnel$/ && $3 == "run" { print $1 }
     $2 ~ /(^|\/)bun$/ {
       for (i = 3; i < NF; i++) if ($i ~ /(^|\/)cli[.]ts$/ && $(i+1) == "run") { print $1; break }
     }'
@@ -110,7 +118,7 @@ native() {
   case ", $items, " in *", Reconnect, "*) fail C82 "Reconnect shown for external run" ;; esac
   [ "$(state)" = "$state0" ] || fail C82 "live tunnel changed while tray ran"
   printf 'PASS [tray-app C82] menu\n'
-  ui 'click menu item "Quit social-tunnel" of menu 1 of menu bar item 1 of menu bar 2' >/dev/null ||
+  ui 'click menu item "Quit Social Tunnel" of menu 1 of menu bar item 1 of menu bar 2' >/dev/null ||
     fail C82 "could not select tray Quit"
   for _ in 1 2 3 4 5 6 7 8 9 10; do [ -z "$(app_pid)" ] && break; sleep 1; done
   [ -z "$(app_pid)" ] && [ "$(state)" = "$state0" ] || fail C82 "Quit did not preserve the external run"

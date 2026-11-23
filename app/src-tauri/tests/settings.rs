@@ -45,6 +45,7 @@ impl Windows for FakeWindows {
 fn tray_c55_config_gives_one_fixed_640_by_560_settings_window() {
     let c = settings_config();
     assert_eq!((c["width"].as_f64(), c["height"].as_f64()), (Some(640.0), Some(560.0)));
+    assert_eq!(c["title"], "Social Tunnel");
     assert_eq!(c["resizable"], Value::Bool(false));
     assert_eq!(c["create"], Value::Bool(false), "the app builds it on demand, once");
     let windows = conf()["app"]["windows"].as_array().unwrap().len();

@@ -274,6 +274,8 @@ bun run typecheck
 
 Tests need no internet and no `sshd`: they run an in-process SSH server and inject DNS and network fakes. Contributor and agent rules are in [AGENTS.md](AGENTS.md); the feature specs, checks and verification records are under [.specs/](.specs/).
 
+On macOS, `tauri build --bundles app` from `app/` builds `Social Tunnel.app`; `app/scripts/install-local.sh` installs it to `~/Applications/Social Tunnel.app`. When upgrading a local `social-tunnel.app` build, disable its tray **Open at Login** if enabled, quit the tray, then move the old bundle out of `~/Applications` before installing. Do not remove or disable the separate tunnel LaunchAgent.
+
 ## License
 
 TBD (MIT suggested).

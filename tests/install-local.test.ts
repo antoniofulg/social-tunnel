@@ -21,7 +21,7 @@ function files(dir: string): Record<string, string> {
 
 function fixture() {
   const root = mkdtempSync(join(tmpdir(), "install-local-"));
-  const bundle = join(root, "build", "social-tunnel.app");
+  const bundle = join(root, "build", "Social Tunnel.app");
   mkdirSync(join(bundle, "Contents", "MacOS"), { recursive: true });
   writeFileSync(join(bundle, "Contents", "Info.plist"), "<plist>new</plist>");
   for (const name of ["social-tunnel-app", "social-tunnel"]) {
@@ -30,7 +30,7 @@ function fixture() {
     chmodSync(path, 0o755);
   }
   const home = join(root, "home");
-  const dest = join(home, "Applications", "social-tunnel.app");
+  const dest = join(home, "Applications", "Social Tunnel.app");
   mkdirSync(join(dest, "Contents", "MacOS"), { recursive: true });
   writeFileSync(join(dest, "Contents", "Info.plist"), "<plist>old</plist>");
   writeFileSync(join(dest, "Contents", "old-only.txt"), "stale");
@@ -79,7 +79,7 @@ test("[tray-app C81] refuses the live executable by identity through absolute, r
         await waitReady(proc.stdout);
         const result = install(home, bundle);
         expect(result.exitCode).toBe(1);
-        expect(result.stdout.toString()).toBe("Quit social-tunnel first.\n");
+        expect(result.stdout.toString()).toBe("Quit Social Tunnel first.\n");
         expect(files(dest)).toEqual(before);
       } finally {
         proc.stdin.end();
@@ -105,7 +105,7 @@ test("[tray-app C80] a concurrent installer cannot stage or replace until the de
     const blocked = install(home, bundle);
     expect(blocked.exitCode).toBe(1);
     expect(blocked.stderr.toString()).toContain("Another install is in progress");
-    expect(readdirSync(apps)).toEqual(["social-tunnel.app"]);
+    expect(readdirSync(apps)).toEqual(["Social Tunnel.app"]);
     expect(files(dest)).toEqual(before);
     holder.stdin.write("release\n");
     expect(await holder.exited).toBe(0);

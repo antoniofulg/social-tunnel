@@ -36,7 +36,7 @@ impl MacLogin {
     pub fn new(home: Option<&Path>, executable: &Path) -> Self {
         let program = (|| {
             let installed = home?.canonicalize().ok()?
-                .join("Applications/social-tunnel.app/Contents/MacOS/social-tunnel-app");
+                .join("Applications/Social Tunnel.app/Contents/MacOS/social-tunnel-app");
             let canonical = executable.canonicalize().ok()?;
             if canonical != installed {
                 return None;

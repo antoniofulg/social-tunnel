@@ -29,7 +29,7 @@ fix text. It adds no tunnel, proxy, config-parsing or check logic.
 3. `model` -> `tray` (new, no door - placement per conventions) - sets the template image or frame loop, rebuilds the native menu only when the model changed, emits the `snapshot` event (door 5)
 4. menu action -> `supervisor` (new, no door - placement per conventions) - spawns, restarts or stops the `run --json` child and runs `doctor --json` single-flight through `sidecar` (door 5); clipboard through `tauri-plugin-clipboard-manager` and login item through `tauri-plugin-autostart` (doors 7, 8)
 5. Settings window, React in `app/src` (new, door 8) - calls `get_snapshot`, `run_check`, `copy_fix`, `set_open_at_login` (door 5), draws the route strip and four tabs over OS vibrancy (door 9)
-6. out: menu bar mark and native menu; `social-tunnel.app` (doors 3, 4) copied to `~/Applications` by `app/scripts/install-local.sh` (new, no door - placement per conventions)
+6. out: menu bar mark and native menu; `Social Tunnel.app` (doors 3, 4, 17) copied to `~/Applications` by `app/scripts/install-local.sh` (new, no door - placement per conventions)
 
 ## Impact
 
@@ -64,8 +64,8 @@ changes and live in `Surface` and `Landing`.
 | IPC event `snapshot` | - | `Snapshot` | emitted when the snapshot changes |
 | IPC event `settings-view` (added in S2/S3 build) | - | `"status"`, `"server"` or `"setup"` | emitted to an open Settings window when Settings…, Review Server Key… or Set Up… asks for a view; a new window reads the same name from its URL fragment (`index.html#server`) |
 | `Snapshot.checking` (added in S2/S3 build) | - | `true` while a doctor run is in flight | drives `Checking…` in Settings (AC 61) |
-| `tauri build --bundles app` | `app/` | `social-tunnel.app` | exit 0 bundle written |
-| `app/scripts/install-local.sh` | built bundle | `~/Applications/social-tunnel.app` | exit 0 copied, exit 1 `Quit social-tunnel first.` |
+| `tauri build --bundles app` | `app/` | `Social Tunnel.app` | exit 0 bundle written |
+| `app/scripts/install-local.sh` | built bundle | `~/Applications/Social Tunnel.app` | exit 0 copied, exit 1 `Quit Social Tunnel first.` |
 
 ## Landing
 
@@ -87,6 +87,7 @@ changes and live in `Surface` and `Landing`.
 | 14. Login item label and test backend (added in S4 build) | `tauri_plugin_autostart::Builder::new().app_name("tech.antoniofulg.social-tunnel.tray").macos_launcher(LaunchAgent)`: plist `~/Library/LaunchAgents/tech.antoniofulg.social-tunnel.tray.plist`, `Label` the same; dev dependencies `auto-launch` 0.6 (the plugin's backend) and `sha2` for the C79 test; `LSUIElement` from `app/src-tauri/Info.plist` merged by `tauri build` | Default app name `social-tunnel` (productName): a label one rename away from the user's `tech.antoniofulg.social-tunnel`, and changing it later orphans the login item |
 | 15. Explicit macOS login program (S4 remediation) | Use the pinned `auto-launch` LaunchAgent backend directly on macOS and pass it the same validated canonical installed executable used for the enable decision. The tray label and isolated test policy in Landing 14 remain unchanged. | The Tauri wrapper's cached path is private and can disagree with a path resolved at toggle time after a launcher alias changes. |
 | 16. Settings default height (user follow-up) | Keep width 640 pt and raise the fixed height from 520 to 560 pt so healthy Status fits without scrolling; retain overflow for longer content. | Removing scroll or shrinking rows would hide longer diagnostics or reduce readability. |
+| 17. Branded macOS bundle | `productName` and Settings title `Social Tunnel`; bundle file `Social Tunnel.app`; Quit label `Quit Social Tunnel`; preserve bundle ID, CLI and LaunchAgent labels | Display metadata only: Finder still shows the physical `social-tunnel.app` name. |
 
 - Nothing else in this change is hard to reverse
 
@@ -115,7 +116,7 @@ Launch the app: one menu bar icon, no Dock icon, and a native menu whose title a
 11. WHEN the app starts on macOS THEN it SHALL set `ActivationPolicy::Accessory` and create exactly one tray icon
 12. WHILE the app runs it SHALL call `status --json` every 2 s with at most one call in flight, skipping a tick that finds the previous call still running
 13. IF a `status` call runs past 10 s, prints stdout that is not one JSON object or exceeds 1 MiB, or gives a result that criterion 90 rejects THEN the app SHALL kill the call if it still runs and show Disconnected with the row `Can't read the tunnel status.`
-14. WHEN status exits 2 with `config_invalid` and no file exists at its `configPath` THEN the tray SHALL show the not-set-up mark and the menu SHALL hold exactly `Not set up`, `Nothing is routed yet.`, a separator, `Set Up…`, a separator and `Quit social-tunnel` (⌘Q)
+14. WHEN status exits 2 with `config_invalid` and no file exists at its `configPath` THEN the tray SHALL show the not-set-up mark and the menu SHALL hold exactly `Not set up`, `Nothing is routed yet.`, a separator, `Set Up…`, a separator and `Quit Social Tunnel` (⌘Q)
 15. WHEN status exits 2 with `config_invalid` and a file exists at its `configPath` THEN the tray SHALL show the disconnected mark with the title `Disconnected`
 16. WHEN status exits 0 with `state` `connected` THEN the tray SHALL show the connected mark and the menu SHALL show `Connected`, a separator, the label `Through home` and one row per `allowlist` entry in order, at most 10, followed by the row `<n> more in Settings` when more remain
 17. WHILE status reports `connecting`, `reconnecting`, or `disconnected` with reason `connection_lost`, for less than 60 s since the app last saw `connected` or first saw this run not connected, the tray SHALL show the reconnecting mark with the title `Reconnecting…` and the row `Next try in <n> s.` (n = ceil((retryAt - now) / 1 s)), or `Trying now.` when `retryAt` is null or past
@@ -130,7 +131,7 @@ Launch the app: one menu bar icon, no Dock icon, and a native menu whose title a
 26. The app SHALL pass `--domain` in no v0.2 sidecar call, so no doctor result it holds exits 12
 27. WHILE the tray shows Disconnected, the menu SHALL show the two short rows of the current doctor result's first failing hop from the hop-and-exit map in uiux.md, and SHALL show no hop rows when no doctor result is current or the current one has no failing hop
 28. WHILE the tray shows Reconnecting, Disconnected or Blocked, the menu SHALL show `<n> domains paused. Nothing goes direct.` (`1 domain paused. Nothing goes direct.` when n is 1), n being `domains` from the latest readable status, and SHALL omit the row when no status was ever readable; WHILE it shows Connected or Not set up the menu SHALL omit that row
-29. The menu SHALL end, in every state except Not set up, with in order: the state's action row if any, `Run Check`, `Reconnect` unless the run is external (criterion 36), `Settings…` (⌘,), `Open at Login` with a checkmark when on, a separator and `Quit social-tunnel` (⌘Q)
+29. The menu SHALL end, in every state except Not set up, with in order: the state's action row if any, `Run Check`, `Reconnect` unless the run is external (criterion 36), `Settings…` (⌘,), `Open at Login` with a checkmark when on, a separator and `Quit Social Tunnel` (⌘Q)
 30. IF a menu row built from CLI text is longer than 60 characters THEN the app SHALL cut it to 59 characters plus `…`
 31. The app SHALL ship one template image per tray state (not set up, connected, disconnected, blocked, and reconnecting as 8 frames) at 18×18 and 36×36 px, drawn from concept C's marks, with every pixel's RGB at 0, and SHALL set each as a template image
 32. WHILE the tray shows Reconnecting and Reduce Motion is off, the app SHALL cycle the 8 reconnecting frames at 150 ms each
@@ -214,21 +215,21 @@ then open Settings in `tauri dev` and walk the four tabs with the keyboard.
 
 ### S4: A bundled app that opens at login (P2)
 
-`social-tunnel.app` builds, installs to `~/Applications`, opens at login on request, and on this Mac
+`Social Tunnel.app` builds, installs to `~/Applications`, opens at login on request, and on this Mac
 shows the live LaunchAgent tunnel without touching it.
 
 **Acceptance Criteria**
 
-75. WHEN `tauri build --bundles app` runs THEN it SHALL produce `social-tunnel.app` holding `Contents/MacOS/social-tunnel-app` and the sidecar `Contents/MacOS/social-tunnel`
+75. WHEN `tauri build --bundles app` runs THEN it SHALL produce `Social Tunnel.app` holding `Contents/MacOS/social-tunnel-app` and the sidecar `Contents/MacOS/social-tunnel`
 76. The bundle's Info.plist SHALL set `CFBundleIdentifier` to `tech.antoniofulg.social-tunnel.tray` and `LSUIElement` to true
 77. The bundle SHALL carry `Contents/Resources/icon.icns` generated from concept A's arch
 78. WHEN Open at Login is switched on THEN the app SHALL register a login LaunchAgent through `tauri-plugin-autostart` whose label is not `tech.antoniofulg.social-tunnel` and whose program is the installed app, WHEN switched off SHALL remove it, and the checkmark SHALL show the state read back after the call
 79. WHEN Open at Login is switched on or off THEN `~/Library/LaunchAgents/tech.antoniofulg.social-tunnel.plist` SHALL stay byte-identical
-80. WHEN `app/scripts/install-local.sh` runs THEN it SHALL copy the built bundle to `~/Applications/social-tunnel.app`, replacing an older copy
-81. IF the installed app is running when `install-local.sh` runs THEN the script SHALL exit 1 with `Quit social-tunnel first.` and copy nothing
+80. WHEN `app/scripts/install-local.sh` runs THEN it SHALL copy the built bundle to `~/Applications/Social Tunnel.app`, replacing an older copy
+81. IF the installed app is running when `install-local.sh` runs THEN the script SHALL exit 1 with `Quit Social Tunnel first.` and copy nothing
 82. WHEN the installed app opens on this Mac while the LaunchAgent's `run` is live THEN the menu bar SHALL show the connected mark, the menu SHALL show `Connected` and `Managed outside the app (pid <pid>).`, and after Quit the LaunchAgent run SHALL keep the same pid
 
-**Independent test:** build, run `install-local.sh`, open `~/Applications/social-tunnel.app`, read the menu,
+**Independent test:** build, run `install-local.sh`, open `~/Applications/Social Tunnel.app`, read the menu,
 toggle Open at Login twice, quit, and compare the LaunchAgent pid and plist hash before and after.
 
 ## Traceability
@@ -335,3 +336,4 @@ toggle Open at Login twice, quit, and compare the LaunchAgent pid and plist hash
 - User-approved S4 changes: “APprove both” in the OMP coordinator chat approved (1) replacing the macOS autostart wrapper with its same LaunchAgent backend using an explicit installed program, and (2) native tray/Settings proof using an isolated local fixture. This supersedes the wrapper requirement in AC 78 on macOS, not the label, installed path, read-back or plist isolation requirements. Isolated proof is not the original live LaunchAgent smoke under AC 82. No live Open at Login toggle, second tunnel, VPS interaction or changes to the existing tunnel are authorized.
 - User-approved Settings follow-up: increase the default height just enough for the normal Status view to fit without scrolling. Keep other layout, translucent material, and diagnostic overflow unchanged; no separate pacing fix requested.
 - User-approved scrolling follow-up: suppress scroll chaining and elastic bounce in Settings, not access to overflow. Keep the fixed height, normal scrolling when content exceeds the viewport, and existing login and domain behavior.
+- User-approved branding follow-up: name the macOS app and its window `Social Tunnel` in the build, keeping the `social-tunnel` CLI and existing tunnel unchanged. Domain editing remains out of scope.

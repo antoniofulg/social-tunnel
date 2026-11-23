@@ -183,7 +183,7 @@ pub fn not_set_up_menu() -> Vec<Entry> {
         Entry::Separator,
         action("set_up", "Set Up…", true, None),
         Entry::Separator,
-        action("quit", "Quit social-tunnel", true, Some("CmdOrCtrl+Q")),
+        action("quit", "Quit Social Tunnel", true, Some("CmdOrCtrl+Q")),
     ]
 }
 
@@ -293,6 +293,6 @@ pub fn view(tracker: &Tracker, i: &Inputs) -> TrayModel {
     menu.push(action("settings", "Settings…", true, Some("CmdOrCtrl+,")));
     menu.push(Entry::Check { id: "open_at_login".into(), text: "Open at Login".into(), checked: i.open_at_login });
     menu.push(Entry::Separator);
-    menu.push(action("quit", "Quit social-tunnel", true, Some("CmdOrCtrl+Q")));
+    menu.push(action("quit", "Quit Social Tunnel", true, Some("CmdOrCtrl+Q")));
     TrayModel { image, title: title.into(), menu }
 }

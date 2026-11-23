@@ -26,7 +26,7 @@
 | Settings tabs | `Domains`, `Server`, `Logs`; Start at login in footer | `Status`, `Server`, `Domains`, `General`; Open at login in General | decided Settings scope | route strip on top unchanged; AC 57 |
 | Settings Domains body | add field and removable chips | read-only list with count | editing out of scope | AC 66 |
 | Route summary line | `All checks OK. Home IP …` | `All checks OK.` | no home IP | position and `Check Again` kept |
-| Window chrome | mock traffic lights | real macOS title bar | OS | title `social-tunnel` |
+| Window chrome | mock traffic lights | real macOS title bar | OS | title `Social Tunnel` |
 | Setup | three-step assistant | read-only Set Up view with README steps | setup assistant out of scope | AC 68 |
 | `Check Again` placement (resolved in S3 build, coordinator decision 2026-11-22) | B places it beside the route summary | one `Check Again` at the end of the Status tab, right-aligned | Composition above; one button per C61 | AC 61 |
 | Settings height | 520 pt | 560 pt; 640 pt width unchanged | user follow-up: fit normal Status without scrolling | retain spacing, material and overflow for long fixes |
@@ -82,9 +82,9 @@ Menu (native), per state; `<…>` comes from the CLI:
 
 | State | Rows, in order |
 | --- | --- |
-| Not set up | `Not set up` · `Nothing is routed yet.` · — · `Set Up…` · — · `Quit social-tunnel` ⌘Q |
-| Connected | `Connected` · [`Managed outside the app (pid <pid>).`] · — · `Through home` · `<domain>` (at most 10) · [`<n> more in Settings`] · — · `Run Check` · [`Reconnect`] · `Settings…` ⌘, · `Open at Login` · — · `Quit social-tunnel` ⌘Q |
-| Reconnecting | `Reconnecting…` · `Next try in <n> s.` or `Trying now.` · [managed row] · `<n> domains paused. Nothing goes direct.` · — · `Run Check` · [`Reconnect`] · `Settings…` · `Open at Login` · — · `Quit social-tunnel` |
+| Not set up | `Not set up` · `Nothing is routed yet.` · — · `Set Up…` · — · `Quit Social Tunnel` ⌘Q |
+| Connected | `Connected` · [`Managed outside the app (pid <pid>).`] · — · `Through home` · `<domain>` (at most 10) · [`<n> more in Settings`] · — · `Run Check` · [`Reconnect`] · `Settings…` ⌘, · `Open at Login` · — · `Quit Social Tunnel` ⌘Q |
+| Reconnecting | `Reconnecting…` · `Next try in <n> s.` or `Trying now.` · [managed row] · `<n> domains paused. Nothing goes direct.` · — · `Run Check` · [`Reconnect`] · `Settings…` · `Open at Login` · — · `Quit Social Tunnel` |
 | Disconnected | `Disconnected` · [two hop rows] · [`The tunnel stopped reporting.` / `The running tunnel uses an older config.` / `Can't read the tunnel status.`] · [managed row] · paused row · — · `Run Check` · [`Reconnect`] · `Settings…` · `Open at Login` · — · Quit |
 | Blocked, port | `Blocked at the server` · `Tunnel port: the server refused port <remotePort>` · `Fix: free port <remotePort>, allow it for the key` · paused row · — · `Copy Fix` · `Run Check` · … |
 | Blocked, key | `Server key changed` · `Server: host key does not match the saved one` · `Fix: do not connect until you know why` · paused row · — · `Review Server Key…` · `Run Check` · … |
@@ -113,7 +113,7 @@ Short hop rows, 11 hop-and-exit pairs. Under Disconnected (AC 27) only the 7 pai
 | `egress`, 10 | `This Mac: no internet connection to <domain>` | `Fix: check this Mac's internet and DNS` |
 | `domain`, 12 | `Domains: the host is not on the list` | `Fix: add it only if it should use home` |
 
-Settings: window title `social-tunnel`; stops `This Mac`, `Server`, `Tunnel port`, `Domains`; tabs
+Settings: window title `Social Tunnel`; stops `This Mac`, `Server`, `Tunnel port`, `Domains`; tabs
 `Status`, `Server`, `Domains`, `General`; hop names `Config file`, `Domain`, `Tunnel key`,
 `Server reachable`, `SSH sign-in`, `Tunnel port`, `Lock-down`, `Internet from this Mac`; words `OK`,
 `Failed`, `Skipped`, `Refused`, `Key changed`, `Not checked`, `Checking…`; buttons `Check Again`,

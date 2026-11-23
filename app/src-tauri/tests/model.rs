@@ -66,7 +66,7 @@ fn tray_c14_missing_config_is_not_set_up_with_six_entries() {
             Entry::Separator,
             Entry::Action { id: "set_up".into(), text: "Set Up…".into(), enabled: true, accelerator: None },
             Entry::Separator,
-            Entry::Action { id: "quit".into(), text: "Quit social-tunnel".into(), enabled: true, accelerator: Some("CmdOrCtrl+Q".into()) },
+            Entry::Action { id: "quit".into(), text: "Quit Social Tunnel".into(), enabled: true, accelerator: Some("CmdOrCtrl+Q".into()) },
         ]
     );
 }
@@ -336,7 +336,7 @@ fn tray_c29_every_layout_ends_with_the_trailing_rows() {
             expected.push(Entry::Action { id: "settings".into(), text: "Settings…".into(), enabled: true, accelerator: Some("CmdOrCtrl+,".into()) });
             expected.push(Entry::Check { id: "open_at_login".into(), text: "Open at Login".into(), checked: true });
             expected.push(Entry::Separator);
-            expected.push(Entry::Action { id: "quit".into(), text: "Quit social-tunnel".into(), enabled: true, accelerator: Some("CmdOrCtrl+Q".into()) });
+            expected.push(Entry::Action { id: "quit".into(), text: "Quit Social Tunnel".into(), enabled: true, accelerator: Some("CmdOrCtrl+Q".into()) });
             let tail = &m.menu[m.menu.len() - expected.len()..];
             assert_eq!(tail, &expected[..], "{title} external={external}");
             assert_eq!(m.menu[m.menu.len() - expected.len() - 1], Entry::Separator, "{title}");

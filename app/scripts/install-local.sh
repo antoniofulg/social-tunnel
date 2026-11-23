@@ -1,11 +1,11 @@
 #!/bin/sh
-# Copies the built social-tunnel.app to ~/Applications, replacing an older copy (plan criteria 80, 81).
+# Copies the built Social Tunnel.app to ~/Applications, replacing an older copy (criteria 80, 81).
 # SOCIAL_TUNNEL_BUNDLE overrides the bundle to copy (tests).
 set -eu
 here=$(cd "$(dirname "$0")" && pwd)
-src=${SOCIAL_TUNNEL_BUNDLE:-$here/../src-tauri/target/release/bundle/macos/social-tunnel.app}
+src=${SOCIAL_TUNNEL_BUNDLE:-$here/../src-tauri/target/release/bundle/macos/Social Tunnel.app}
 apps=$HOME/Applications
-name=social-tunnel.app
+name='Social Tunnel.app'
 
 if [ ! -x "$src/Contents/MacOS/social-tunnel-app" ] || [ ! -x "$src/Contents/MacOS/social-tunnel" ]; then
   echo "No built bundle at $src. Run: cd app && bunx tauri build --bundles app" >&2
@@ -32,7 +32,7 @@ check_destination() {
   [ -e "$exe" ] || return 0
   # lsof resolves a named file by device/inode; txt selects mapped program text, not argv.
   if result=$(/usr/sbin/lsof +w -nP -a -d txt -Fp -- "$exe" 2>&1); then
-    echo "Quit social-tunnel first."
+    echo "Quit Social Tunnel first."
     exit 1
   else
     status=$?
