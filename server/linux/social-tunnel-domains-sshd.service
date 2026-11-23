@@ -1,0 +1,17 @@
+[Unit]
+Description=Dedicated social-tunnel OpenSSH authorization and forward
+After=network.target
+
+[Service]
+Type=simple
+User=root
+Group=root
+ExecStartPre=/usr/sbin/sshd -t -f /etc/social-tunnel-domains/sshd.conf
+ExecStart=/usr/sbin/sshd -D -f /etc/social-tunnel-domains/sshd.conf
+NoNewPrivileges=yes
+KillMode=control-group
+TimeoutStopSec=8
+Restart=no
+
+[Install]
+WantedBy=multi-user.target

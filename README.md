@@ -278,6 +278,8 @@ Tests need no internet and no `sshd`: they run an in-process SSH server and inje
 
 The managed-domain Chrome proof uses a disposable, network-isolated Linux fixture with a real SSH reverse forward. Managed enrollment requires a protected supervisor to own the regular Chrome profile and private CDP pipe, verify exclusive policy and forward ownership, and give only that profile the resolver rule `MAP *.pac.invalid 127.0.0.1`. The supervisor runs a root-owned, non-setuid helper compiled from `server/domain-direct-witness.ts` at `/usr/local/bin/st-domains-direct-witness` under a dedicated unprivileged UID/GID. The helper binds a fresh IPv4 loopback port per challenge and accepts only the exact one-use synthetic origin request. Missing ownership, mapping or direct evidence leaves activation unknown. This is an enrollment prerequisite, not a live setup procedure.
 
+The [protected Linux package](server/linux/README.md) documents the dedicated supervisor and root-local provisioning boundary, including the required host IPv4/IPv6 bind guard. The disposable startup rejection proof does not qualify a Linux host for use.
+
 On macOS, `tauri build --bundles app` from `app/` builds `Social Tunnel.app`; `app/scripts/install-local.sh` installs it to `~/Applications/Social Tunnel.app`. When upgrading a local `social-tunnel.app` build, disable its tray **Open at Login** if enabled, quit the tray, then move the old bundle out of `~/Applications` before installing. Do not remove or disable the separate tunnel LaunchAgent.
 
 ## License

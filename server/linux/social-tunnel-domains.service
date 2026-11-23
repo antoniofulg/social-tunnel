@@ -1,0 +1,27 @@
+[Unit]
+Description=Protected social-tunnel managed domains supervisor
+After=network.target social-tunnel-domains-sshd.service
+Requires=social-tunnel-domains-sshd.service
+
+[Service]
+Type=simple
+User=root
+Group=root
+UMask=0077
+ExecStart=/usr/local/bin/st-domains-supervisor serve
+NoNewPrivileges=yes
+CapabilityBoundingSet=CAP_SETUID CAP_SETGID CAP_KILL CAP_CHOWN CAP_DAC_OVERRIDE
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK
+ReadWritePaths=/var/lib/social-tunnel-domains /run/social-tunnel-domains /etc/opt/chrome/policies
+KillMode=mixed
+TimeoutStopSec=16
+
+[Install]
+WantedBy=multi-user.target
