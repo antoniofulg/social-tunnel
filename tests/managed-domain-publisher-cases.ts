@@ -40,6 +40,7 @@ function value<T>(result: PublisherResult<T>): T {
 function fixture(
   domains = ["amazonaws.com", "mozilla.org", "wikipedia.org"],
   currentIdleReservation?: PublisherOptions<object>["currentIdleReservation"],
+  currentPreparedIdleReservation?: PublisherOptions<object>["currentPreparedIdleReservation"],
 ) {
   const root = tmp();
   const journalDir = join(root, "journal");
@@ -62,7 +63,7 @@ function fixture(
   const admin = session({ role: "local_admin" });
   const sink = fileDomainPolicySink(policyDir, journalDir);
   const options = { enrollment: ENROLLMENT, journalDir, proxyPort: PORT, policy: sink,
-    identify: (ticket: object) => identities.get(ticket) ?? null, currentIdleReservation };
+    identify: (ticket: object) => identities.get(ticket) ?? null, currentIdleReservation, currentPreparedIdleReservation };
   provisionDomainPublisher(options, { epoch: EPOCH, revision: INIT, domains, proxyGeneration: "proxy-1" });
   const open = (policy: DomainPolicySink = sink, identify = options.identify) => {
     const p = openDomainPublisher({ ...options, policy, identify });
@@ -81,6 +82,7 @@ function openLocalAuthority(f: ReturnType<typeof fixture>, policy = f.sink) {
     enrollment: ENROLLMENT, journalDir: f.journalDir, proxyPort: PORT, policy,
     forward: { epoch: EPOCH, generation: "proxy-1" },
     currentIdleReservation: f.options.currentIdleReservation,
+    currentPreparedIdleReservation: f.options.currentPreparedIdleReservation,
     browserRoster: () => ({ version: 0, browsers }), forwardOwnership: () => null,
   });
   authority.open();
@@ -191,6 +193,71 @@ test("[domains C9] a guarded publisher grants, publishes and finalizes only unde
   held = { ...held, id: "next-lease" };
   value(p.beginActivation(f.proxy, next.operationId));
   expect(p.inspectCompletedIdleWindow(f.admin, binding)).toEqual(err("not_ready"));
+});
+
+test.each(["cancel first", "begin first"] as const)("[domains C10] exact idle cancellation serializes with begin: %s", async (first) => {
+  const holdId = "e".repeat(32);
+  const f = fixture(["wikipedia.org"], () => holdId, () => holdId);
+  const p = f.open();
+  const other = f.open();
+  const operation = value(p.propose(f.editor, "add", wire("wipo.int")));
+  const candidate = value(p.inspectIdleCandidate(f.admin));
+  const binding = { enrollment: ENROLLMENT, id: holdId, operationDigest: candidate.operationDigest };
+  const request = { op: "idle-cancel-unstarted", ...binding };
+  expect(p.cancelIdleCandidate(f.editor, binding)).toEqual(err("unauthorized"));
+  expect(p.cancelIdleCandidate(f.proxy, binding)).toEqual(err("unauthorized"));
+  expect(p.cancelIdleCandidate(f.admin, { ...binding, id: "f".repeat(32) })).toEqual(err("not_ready"));
+  expect(p.cancelIdleCandidate(f.admin, { ...binding, operationDigest: "1".repeat(64) })).toEqual(err("not_ready"));
+  expect(p.cancelIdleCandidate(f.admin, { ...binding, enrollment: "other" })).toEqual(err("not_ready"));
+  writeFileSync(f.policyPath, f.initial.trimEnd());
+  expect(p.cancelIdleCandidate(f.admin, binding)).toEqual(err("not_ready"));
+  writeFileSync(f.policyPath, f.initial);
+  const local = openLocalAuthority(f);
+  try {
+    expect(dispatchLocalIdleWindow({ ...request, roster: [] }, local)).toBeUndefined();
+    if (first === "begin first") {
+      expect(value(other.beginActivation(f.proxy, operation.operationId)).phase).toBe("activating");
+      expect(dispatchLocalIdleWindow(request, local)).toEqual(err("not_ready"));
+      expect(p.inspectCompletedIdleWindow(f.admin, binding)).toEqual(err("not_ready"));
+      expect(value(p.inspect(f.admin)).pending?.phase).toBe("activating");
+    } else {
+      expect(dispatchLocalIdleWindow(request, local)).toEqual({ ok: true, value: null });
+      const reopened = f.open();
+      expect(reopened.beginActivation(f.proxy, operation.operationId)).toEqual(err("unknown_operation"));
+      expect(other.propose(f.editor, "add", wire("wipo.int"))).toEqual(err("operation_cancelled"));
+      expect(reopened.reconcile(f.editor, operation.operationId)).toEqual(err("operation_cancelled"));
+      expect(reopened.inspectCompletedIdleWindow(f.admin, { ...binding, id: "f".repeat(32) })).toEqual(err("not_ready"));
+      expect(reopened.inspectCompletedIdleWindow(f.admin, binding)).toEqual({ ok: true, value: null });
+      expect(value(reopened.inspect(f.admin)).lastProven.domains).toEqual(["wikipedia.org"]);
+      expect(value(reopened.propose(f.editor, "add", wire("wipo.int", id(2)))).phase).toBe("claimed");
+      expect(reopened.inspectCompletedIdleWindow(f.admin, binding)).toEqual({ ok: true, value: null });
+      const next = value(reopened.inspectIdleCandidate(f.admin));
+      expect(reopened.cancelIdleCandidate(f.admin, { ...binding, id: "f".repeat(32), operationDigest: next.operationDigest })).toEqual(err("not_ready"));
+      expect(reopened.inspectCompletedIdleWindow(f.admin, binding)).toEqual({ ok: true, value: null });
+      expect(reopened.beginActivation(f.proxy, id(2))).toEqual(err("not_ready")); // Cannot reuse the completed hold.
+    }
+    expect(f.sink.read()).toBe(f.initial);
+  } finally { await local.close(); }
+});
+
+test("[domains C10] editor retry tombstones cannot consume a guarded claim's cancellation slot", () => {
+  const hold = "e".repeat(32);
+  const f = fixture(["wikipedia.org"], () => null, () => hold);
+  const p = f.open();
+  for (let n = 2; n <= 129; n++) {
+    expect(p.reconcile(f.editor, id(n))).toEqual(err("operation_cancelled"));
+  }
+  expect(p.reconcile(f.editor, id(130))).toEqual(err("limit"));
+  const operation = value(p.propose(f.editor, "add", wire("wipo.int")));
+  const candidate = value(p.inspectIdleCandidate(f.admin));
+  const binding = { enrollment: ENROLLMENT, id: hold, operationDigest: candidate.operationDigest };
+  expect(p.cancelIdleCandidate(f.admin, binding)).toEqual({ ok: true, value: null });
+  const reopened = f.open();
+  expect(reopened.inspectCompletedIdleWindow(f.admin, binding)).toEqual({ ok: true, value: null });
+  expect(reopened.beginActivation(f.proxy, operation.operationId)).toEqual(err("unknown_operation"));
+  expect(reopened.propose(f.editor, "add", wire("wipo.int"))).toEqual(err("operation_cancelled"));
+  expect(value(reopened.propose(f.editor, "add", wire("wipo.int", id(130)))).phase).toBe("claimed");
+  expect(f.sink.read()).toBe(f.initial);
 });
 
 for (const version of [2, 3]) {

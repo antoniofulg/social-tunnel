@@ -39,16 +39,17 @@ export function dispatchLocalDisable(raw: unknown, authority: Pick<Authority, "d
   }
 }
 
-// This does not grant a hold. Only the existing root-local control socket dispatches it.
+// These commands cannot grant a hold or alter the PAC. Only root-local control dispatches them.
 export function dispatchLocalIdleWindow(
   raw: unknown,
-  authority: Pick<Authority, "inspectIdleCandidateLocal" | "inspectCompletedIdleWindowLocal">,
+  authority: Pick<Authority, "inspectIdleCandidateLocal" | "inspectCompletedIdleWindowLocal" | "cancelIdleCandidateLocal">,
 ) {
   if (exact(raw, "op")?.op === "idle-candidate") return authority.inspectIdleCandidateLocal();
-  const complete = exact(raw, "op enrollment id operationDigest");
-  if (complete?.op === "idle-completed") {
-    const { enrollment, id, operationDigest } = complete;
-    return authority.inspectCompletedIdleWindowLocal({ enrollment, id, operationDigest });
+  const binding = exact(raw, "op enrollment id operationDigest");
+  if (binding?.op === "idle-completed" || binding?.op === "idle-cancel-unstarted") {
+    const { enrollment, id, operationDigest } = binding;
+    const scope = { enrollment, id, operationDigest };
+    return binding.op === "idle-completed" ? authority.inspectCompletedIdleWindowLocal(scope) : authority.cancelIdleCandidateLocal(scope);
   }
 }
 
@@ -532,7 +533,7 @@ if (import.meta.main) {
         if (op === "stage") stage(m); else await serve(m, platform);
       } else if ((op === "status" || op === "bootstrap") && !arg) await sendAdmin({ op });
       else if ((op === "disable" || op === "prepare") && arg && /^\d{1,16}$/.test(arg) && domainUInt(Number(arg))) await sendAdmin({ op, epoch: Number(arg) });
-      else if ((op === "recover" || op === "legacy-preflight") && !arg) {
+      else if ((op === "recover" || op === "legacy-preflight" || op === "idle-cancel-unstarted") && !arg) {
         let bytes = 0;
         const input: Buffer[] = [];
         for await (const chunk of process.stdin) {
@@ -544,12 +545,16 @@ if (import.meta.main) {
         catch { throw new Error(`invalid ${op} request`); }
         if (op === "legacy-preflight") {
           console.log(JSON.stringify({ ok: true, ...inspectLegacyPolicy(inputJson) }));
+        } else if (op === "idle-cancel-unstarted") {
+          const req = exact(inputJson, "enrollment id operationDigest");
+          if (!req) throw new Error("invalid idle cancellation request");
+          await sendAdmin({ ...req, op });
         } else {
           const req = exact(inputJson, "epoch operationId expectedRecovery domains releaseDirect");
           if (!req) throw new Error("invalid recovery request");
           await sendAdmin({ ...req, op });
         }
-      } else throw new Error("use legacy-preflight (domain array stdin), attest-bind <cgroup> <ipv4-tag> <ipv6-tag>, stage, serve, serve-sshd, status, bootstrap, disable <epoch>, prepare <epoch>, or recover (JSON stdin)");
+      } else throw new Error("use legacy-preflight (domain array stdin), attest-bind <cgroup> <ipv4-tag> <ipv6-tag>, stage, serve, serve-sshd, status, bootstrap, disable <epoch>, prepare <epoch>, recover (JSON stdin), or idle-cancel-unstarted (JSON stdin)");
     }
   } catch (e) { console.error(e instanceof Error ? e.message : "managed supervisor unavailable"); process.exitCode = 1; }
 }

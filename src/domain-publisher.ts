@@ -7,6 +7,8 @@ import { normalizeManagedDomain, parseManagedDomainSnapshot, type ManagedDomainS
 
 const MAX_REQUEST = 4096;
 const MAX_HISTORY = 32;
+const MAX_EDITOR_TOMBSTONES = 128;
+const MAX_GUARDED_TOMBSTONES = MAX_EDITOR_TOMBSTONES * 2; // Second half is reachable only by trusted cancellation.
 const MAX_STATE = 256 * 1024;
 const JOURNAL = "domains.sqlite";
 const utf8 = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true });
@@ -47,6 +49,9 @@ export interface PublisherOptions<Session> {
   // no longer take effect, including across disconnect, abort and restart.
   // A recovery must prove its new scope while retaining the exact predecessor's hold.
   currentIdleReservation?: (scope: Readonly<IdleReservationScope>, recoveryOf?: IdleReservationOrigin) => string | null;
+  // The exclusive durable host slot, including before Chrome readiness. A different
+  // ID may be reported only after the preceding slot has been reconciled and cleared.
+  currentPreparedIdleReservation?: (scope: Readonly<IdleReservationScope>) => string | null;
 }
 
 export interface VerifiedPublisherBaseline {
@@ -122,6 +127,7 @@ type JournalState = {
   recovery: Recovery | null;
   history: Archived[];
   lastBrowserProof?: BrowserFinalization;
+  /** Includes explicitly cancelled claims that never received an activation grant. */
   cancelledUnadmitted?: string[];
 };
 
@@ -260,7 +266,7 @@ export function provisionDomainPublisher<Session>(options: PublisherOptions<Sess
 }
 
 export function openDomainPublisher<Session>(options: PublisherOptions<Session>) {
-  const { policy, proxyPort, identify, currentIdleReservation } = options;
+  const { policy, proxyPort, identify, currentIdleReservation, currentPreparedIdleReservation } = options;
   const store = journal(options);
   let windowStart = performance.now();
   let proposals = 0;
@@ -334,21 +340,56 @@ export function openDomainPublisher<Session>(options: PublisherOptions<Session>)
     });
   }
 
-  function inspectCompletedIdleWindow(session: Session, binding: unknown): PublisherResult<null> {
+  function idleWindowBinding(state: JournalState, raw: unknown): PublisherResult<IdleWindowBinding> {
+    if (!exact(raw, 3)) return fail("invalid_request");
+    const { enrollment, id, operationDigest } = raw;
+    if (!tag(id) || typeof operationDigest !== "string" || operationDigest.length !== 64 ||
+        /[^0-9a-f]/.test(operationDigest)) return fail("invalid_request");
+    return enrollment === state.enrollment ? ok({ id, operationDigest }) : fail("not_ready");
+  }
+
+  function inspectCompletedIdleWindow(session: Session, rawBinding: unknown): PublisherResult<null> {
     return store.transact((state) => {
       const denied = authorize(state, session, "local_admin");
       if (denied) return denied;
-      if (!exact(binding, 3)) return fail("invalid_request");
-      const { enrollment, id, operationDigest } = binding;
-      if (!tag(id) || typeof operationDigest !== "string" || operationDigest.length !== 64 ||
-          /[^0-9a-f]/.test(operationDigest)) return fail("invalid_request");
-      if (enrollment !== state.enrollment) return fail("not_ready");
+      const binding = idleWindowBinding(state, rawBinding);
+      if (!binding.ok) return binding;
+      const { id, operationDigest } = binding.value;
       const completed = state.completedIdleWindow;
       if (state.version === 1 || state.recovery || (state.pending && state.pending.phase !== "claimed") ||
           completed?.id !== id || completed.operationDigest !== operationDigest) return fail("not_ready");
       const bytes = policy.read();
       return completed.policyDigest === hashBytes(bytes) && policyImage(state, bytes) === "recorded"
         ? ok(null) : fail("not_ready");
+    });
+  }
+
+  // Root-local explicit cancellation wins the same journal CAS as begin; no effect is inferred from a timeout.
+  function cancelIdleCandidate(session: Session, rawBinding: unknown): PublisherResult<null> {
+    return store.transact((state, save) => {
+      const denied = authorize(state, session, "local_admin");
+      if (denied) return denied;
+      const binding = idleWindowBinding(state, rawBinding);
+      if (!binding.ok) return binding;
+      const operation = state.pending;
+      if (state.version === 1 || state.recovery || state.idleRecoveryOrigin || state.idleReservation || !state.editingEnabled ||
+          operation?.phase !== "claimed" || operation.intent.kind === "recovery" || operation.target.policy.epoch !== state.epoch ||
+          state.completedIdleWindow?.id === binding.value.id) return fail("not_ready");
+      const preimage = activationPreimage(state, operation);
+      if (!preimage) return fail("not_ready");
+      const policyDigest = hashBytes(preimage.bytes);
+      const scope = reservationScope(state, operation, policyDigest);
+      if (idleWindowDigest(scope) !== binding.value.operationDigest ||
+          currentPreparedIdleReservation?.(scope) !== binding.value.id) return fail("not_ready");
+      const cancelled = state.cancelledUnadmitted ??= [];
+      if (cancelled.length >= MAX_GUARDED_TOMBSTONES) return fail("limit"); // Never evict a live revision's tombstone.
+      cancelled.push(operation.operationId);
+      state.history.push({ operationId: operation.operationId, revision: operation.target.policy.revision, disposition: "cancelled" });
+      if (state.history.length > MAX_HISTORY) state.history.shift();
+      state.pending = null;
+      state.completedIdleWindow = { ...binding.value, policyDigest };
+      save();
+      return ok(null);
     });
   }
 
@@ -378,7 +419,7 @@ export function openDomainPublisher<Session>(options: PublisherOptions<Session>)
       const cancelled = state.cancelledUnadmitted ??= [];
       if (cancelled.includes(id)) return fail("operation_cancelled");
       // Never evict a tombstone while its revision can still admit proposals.
-      if (cancelled.length >= 128) return fail("limit");
+      if (cancelled.length >= MAX_EDITOR_TOMBSTONES) return fail("limit");
       cancelled.push(id);
       save();
       return fail("operation_cancelled");
@@ -405,6 +446,7 @@ export function openDomainPublisher<Session>(options: PublisherOptions<Session>)
         return pending.operationId === proposal.operationId && pending.intent.kind === kind && pending.intent.proposal.host === proposal.host
           ? ok(pending) : fail("conflict");
       }
+      if (state.version !== 1 && (state.cancelledUnadmitted?.length ?? 0) >= MAX_GUARDED_TOMBSTONES) return fail("limit");
       if (proposal.expectedRevision !== state.lastProven.policy.revision || state.allocatedRevision === Number.MAX_SAFE_INTEGER) return fail("conflict");
       const before = state.lastProven.domains;
       const present = before.includes(proposal.host);
@@ -645,6 +687,6 @@ export function openDomainPublisher<Session>(options: PublisherOptions<Session>)
     });
   }
 
-  return { inspect, inspectPolicy, inspectIdleCandidate, inspectCompletedIdleWindow, propose, reconcile, beginActivation,
+  return { inspect, inspectPolicy, inspectIdleCandidate, inspectCompletedIdleWindow, cancelIdleCandidate, propose, reconcile, beginActivation,
     publish, finalize, disable, authorizeRecovery, close: store.close };
 }
