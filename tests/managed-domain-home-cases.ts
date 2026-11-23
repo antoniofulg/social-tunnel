@@ -395,6 +395,50 @@ test.each(["matching", "expiry", "wrong digest", "activating", "interrupted"] as
   },
 );
 
+test("[domains C12] the CLI can queue exactly the configured revision without claiming active routing", async () => {
+  const requests: ProposalBody[] = [];
+  let state = "activation_unknown";
+  let finalized = false;
+  const f = await sshFixture((_role, verb, input, ch) => {
+    if (verb === "add") {
+      const proposal = JSON.parse(input) as ProposalBody;
+      requests.push(proposal);
+      return reply(ch, ok({ operationId: proposal.operationId, revision: proposal.expectedRevision + 1, phase: "claimed" }));
+    }
+    const base = finalized ? { revision: 1, domains: [...INITIAL.domains, "wipo.int"] } : INITIAL;
+    return reply(ch, ok({ epoch: EPOCH, proxyGeneration: GEN, active: null, activeForMs: 0, lastRevision: base.revision,
+      ...(verb === "inspect" ? { queueBase: base } : {}), idleOnly: true, state, pending: null,
+      history: finalized ? [{ operationId: requests[0]!.operationId, revision: 1, disposition: "applied" }] : [] }));
+  });
+  try {
+    f.enroll();
+    expect((await runCli(f.path, ["domains", "list"])).payload).toMatchObject({
+      state: "activation_unknown", active: null, queueBase: INITIAL, pending: null,
+    });
+    const submit = (revision: string) => runCli(f.path, ["domains", "add", "wipo.int", "--expected-revision", revision]);
+    expect((await submit("1")).payload.error.code).toBe("conflict");
+    state = "ready"; // A configured base must not be presented as active status.
+    expect((await submit("0")).payload.error.code).toBe("not_ready");
+    expect(requests).toHaveLength(0);
+    state = "activation_unknown";
+    const accepted = await submit("0");
+    expect(accepted.payload).toMatchObject({ state: "pending", active: null,
+      pending: { host: "wipo.int", phase: "claimed", idleOnly: true } });
+    expect(accepted.payload.queueBase).toBeUndefined();
+    expect(requests).toEqual([{ version: 1, operationId: accepted.payload.pending.operationId, expectedRevision: 0, host: "wipo.int" }]);
+    finalized = true; // The host already released the quiet window before Retry polled.
+    const id = accepted.payload.pending.operationId as string;
+    expect((await runCli(f.path, ["domains", "retry", id])).payload).toMatchObject({
+      state: "activation_unknown", active: null, pending: null, completedOperationId: id,
+    });
+    expect((await runCli(f.path, ["domains", "list"])).payload.queueBase).toEqual({
+      revision: 1, domains: ["wikipedia.org", "wipo.int"],
+    });
+    const next = await runCli(f.path, ["domains", "add", "who.int", "--expected-revision", "1"]);
+    expect(next.payload).toMatchObject({ state: "pending", active: null, pending: { host: "who.int" } });
+  } finally { await f.close(); }
+});
+
 test("[domains C6] [domains C10] interrupted runtime neither replays a grant nor reopens its uncertain removal", async () => {
   const f = await sshFixture(() => {});
   const enrollment = f.enroll();

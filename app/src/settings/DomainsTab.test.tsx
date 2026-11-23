@@ -86,6 +86,38 @@ it("[domains C12] confirms a named removal, keeps covered routes clear, and supp
   expect(ipc.calls("edit_domain")).toEqual([{ scope: 1, operation: "remove", host: "example.com", expectedRevision: 7 }]);
 });
 
+it("[domains C12] a guarded Remove requires fresh confirmation after reconnect", async () => {
+  const queue = { ...unknown, queueBase: base };
+  const late = Promise.withResolvers<DomainView>();
+  let reads = 0;
+  const ipc = installIpc({ answers: {
+    get_domains: () => ++reads === 2 ? late.promise : queue,
+    edit_domain: () => ({ ...pending, pending: { ...pending.pending!, operation: "remove", host: "example.com",
+      pendingMayGoDirect: false, idleOnly: true } }),
+  } });
+  const current = managed(null);
+  const { rerender } = render(<DomainsTab snapshot={current} />);
+  const open = () => fireEvent.click(screen.getByRole("button", { name: "Remove example.com" }));
+  const confirmation = () => screen.getByRole("group", { name: "Remove example.com?" });
+  await screen.findByRole("list", { name: "Configured domains (not verified)" });
+  open();
+  fireEvent.click(within(confirmation()).getByRole("button", { name: "Cancel" }));
+  expect(ipc.calls("edit_domain")).toEqual([]);
+  open();
+  rerender(<DomainsTab snapshot={{ ...current, trayState: "reconnecting" }} />);
+  rerender(<DomainsTab snapshot={current} />);
+  expect(field().readOnly).toBe(true);
+  expect(screen.queryByRole("group", { name: "Remove example.com?" })).toBeNull();
+  await act(async () => late.resolve(queue));
+  await waitFor(() => expect(field().readOnly).toBe(false));
+  expect(reads).toBe(3);
+  expect(screen.queryByRole("group", { name: "Remove example.com?" })).toBeNull();
+  open();
+  fireEvent.click(within(confirmation()).getByRole("button", { name: "Remove" }));
+  await screen.findByText("Waiting for the enrolled browsers to be idle.");
+  expect(ipc.calls("edit_domain")).toEqual([{ scope: 1, operation: "remove", host: "example.com", expectedRevision: 7 }]);
+});
+
 it("[domains C12] distinguishes legacy, unknown, recovery and verified empty", async () => {
   let response: DomainView = { state: "setup_required", active: null, pending: null };
   installIpc({ answers: { get_domains: () => response } });

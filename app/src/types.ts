@@ -25,12 +25,15 @@ export interface PendingDomain {
   host: string | null;
   phase: "claimed" | "activating" | "publishing" | "published" | "unconfirmed";
   pendingMayGoDirect: boolean;
+  idleOnly?: true;
 }
 
 export interface DomainView {
   state: "setup_required" | "ready" | "pending" | "activation_unknown" | "recovery_required" | "applied";
   active: DomainRevision | null;
   pending: PendingDomain | null;
+  queueBase?: DomainRevision;
+  completedOperationId?: string;
 }
 
 export interface DomainEdit {

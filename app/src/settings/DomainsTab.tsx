@@ -33,8 +33,11 @@ function status(view: DomainView, working: "read" | "edit" | null): string {
   if (working === "edit" && !view.pending) return "Submitting the domain change…";
   if (view.state === "recovery_required") return "Domain changes are paused. The server administrator needs to reconcile the policy.";
   if (view.state === "setup_required") return "Automatic domain updates aren't set up.";
+  if (view.completedOperationId) return "The edit applied. Current routing is not confirmed.";
+  if (view.queueBase) return "Routing is not confirmed. Changes wait for the enrolled browsers to be idle.";
   if (view.state === "activation_unknown") return "Couldn't confirm the new routing.";
   if (view.state === "applied") return "Applied to new connections in the enrolled browser.";
+  if (view.pending?.idleOnly) return "Waiting for the enrolled browsers to be idle.";
   if (view.state === "pending") return "Waiting for the tunnel and enrolled browser to confirm the change.";
   return working === "read" ? "Checking domain routing…" : "Selected domains use your home internet in the enrolled browser.";
 }
@@ -57,6 +60,7 @@ export function DomainsTab({ snapshot, visible = true }: { snapshot: Snapshot | 
   const native = snapshot?.status?.managedDomains;
   const revision = native?.active?.revision;
   const nativeState = native?.state;
+  const connected = snapshot?.trayState === "connected";
   const readable = snapshot !== null && !snapshot.statusUnreadable;
   const scope = snapshot?.domainsScope ?? 0;
   const setup = nativeState === "setup_required" || (readable && snapshot?.status === null);
@@ -87,17 +91,18 @@ export function DomainsTab({ snapshot, visible = true }: { snapshot: Snapshot | 
 
   useLayoutEffect(() => {
     evidence.current++;
-    if (latestView.current?.active) {
+    if (latestView.current?.queueBase) setConfirmation(null);
+    if (latestView.current?.active || latestView.current?.queueBase) {
       publish({ ...UNKNOWN, pending: latestView.current.pending });
     }
-  }, [visible, usable, nativeState, revision, scope]);
+  }, [visible, usable, nativeState, revision, scope, connected]);
 
   // Read on entry or when native evidence changes. Hidden tabs never start a call.
   useEffect(() => {
     if (!visible || !usable) return;
     if (inFlight.current) { queuedRead.current = true; return; }
     void refresh(pendingId());
-  }, [visible, usable, nativeState, revision, scope]);
+  }, [visible, usable, nativeState, revision, scope, connected]);
 
   const current = view ?? (setup || (readable && !native) ? SETUP : UNKNOWN);
   const pending = current.pending;
@@ -123,15 +128,18 @@ export function DomainsTab({ snapshot, visible = true }: { snapshot: Snapshot | 
   useLayoutEffect(() => {
     if (verified) setLastVerified(verified);
   }, [verified]);
-  const editable = visible && verified !== null && !pending && working === null;
-  const activeConfirmation = confirmation && verified?.revision === confirmation.revision &&
-    verified.domains.includes(confirmation.host) ? confirmation : null;
-  const parent = activeConfirmation && verified?.domains.find((host) => activeConfirmation.host.endsWith(`.${host}`));
+  const queueBase = usable && connected && !recovering ? current.queueBase : undefined;
+  const editBase = verified ?? queueBase;
+  const editable = visible && !!editBase && !pending && working === null;
+  const activeConfirmation = confirmation && editBase?.revision === confirmation.revision &&
+    editBase.domains.includes(confirmation.host) ? confirmation : null;
+  const parent = activeConfirmation && editBase?.domains.find((host) => activeConfirmation.host.endsWith(`.${host}`));
   const configured = current.state === "setup_required" ? snapshot?.status?.allowlist ?? [] : [];
-  const rows = verified?.domains ?? (current.state === "setup_required" ? configured : lastVerified?.domains) ?? [];
-  const listLabel = verified ? "Domains that use home internet" : current.state === "setup_required" ? "Configured domains (not verified)" : "Last verified domains";
+  const rows = editBase?.domains ?? (current.state === "setup_required" ? configured : lastVerified?.domains) ?? [];
+  const listLabel = verified ? "Domains that use home internet" :
+    queueBase || current.state === "setup_required" ? "Configured domains (not verified)" : "Last verified domains";
   const statusView = nativeState === "recovery_required" ? { ...UNKNOWN, state: "recovery_required" as const }
-    : !verified && (current.state === "ready" || current.state === "applied") ? UNKNOWN : current;
+    : (!verified && (current.state === "ready" || current.state === "applied")) || (current.queueBase && !queueBase) ? UNKNOWN : current;
 
   function pendingId() {
     const saved = latestView.current;
@@ -148,6 +156,13 @@ export function DomainsTab({ snapshot, visible = true }: { snapshot: Snapshot | 
     try {
       const next = await (id === undefined ? getDomains(scope) : retryDomainEdit(scope, id));
       if (instance.current !== owner) return;
+      if (id !== undefined && next.completedOperationId === id && latestView.current?.pending?.operationId === id) {
+        publish({ ...UNKNOWN, completedOperationId: id });
+        setInput("");
+        setError(null);
+        queuedRead.current = activity.current.visible && activity.current.usable && !activity.current.recovering;
+        return;
+      }
       const ambiguous = next.pending ? id !== undefined && next.pending.operationId !== id :
         next.state === "activation_unknown" || next.state === "recovery_required" || (id !== undefined && next.state === "setup_required");
       const pending = ambiguous ? latestView.current?.pending ?? null : next.pending;
@@ -211,7 +226,7 @@ export function DomainsTab({ snapshot, visible = true }: { snapshot: Snapshot | 
 
   function add(event: SubmitEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (editable && verified && input && !activeConfirmation) void edit("add", input, verified.revision);
+    if (editable && editBase && input && !activeConfirmation) void edit("add", input, editBase.revision);
   }
 
   function cancelConfirmation() {
@@ -242,12 +257,12 @@ export function DomainsTab({ snapshot, visible = true }: { snapshot: Snapshot | 
           {rows.map((host, index) => (
             <li key={`${host}:${index}`} className="inline-flex min-h-7 min-w-0 max-w-full items-center gap-0.5 rounded-full bg-tile py-px pr-0.5 pl-[11px] shadow-[inset_0_0_0_.5px_var(--hairline)]">
               <code className="min-w-0 break-all font-mono text-[11.5px] select-text">{host}</code>
-              {verified && <button type="button" aria-label={`Remove ${host}`} aria-disabled={!editable || !!activeConfirmation || undefined}
+              {editBase && <button type="button" aria-label={`Remove ${host}`} aria-disabled={!editable || !!activeConfirmation || undefined}
                 onClick={(event) => {
                   if (!editable || activeConfirmation) return;
                   opener.current = event.currentTarget;
                   setError(null);
-                  setConfirmation({ host, revision: verified.revision });
+                  setConfirmation({ host, revision: editBase.revision });
                 }}
                 className="grid size-6 shrink-0 place-items-center rounded-full text-text-2 hover:bg-hover aria-disabled:cursor-default aria-disabled:text-text-3">
                 <svg viewBox="0 0 10 10" aria-hidden="true" className="size-2.5">
@@ -259,6 +274,7 @@ export function DomainsTab({ snapshot, visible = true }: { snapshot: Snapshot | 
         </ul>
       </>}
       {verified && rows.length === 0 && <p className="m-0 mb-3 text-text-2">No domains use the tunnel.</p>}
+      {queueBase && rows.length === 0 && <p className="m-0 mb-3 text-text-2">No configured domains.</p>}
       {activeConfirmation && (
         <div ref={confirmRef} role="group" aria-labelledby="domain-remove-title" onKeyDown={(event) => {
           if (event.key === "Escape") { event.stopPropagation(); cancelConfirmation(); }

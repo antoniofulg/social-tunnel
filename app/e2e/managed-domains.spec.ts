@@ -16,8 +16,9 @@ const applied: DomainView = { state: "applied", active: { revision: 8, domains: 
 const queued: DomainView = { state: "pending", active: null,
   pending: { operationId: id, operation: "add", host: "wipo.int", phase: "claimed", pendingMayGoDirect: true } };
 
-for (const scheme of ["light", "dark"] as const) {
-  test(`[domains C12] real WebKit Enter, pending and applied at 640×560 (${scheme})`, async ({ page }) => {
+for (const [scheme, busy] of [["light", false], ["dark", false], ["light", true], ["dark", true]] as const) {
+  const mode = busy ? `busy-${scheme}` : scheme;
+  test(`[domains C12] real WebKit Enter, pending and applied at 640×560 (${mode})`, async ({ page }) => {
     const dist = process.env.ST_PROOF_DIST;
     const captures = process.env.ST_PROOF_CAPTURES;
     if (!dist || !captures) throw new Error("Set disposable ST_PROOF_DIST and ST_PROOF_CAPTURES paths.");
@@ -34,8 +35,12 @@ for (const scheme of ["light", "dark"] as const) {
         return route.abort();
       });
       const snap = snapshot({ reduceTransparency: true });
-      snap.status!.managedDomains = initial;
-      await page.addInitScript(({ snap, initial, queued, applied }) => {
+      snap.status!.managedDomains = busy ? { state: "activation_unknown", active: null, pending: null } : initial;
+      const initialRead = busy ? { ...snap.status!.managedDomains, queueBase: initial.active! } : initial;
+      const pendingRead = busy ? { ...queued, pending: { ...queued.pending!, idleOnly: true } } : queued;
+      const finalRead = busy ? { ...snap.status!.managedDomains, queueBase: applied.active! } : applied;
+      const terminal = busy ? { ...snap.status!.managedDomains, completedOperationId: id } : applied;
+      await page.addInitScript(({ snap, initialRead, pendingRead, finalRead, terminal, busy, applied }) => {
         const w = window as unknown as Record<string, unknown>;
         const callbacks = new Map<number, (event: unknown) => void>();
         const subscriptions = new Map<string, number>();
@@ -45,6 +50,7 @@ for (const scheme of ["light", "dark"] as const) {
         w.__domainCalls = calls;
         w.__finishDomainFixture = () => {
           finish = true;
+          if (busy) return;
           const key = subscriptions.get("snapshot");
           if (key) callbacks.get(key)?.({ event: "snapshot", id: key,
             payload: { ...snap, status: { ...snap.status, managedDomains: { ...applied, state: "ready" } } } });
@@ -56,32 +62,44 @@ for (const scheme of ["light", "dark"] as const) {
           async invoke(cmd: string, args: { event?: string; handler?: number }) {
             calls.push([cmd, args]);
             if (cmd === "get_snapshot") return snap;
-            if (cmd === "get_domains") return finish ? applied : initial;
-            if (cmd === "edit_domain") return queued;
-            if (cmd === "retry_domain_edit") return finish ? applied : queued;
+            if (cmd === "get_domains") return finish ? finalRead : initialRead;
+            if (cmd === "edit_domain") return pendingRead;
+            if (cmd === "retry_domain_edit") return finish ? terminal : pendingRead;
             if (cmd === "plugin:event|listen") { subscriptions.set(args.event!, args.handler!); return args.handler; }
             if (cmd === "plugin:event|unlisten") return;
             throw new Error("Unexpected command in isolated Settings fixture");
           },
         };
         w.__TAURI_EVENT_PLUGIN_INTERNALS__ = { unregisterListener() {} };
-      }, { snap, initial, queued, applied });
+      }, { snap, initialRead, pendingRead, finalRead, terminal, busy, applied });
       await page.goto(`${url}#domains`);
       const field = page.getByRole("textbox", { name: "Add domain" });
       await expect(field).toBeEditable();
+      if (busy) {
+        await expect(page.getByRole("list", { name: "Configured domains (not verified)" })).toBeVisible();
+        await expect(page.getByRole("list", { name: "Domains that use home internet" })).toHaveCount(0);
+        await expect(page.getByText("Routing is not confirmed. Changes wait for the enrolled browsers to be idle.")).toBeVisible();
+        await page.screenshot({ path: join(captures, `domains-queue-${scheme}.png`) });
+      }
       await field.fill("wipo.int");
       await field.press("Enter");
       await expect(page.getByText("Until applied, this domain may still go directly from the server.")).toBeVisible();
+      if (busy) await expect(page.getByText("Waiting for the enrolled browsers to be idle.")).toBeVisible();
       await expect(page.getByRole("list", { name: "Last verified domains" }).getByText("wipo.int")).toHaveCount(0);
-      await page.screenshot({ path: join(captures, `domains-pending-${scheme}.png`) });
+      await page.screenshot({ path: join(captures, `domains-pending-${mode}.png`) });
       await page.evaluate(() => {
         const fixture = window as unknown as TestWindow;
         fixture.__finishDomainFixture();
       });
-      await expect(page.getByText("Applied to new connections in the enrolled browser.")).toBeVisible();
-      await expect(page.getByRole("list", { name: "Domains that use home internet" }).getByText("wipo.int")).toBeVisible();
+      if (busy) {
+        await expect(page.getByRole("list", { name: "Configured domains (not verified)" }).getByText("wipo.int")).toBeVisible();
+        await expect(page.getByRole("list", { name: "Domains that use home internet" })).toHaveCount(0);
+      } else {
+        await expect(page.getByText("Applied to new connections in the enrolled browser.")).toBeVisible();
+        await expect(page.getByRole("list", { name: "Domains that use home internet" }).getByText("wipo.int")).toBeVisible();
+      }
       await expect(field).toHaveValue("");
-      await page.screenshot({ path: join(captures, `domains-applied-${scheme}.png`) });
+      await page.screenshot({ path: join(captures, `domains-applied-${mode}.png`) });
       const calls = await page.evaluate(() => {
         const fixture = window as unknown as TestWindow;
         return fixture.__domainCalls;

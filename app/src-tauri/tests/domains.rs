@@ -136,6 +136,29 @@ fn domains_c12_reply_keeps_pending_and_typed_errors_and_fails_closed_on_bad_outp
 }
 
 #[test]
+fn domains_c12_queue_base_is_never_active_or_available_in_recovery() {
+    let mut configured = reply("activation_unknown", Value::Null, Value::Null);
+    configured["queueBase"] = json!({ "revision": 7, "domains": ["example.com"] });
+    let view = domains::read_reply(&out(0, &configured)).unwrap();
+    assert!(view.active.is_none());
+    assert_eq!(view.queue_base.unwrap().domains, ["example.com"]);
+    for state in ["ready", "applied", "pending", "setup_required", "recovery_required"] {
+        configured["state"] = json!(state);
+        assert_eq!(domains::read_reply(&out(0, &configured)).unwrap_err().code, ErrorCode::Unavailable);
+    }
+    configured["state"] = json!("activation_unknown");
+    configured["queueBase"]["domains"] = json!(["example.com", "example.com"]);
+    assert_eq!(domains::read_reply(&out(0, &configured)).unwrap_err().code, ErrorCode::Unavailable);
+    let mut terminal = reply("activation_unknown", Value::Null, Value::Null);
+    terminal["completedOperationId"] = json!(ID);
+    let view = domains::read_reply(&out(0, &terminal)).unwrap();
+    assert_eq!(view.completed_operation_id.as_deref(), Some(ID));
+    assert!(view.active.is_none() && view.pending.is_none() && view.queue_base.is_none());
+    terminal["completedOperationId"] = json!("unrelated");
+    assert_eq!(domains::read_reply(&out(0, &terminal)).unwrap_err().code, ErrorCode::Unavailable);
+}
+
+#[test]
 fn domains_c12_native_summary_never_uses_legacy_count_for_managed_routing() {
     let mut raw = body("connected", Value::Null);
     let mut world = World::new();

@@ -15,11 +15,14 @@ export interface DomainPending {
   host: string | null;
   phase: DomainPhase | "unconfirmed";
   pendingMayGoDirect: boolean;
+  idleOnly?: true;
 }
 export interface DomainView {
   state: "setup_required" | "ready" | "pending" | "activation_unknown" | "recovery_required" | "applied";
   active: DomainRevision | null;
   pending: DomainPending | null;
+  queueBase?: DomainRevision;
+  completedOperationId?: string;
 }
 interface ArchivedOperation { operationId: string; revision: number; disposition: "cancelled" | "recovery_required" | "applied" | "reconciled" }
 interface AuthorityView {
@@ -27,6 +30,8 @@ interface AuthorityView {
   active: ManagedDomainSnapshot | null;
   activeForMs: number;
   homeMatcher: { revision: number; domainsDigest: string; forMs: number } | null;
+  queueBase: DomainRevision | null;
+  idleOnly: boolean;
   pending: unknown;
   history: ArchivedOperation[];
 }
@@ -66,6 +71,11 @@ export function parseAuthorityView(value: unknown, enrollment: ManagedEnrollment
   const active = o.active === null ? null : parseDomainRevision(o.active);
   if (!domainUInt(o.activeForMs) || o.activeForMs > 10000 || (active !== null) !== (o.activeForMs > 0)) return null;
   if ((o.active !== null && (!active || active.revision !== o.lastRevision)) || (o.pending !== null && !pendingDomains(o.pending))) return null;
+  const idleOnly = o.idleOnly === true;
+  if (o.idleOnly !== undefined && !idleOnly) return null;
+  const queueBase = o.queueBase === undefined ? null : parseDomainRevision(o.queueBase);
+  if (o.queueBase !== undefined && (!idleOnly || !queueBase || queueBase.revision !== o.lastRevision || active || o.pending !== null ||
+      o.state !== "activation_unknown" || o.homeMatcher !== undefined)) return null;
   let homeMatcher: AuthorityView["homeMatcher"] = null;
   if (o.homeMatcher !== undefined) {
     const match = wireObject(o.homeMatcher);
@@ -80,7 +90,8 @@ export function parseAuthorityView(value: unknown, enrollment: ManagedEnrollment
         (h.disposition !== "cancelled" && h.disposition !== "recovery_required" && h.disposition !== "applied" && h.disposition !== "reconciled")) return null;
     history.push({ operationId: h.operationId, revision: h.revision, disposition: h.disposition });
   }
-  return { state: o.state, active, activeForMs: o.activeForMs, homeMatcher, pending: o.pending, history };
+  return { state: o.state, active, activeForMs: o.activeForMs, homeMatcher,
+    queueBase: queueBase && revision(queueBase), idleOnly, pending: o.pending, history };
 }
 
 const digest = (snapshot: DomainRevision) => hashBytes(JSON.stringify(snapshot.domains));

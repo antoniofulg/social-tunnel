@@ -99,10 +99,14 @@ export async function domainAction(
   }
   const authority = parseAuthorityView(read.value, enrollment);
   if (!authority) return action.kind === "list" || reconcile ? ok(unconfirmed(saved)) : fail("not_ready");
-  const pending = pendingDomains(authority.pending);
+  const describe = (pending: ReturnType<typeof pendingDomains>) =>
+    authority.idleOnly && pending?.phase === "claimed" && pending.operation !== "recovery"
+      ? { ...pending, idleOnly: true as const } : pending;
+  const pending = describe(pendingDomains(authority.pending));
   const state = authority.state;
   const active = state === "ready" || state === "pending" ? matchingActive(authority, local(), performance.now() - started) : null;
-  const view = { state: state === "ready" && !active ? "activation_unknown" as const : state, active, pending };
+  const view = { state: state === "ready" && !active ? "activation_unknown" as const : state, active, pending,
+    ...(authority.queueBase ? { queueBase: authority.queueBase } : {}) };
   if (action.kind === "list") {
     return ok(saved && pending?.operationId !== saved.proposal.operationId ? unconfirmed(saved, state === "recovery_required") : view);
   }
@@ -116,6 +120,10 @@ export async function domainAction(
     if (history?.disposition === "applied" && active?.revision === history.revision) {
       return !reconcile || clear(reconcile) ? ok({ ...view, state: "applied", pending: null }) : changed() ? conflict() : fail("unavailable");
     }
+    if (authority.idleOnly && history?.disposition === "applied") {
+      return !reconcile || clear(reconcile) ? ok({ ...UNKNOWN_DOMAINS, completedOperationId: action.id })
+        : changed() ? conflict() : fail("unavailable");
+    }
     if (reconcile) {
       if (history && active && active.revision > history.revision && clear(reconcile)) return ok(view);
       if (changed()) return conflict();
@@ -124,8 +132,9 @@ export async function domainAction(
     return history ? ok(view) : fail("unknown_operation");
   }
   if (state === "recovery_required") return fail("recovery_required");
-  if (!active) return fail("not_ready");
-  if (pending || active.revision !== expected) return fail("conflict");
+  const editBase = active ?? authority.queueBase;
+  if (!editBase) return fail("not_ready");
+  if (pending || editBase.revision !== expected) return fail("conflict");
   const operationId = `${enrollment.epoch}.${expected}.${randomBytes(16).toString("hex")}`;
   const submission: Submission = { kind: action.kind, proposal: { version: 1, operationId, expectedRevision: expected, host: host! } };
   if (changed()) return conflict();
@@ -142,5 +151,5 @@ export async function domainAction(
   const accepted = response && response.operationId === operationId && domainUInt(response.revision) && response.revision > expected &&
     pendingDomains({ ...response, operation: action.kind, host });
   // The preflight lease is not proof after another SSH call, even if it has not timed out.
-  return ok(accepted ? { state: "pending", active: null, pending: accepted } : unconfirmed(submission));
+  return ok(accepted ? { state: "pending", active: null, pending: describe(accepted) } : unconfirmed(submission));
 }

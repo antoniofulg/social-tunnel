@@ -178,7 +178,12 @@ export async function main(argv: string[], io: Io): Promise<number> {
           return result.exit;
         }
         if (args.json) print({ ok: true, command: "domains", ...result.view });
-        else io.stdout([result.view.state, ...(result.view.active?.domains ?? [])].join("\n") + "\n");
+        else {
+          const { state, active, queueBase } = result.view;
+          io.stdout([state, ...(queueBase
+            ? [`Configured revision ${queueBase.revision} (routing not confirmed)`, ...queueBase.domains]
+            : active?.domains ?? [])].join("\n") + "\n");
+        }
         return EXIT.ok;
       } finally { editor?.key.fill(0); }
     }

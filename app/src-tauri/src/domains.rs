@@ -125,6 +125,8 @@ pub struct PendingDomain {
     pub host: Option<String>,
     pub phase: DomainPhase,
     pub pending_may_go_direct: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub idle_only: Option<bool>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
@@ -133,11 +135,15 @@ pub struct DomainView {
     pub state: DomainState,
     pub active: Option<DomainRevision>,
     pub pending: Option<PendingDomain>,
+    #[serde(default, rename = "queueBase", skip_serializing_if = "Option::is_none")]
+    pub queue_base: Option<DomainRevision>,
+    #[serde(default, rename = "completedOperationId", skip_serializing_if = "Option::is_none")]
+    pub completed_operation_id: Option<String>,
 }
 
 impl DomainView {
     pub fn unknown() -> Self {
-        Self { state: DomainState::ActivationUnknown, active: None, pending: None }
+        Self { state: DomainState::ActivationUnknown, active: None, pending: None, queue_base: None, completed_operation_id: None }
     }
 }
 
@@ -223,10 +229,17 @@ pub fn read_view(raw: Value) -> Option<DomainView> {
     let o = raw.as_object()?;
     if !o.contains_key("active") || !o.contains_key("pending") { return None; }
     let view: DomainView = serde_json::from_value(raw).ok()?;
-    if view.active.as_ref().is_some_and(|active| active.revision > MAX_SAFE_REVISION || active.domains.len() > 128 ||
-        !active.domains.iter().all(|host| canonical(host)) || active.domains.windows(2).any(|d| d[0] >= d[1])) { return None; }
+    if view.active.iter().chain(view.queue_base.iter()).any(|list| list.revision > MAX_SAFE_REVISION || list.domains.len() > 128 ||
+        !list.domains.iter().all(|host| canonical(host)) || list.domains.windows(2).any(|d| d[0] >= d[1])) { return None; }
+    if view.queue_base.is_some() && (view.state != DomainState::ActivationUnknown || view.active.is_some() || view.pending.is_some()) {
+        return None;
+    }
+    if view.completed_operation_id.as_deref().is_some_and(|id| !valid_operation(id) ||
+        view.state != DomainState::ActivationUnknown || view.active.is_some() || view.pending.is_some() ||
+        view.queue_base.is_some()) { return None; }
     if let Some(pending) = &view.pending {
         if !valid_operation(&pending.operation_id) || pending.pending_may_go_direct != (pending.operation == PendingOperation::Add) ||
+            pending.idle_only.is_some_and(|idle| !idle || pending.phase != DomainPhase::Claimed || pending.operation == PendingOperation::Recovery) ||
             match pending.operation {
                 PendingOperation::Recovery => pending.host.is_some(),
                 _ => !pending.host.as_deref().is_some_and(canonical),

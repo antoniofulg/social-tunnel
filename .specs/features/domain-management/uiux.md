@@ -18,6 +18,7 @@
 | Confirm remove | Inline confirmation, text names the domain and that it may use the server's direct route. If another selected entry covers it, say it will remain routed. Cancel is non-mutating. |
 | Pending | Show requested change alongside the previously verified list and suppress conflicting actions. For adds, `Until applied, this domain may still go directly from the server.` |
 | Activation unknown / unavailable | `Couldn't confirm the new routing.` No claim of applied/rolled back. Offer `Retry` for the same operation when possible, not an implicit new edit. |
+| Guarded queue available, routing unconfirmed | Reuse the Add field, configured rows and inline Remove confirmation. Label rows `Configured domains (not verified)` and say changes wait for idle browsers. This is separate from verified routing or active counts. |
 | Recovery required | `Domain changes are paused. The server administrator needs to reconcile the policy.` Keep previous proof distinct from current routing, disable Add/Remove/Retry until the new verified baseline. |
 | Applied | Show the revised list and `Applied to new connections in the enrolled browser.` No claim about browser connections already open. |
 

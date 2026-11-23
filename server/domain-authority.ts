@@ -62,6 +62,11 @@ export function openDomainAuthority(enrollment: DomainEnrollment, now = () => pe
   };
   // A healthy installed matcher can outlive a quiet window; browser proof cannot.
   const forwardWithoutBrowser = (v: PublisherView | undefined) => guarded && !!v?.editingEnabled && !v.recovery;
+  function matcherFreshFor(v: PublisherView): number {
+    return !closing && forwardWithoutBrowser(v) && (!v.pending || v.pending.phase === "claimed") &&
+      current(v.lastProven, v.proxyGeneration) && policy.read() === renderDomainPolicy(proxyPort, v.lastProven.policy)
+      ? forward.freshFor({ epoch: v.epoch, generation: v.proxyGeneration }) : 0;
+  }
   function ready(v: PublisherView): boolean {
     const owned = observer.alive();
     if (!closing && owned && v.editingEnabled && !v.recovery && proven && observer.valid(proven.evidence) &&
@@ -70,23 +75,22 @@ export function openDomainAuthority(enrollment: DomainEnrollment, now = () => pe
     proven = undefined;
     return false;
   }
-  const wireInspect = (v: PublisherView, role: RoleIngress["identity"]["role"]) => {
+  const wireInspect = (v: PublisherView, role: RoleIngress["identity"]["role"], includeQueue = true) => {
     const scope = { epoch: v.epoch, generation: v.proxyGeneration };
     const lifetime = ready(v) && proven ? Math.floor(Math.min(proven.evidence.expiresAt - now(), forward.freshFor(scope))) : 0;
     const active = lifetime > 0 ? { revision: v.lastProven.policy.revision, domains: v.lastProven.domains } : null;
     const pending = v.pending;
-    const homeForMs = role === "proxy" && forwardWithoutBrowser(v) && (!pending || pending.phase === "claimed") &&
-      current(v.lastProven, v.proxyGeneration) && policy.read() === renderDomainPolicy(proxyPort, v.lastProven.policy)
-      ? forward.freshFor(scope) : 0;
+    const homeForMs = role === "proxy" || (includeQueue && !active && !pending) ? matcherFreshFor(v) : 0;
     return {
-      ...(homeForMs > 0 ? {
+      ...(homeForMs === 0 ? {} : role === "proxy" ? {
         homeMatcher: { revision: v.lastProven.policy.revision, domainsDigest: v.lastProven.domainsDigest, forMs: homeForMs },
-      } : {}),
+      } : { queueBase: { revision: v.lastProven.policy.revision, domains: v.lastProven.domains } }),
+      ...(guarded && role === "editor" ? { idleOnly: true } : {}),
       epoch: v.epoch, proxyGeneration: v.proxyGeneration, active,
       activeForMs: active ? lifetime : 0,
       lastRevision: v.lastProven.policy.revision,
-      state: v.recovery ? "recovery_required" : pending?.phase === "published" || !observer.alive() ? "activation_unknown"
-        : pending ? "pending" : active ? "ready" : "activation_unknown",
+      state: v.recovery ? "recovery_required" : guarded && pending?.phase === "claimed" && pending.intent.kind !== "recovery" ? "pending"
+        : pending?.phase === "published" || !observer.alive() ? "activation_unknown" : pending ? "pending" : active ? "ready" : "activation_unknown",
       pending: pending && (role === "proxy" ? proxyOperation(pending) : {
         operationId: pending.operationId, phase: pending.phase, operation: pending.intent.kind,
         host: pending.intent.kind === "recovery" ? null : pending.intent.proposal.host,
@@ -118,7 +122,7 @@ export function openDomainAuthority(enrollment: DomainEnrollment, now = () => pe
     const v = read.value;
     if (verb === "inspect") return { ok: true, value: wireInspect(v, identity.role) };
     if (verb === "add" || verb === "remove") {
-      if (!ready(v)) return v.recovery ? { ok: false, code: "recovery_required" } : unavailable;
+      if (!ready(v) && matcherFreshFor(v) === 0) return v.recovery ? { ok: false, code: "recovery_required" } : unavailable;
       const result = publisher.propose(ticket, verb, body);
       return result.ok ? { ok: true, value: { operationId: result.value.operationId, revision: result.value.target.policy.revision, phase: result.value.phase } } : result;
     }
@@ -126,7 +130,7 @@ export function openDomainAuthority(enrollment: DomainEnrollment, now = () => pe
       const input: unknown = JSON.parse(utf8.decode(body));
       if (verb === "reconcile") {
         const result = publisher.reconcile(ticket, input);
-        return result.ok ? { ok: true, value: wireInspect(v, identity.role) } : result;
+        return result.ok ? { ok: true, value: wireInspect(v, identity.role, false) } : result;
       }
       if (verb === "begin") {
         if (typeof input !== "string" || input.length > 68) return invalid;
