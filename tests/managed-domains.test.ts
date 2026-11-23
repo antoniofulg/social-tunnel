@@ -1,7 +1,9 @@
 import { expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import net from "node:net";
-import type { Duplex } from "node:stream";
+import { createRequire } from "node:module";
+import { Duplex } from "node:stream";
+import { setImmediate as nextTurn } from "node:timers/promises";
 import { loadConfig } from "../src/config";
 import { normalizeManagedDomain, parseManagedDomainSnapshot } from "../src/managed-domains";
 import { createManagedProxy } from "../src/proxy";
@@ -263,5 +265,218 @@ test("[domains C6] a timed-out managed dial remains a revocation obligation unti
     dialing.resolve(late);
     late.destroy();
     peer.destroy();
+  }
+});
+
+// Use the pinned ssh2 Channel with an in-memory protocol sink, not an SSH connection.
+type ChannelState = { id: number; state: string; window: number; packetSize: number };
+interface OfflineChannel extends Duplex {
+  incoming: ChannelState;
+  outgoing: ChannelState;
+  _waitWindow: boolean;
+  _chunk?: Buffer;
+  _chunkcb?: () => void;
+}
+
+function offlineChannel() {
+  const require = createRequire(import.meta.url);
+  const { Channel } = require("ssh2/lib/Channel.js") as { Channel: new (client: object, info: object) => OfflineChannel };
+  const { onCHANNEL_CLOSE } = require("ssh2/lib/utils.js") as {
+    onCHANNEL_CLOSE: (client: object, id: number, channel: OfflineChannel) => void;
+  };
+  let sent = "";
+  let closes = 0;
+  const client = {
+    _chanMgr: { remove() {} },
+    _protocol: {
+      channelData(_id: number, bytes: Buffer) { sent += bytes.toString(); },
+      channelClose() { closes++; },
+      channelEOF() {},
+      channelWindowAdjust() {},
+    },
+  };
+  const channel = new Channel(client, {
+    type: "forwarded-tcpip",
+    incoming: { id: 1, state: "open", window: 65536, packetSize: 32768 },
+    outgoing: { id: 2, state: "open", window: 65536, packetSize: 32768 },
+  });
+  return {
+    channel,
+    sent: () => sent,
+    closes: () => closes,
+    request: (payload = "") => channel.push(Buffer.from(`CONNECT wikipedia.org:443 HTTP/1.1\r\n\r\n${payload}`)),
+    peerCloses: () => onCHANNEL_CLOSE(client, channel.incoming.id, channel),
+    replenishWindow() {
+      channel.outgoing.window += 65536;
+      if (channel._waitWindow && channel._chunk && channel._chunkcb) {
+        channel._waitWindow = false;
+        channel._write(channel._chunk, "utf8", channel._chunkcb);
+      }
+    },
+  };
+}
+
+function heldLocalSocket() {
+  const closing = Promise.withResolvers<void>();
+  const teardown = Promise.withResolvers<void>();
+  let input = "";
+  let closed = false;
+  const socket = new Duplex({
+    read() {},
+    write(chunk, _encoding, done) {
+      input += chunk.toString();
+      done();
+    },
+    destroy(err, done) {
+      closing.resolve();
+      void teardown.promise.then(() => done(err));
+    },
+  });
+  socket.once("close", () => (closed = true));
+  return { socket, closing: closing.promise, finish: teardown.resolve, input: () => input, closed: () => closed };
+}
+
+test("[domains C6] local lifecycle ACK waits for established socket teardown but not SSH peer CLOSE", async () => {
+  const ssh = offlineChannel();
+  const remote = heldLocalSocket();
+  const proxy = createManagedProxy({
+    interfaces: () => ({}),
+    resolve: async () => [PUBLIC],
+    dial: async () => remote.socket,
+    relayCap: 1,
+  }, snapshot(0, ["wikipedia.org"]));
+  const empty = snapshot(1, []);
+  proxy.handle(ssh.channel);
+  ssh.request("before");
+  try {
+    await until(() => ssh.sent() === OK_HEAD && remote.input() === "before");
+    ssh.channel.outgoing.window = 0;
+    remote.socket.push(Buffer.from("blocked"));
+    await until(() => ssh.channel._waitWindow);
+
+    let closedAtAck: boolean | undefined;
+    const applying = proxy.activate(0, empty).then((ack) => { closedAtAck = remote.closed(); return ack; });
+    await remote.closing;
+    await nextTurn();
+    expect(closedAtAck).toBeUndefined();
+    expect(ssh.closes()).toBe(1);
+    expect(ssh.channel.outgoing.state).toBe("closing");
+    expect(await local(proxy, "wikipedia.org:443").status()).toBe("HTTP/1.1 503 Service Unavailable");
+    ssh.channel.push(Buffer.from("after"));
+    ssh.replenishWindow();
+
+    remote.finish();
+    expect(await applying).toEqual({ ok: true, snapshot: empty });
+    expect(closedAtAck).toBe(true);
+    expect(ssh.channel.incoming.state).toBe("open");
+    expect(ssh.sent()).toBe(OK_HEAD);
+    expect(remote.input()).toBe("before");
+    expect(await local(proxy, "wikipedia.org:443").status()).toBe(FORBIDDEN);
+  } finally {
+    remote.finish();
+    remote.socket.destroy();
+    ssh.peerCloses();
+  }
+});
+
+test("[domains C6] local lifecycle ACK waits for teardown of a dial that completes after revocation", async () => {
+  const ssh = offlineChannel();
+  const remote = heldLocalSocket();
+  const dialing = Promise.withResolvers<Duplex>();
+  const started = Promise.withResolvers<AbortSignal | undefined>();
+  const proxy = createManagedProxy({
+    interfaces: () => ({}),
+    resolve: async () => [PUBLIC],
+    dial: (_address, _port, signal) => { started.resolve(signal); return dialing.promise; },
+  }, snapshot(0, ["wikipedia.org"]));
+  proxy.handle(ssh.channel);
+  ssh.request("must not forward");
+  try {
+    const signal = await started.promise;
+    const empty = snapshot(1, []);
+    let closedAtAck: boolean | undefined;
+    const applying = proxy.activate(0, empty).then((ack) => { closedAtAck = remote.closed(); return ack; });
+    expect(signal?.aborted).toBe(true);
+    dialing.resolve(remote.socket);
+    await remote.closing;
+    await nextTurn();
+    expect(closedAtAck).toBeUndefined();
+    remote.finish();
+    expect(await applying).toEqual({ ok: true, snapshot: empty });
+    expect(closedAtAck).toBe(true);
+    expect(ssh.sent()).toBe("");
+    expect(remote.input()).toBe("");
+  } finally {
+    dialing.resolve(remote.socket);
+    remote.finish();
+    remote.socket.destroy();
+    ssh.peerCloses();
+  }
+});
+
+test("[domains C6] local lifecycle uses one admission budget for a slow head and detached DNS", async () => {
+  const resolving = Promise.withResolvers<string[]>();
+  let lookups = 0;
+  const proxy = createManagedProxy({
+    interfaces: () => ({}),
+    resolve: () => ++lookups === 1 ? resolving.promise : Promise.resolve([PUBLIC]),
+    dial: async () => pair()[0],
+    relayCap: 2,
+    connectTimeoutMs: 40,
+  }, snapshot(0, ["wikipedia.org"]));
+  const slow = offlineChannel();
+  proxy.handle(slow.channel);
+  slow.channel.push(Buffer.from("CONNE"));
+  try {
+    expect(await local(proxy, "wikipedia.org:443").status()).toBe("HTTP/1.1 504 Gateway Timeout");
+    expect(await local(proxy, "wikipedia.org:443").status()).toBe("HTTP/1.1 503 Service Unavailable");
+    expect(lookups).toBe(1);
+    resolving.resolve([PUBLIC]);
+    await nextTurn();
+    const admitted = local(proxy, "wikipedia.org:443");
+    try {
+      expect(await admitted.status()).toBe(OK);
+      expect(lookups).toBe(2);
+    } finally { admitted.client.destroy(); }
+  } finally {
+    resolving.resolve([]);
+    slow.peerCloses();
+  }
+});
+
+test("[domains C6] local lifecycle releases a blocked relay once when both sides close", async () => {
+  const ssh = offlineChannel();
+  const [upstream, origin] = pair();
+  let dials = 0;
+  const proxy = createManagedProxy({
+    interfaces: () => ({}),
+    resolve: async () => [PUBLIC],
+    dial: async () => ++dials === 1 ? upstream : pair()[0],
+    relayCap: 1,
+    idleTimeoutMs: 60000,
+  }, snapshot(0, ["wikipedia.org"]));
+  proxy.handle(ssh.channel);
+  ssh.request();
+  try {
+    await until(() => ssh.sent() === OK_HEAD);
+    ssh.channel.outgoing.window = 0;
+    origin.write("blocked");
+    await until(() => ssh.channel._waitWindow);
+    upstream.destroy();
+    await until(() => ssh.channel.writableEnded);
+    expect(ssh.channel.writableFinished).toBe(false);
+    ssh.peerCloses();
+    await nextTurn();
+
+    const admitted = local(proxy, "wikipedia.org:443");
+    try {
+      expect(await admitted.status()).toBe(OK);
+      expect(await local(proxy, "wikipedia.org:443").status()).toBe("HTTP/1.1 503 Service Unavailable");
+      expect(dials).toBe(2);
+    } finally { admitted.client.destroy(); }
+  } finally {
+    upstream.destroy();
+    origin.destroy();
+    ssh.peerCloses();
   }
 });

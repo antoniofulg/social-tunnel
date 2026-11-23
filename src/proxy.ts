@@ -69,9 +69,12 @@ export function createProxy(options: ProxyOptions): { handle: (stream: Duplex) =
   return { handle: channelHandler(options, (host) => isAllowed(host, options.domains)) };
 }
 
-type ManagedOptions = Omit<ProxyOptions, "domains" | "resolve"> & {
+type ManagedOptions = Omit<ProxyOptions, "domains" | "resolve" | "dial"> & {
   // Abort should cancel the query. Activation waits for the promise to settle even if it can't.
   resolve: (host: string, signal: AbortSignal) => Promise<string[]>;
+  // Rejection means the dialer has already closed any socket it opened. Returned
+  // sockets emit 'close' when local teardown finishes, not when destroy() starts.
+  dial: Dialer;
 };
 
 type ManagedFlow = { host: string; revoke: () => Promise<void> };
@@ -106,6 +109,91 @@ export function createManagedProxy(options: ManagedOptions, initial: ManagedDoma
   return { handle, activate };
 }
 
+type ForwardedChannel = Duplex & { incoming?: { state: string }; close?: () => void };
+
+function destroyLocal(stream: Duplex): Promise<void> | undefined {
+  if (stream.closed) return;
+  const { promise, resolve } = Promise.withResolvers<void>();
+  stream.once("close", resolve);
+  stream.destroy();
+  return promise;
+}
+
+function closeForward(stream: ForwardedChannel): Promise<void> | undefined {
+  if (!stream.incoming || !stream.close) return destroyLocal(stream);
+  // ssh2 stops emitting CHANNEL_DATA at close(). Cut off writes before destroy()
+  // ends the Node writable; the peer owns the remaining CLOSE handshake.
+  if (stream.incoming.state !== "closed") {
+    stream.close();
+    stream.destroy();
+  }
+  stream.resume();
+}
+
+// One admitted channel owns one slot through head parsing, raw work, and local teardown.
+// The hostname registry exists for revocation, not as a separate admission budget.
+function managedLease(
+  stream: ForwardedChannel, flows: Set<ManagedFlow>, options: ManagedOptions,
+  connectTimeoutMs: number, detach: () => void, release: () => void,
+) {
+  let abort: AbortController | undefined;
+  let flow: ManagedFlow | undefined;
+  let remote: Duplex | undefined;
+  let pending: Promise<void> | undefined;
+  let done: Promise<void> | undefined;
+
+  function stop(): Promise<void> {
+    if (done) return done;
+    const { promise, resolve } = Promise.withResolvers<void>();
+    done = promise;
+    detach();
+    const channelClosed = closeForward(stream);
+    const upstreamClosed = remote && destroyLocal(remote);
+    abort?.abort();
+    void Promise.all([channelClosed, upstreamClosed, pending]).then(() => {
+      if (flow) flows.delete(flow);
+      release();
+      resolve();
+    });
+    return done;
+  }
+
+  function track<T>(work: (signal: AbortSignal) => Promise<T>): Promise<T> {
+    const signal = (abort ??= new AbortController()).signal;
+    const result = Promise.resolve().then(() => {
+      signal.throwIfAborted();
+      return work(signal);
+    });
+    // A response timeout does not end the raw obligation or free its admission slot.
+    pending = result.then(() => {}, () => {});
+    return withTimeout(result, connectTimeoutMs);
+  }
+
+  return {
+    stop,
+    get stopped() { return done !== undefined; },
+    cancel() { abort?.abort(); },
+    watch(host: string) {
+      flow = { host, revoke: stop };
+      flows.add(flow);
+    },
+    resolve(host: string) {
+      return track((signal) => options.resolve(host, signal));
+    },
+    dial(address: string) {
+      return track(async (signal) => {
+        const socket = await options.dial(address, 443, signal);
+        socket.on("error", () => {});
+        if (signal.aborted) {
+          await destroyLocal(socket);
+          signal.throwIfAborted();
+        }
+        return (remote = socket);
+      });
+    },
+  };
+}
+
 // Handles one forwarded channel. Nothing here opens a socket for others to connect to (plan door 4).
 function channelHandler(options: ManagedOptions, allows: (host: string) => boolean, flows?: Set<ManagedFlow>) {
   const headTimeoutMs = options.headTimeoutMs ?? DEFAULTS.headTimeoutMs;
@@ -114,11 +202,11 @@ function channelHandler(options: ManagedOptions, allows: (host: string) => boole
   const relayCap = options.relayCap ?? DEFAULTS.relayCap;
   let open = 0;
 
-  const handle = (stream: Duplex) => {
+  const handle = (stream: ForwardedChannel) => {
     let head = Buffer.alloc(0);
     let closed = false;
     // A channel holds a slot from its first byte, so slow heads count against the cap too.
-    let holdsSlot = open < relayCap && (!flows || flows.size < relayCap);
+    let holdsSlot = open < relayCap;
     if (holdsSlot) open++;
 
     const release = () => {
@@ -131,20 +219,38 @@ function channelHandler(options: ManagedOptions, allows: (host: string) => boole
     // closed, or whose connection dropped, is told apart by its channel state. Reading it again
     // lets ssh2 finish the close.
     const gone = () => {
-      if (!closed && (stream as { incoming?: { state?: string } }).incoming?.state !== "closed") return false;
+      if (!closed && stream.incoming?.state !== "closed") return false;
       stream.resume();
       return true;
     };
     let refusalTimer: ReturnType<typeof setTimeout> | undefined;
+    let detachRelay: (() => void) | undefined;
+    let onRelayClose: (() => void) | undefined;
+    const managed = holdsSlot && flows ? managedLease(stream, flows, options, connectTimeoutMs, () => {
+      clearTimeout(headTimer);
+      clearTimeout(refusalTimer);
+      stream.off("data", onData);
+      stream.off("close", onClose);
+      detachRelay?.();
+      detachRelay = onRelayClose = undefined;
+    }, release) : undefined;
+    function closeRefusal() {
+      if (managed) void managed.stop();
+      else stream.destroy();
+    }
     const refuse = (status: number, host?: string) => {
-      release();
-      if (gone()) return;
+      if (!managed) release();
+      if (gone()) {
+        if (managed) void managed.stop();
+        return;
+      }
       options.log?.({ status, host });
+      if (managed?.stopped) return;
       // A peer that grants no send window never takes the refusal: the channel is closed anyway
       // once the deadline passes, and what the peer still sends is discarded, not kept.
-      refusalTimer = setTimeout(() => stream.destroy(), headTimeoutMs);
+      refusalTimer = setTimeout(closeRefusal, headTimeoutMs);
       stream.resume();
-      stream.end(refusal(status), () => stream.destroy());
+      stream.end(refusal(status), closeRefusal);
     };
     const headTimer = setTimeout(() => {
       stream.off("data", onData);
@@ -152,12 +258,15 @@ function channelHandler(options: ManagedOptions, allows: (host: string) => boole
     }, headTimeoutMs);
 
     stream.on("error", () => {});
-    stream.once("close", () => {
+    stream.once("close", onClose);
+    function onClose() {
       closed = true;
       clearTimeout(headTimer);
       clearTimeout(refusalTimer);
-      release();
-    });
+      if (onRelayClose) onRelayClose();
+      else if (managed) void managed.stop();
+      else release();
+    }
     if (!holdsSlot) {
       clearTimeout(headTimer);
       return refuse(503);
@@ -194,136 +303,117 @@ function channelHandler(options: ManagedOptions, allows: (host: string) => boole
       if (port !== "443" || !allows(host)) return refuse(403, host);
 
       let remote: Duplex;
-      const giveUp = new AbortController();
-      let opening: Duplex | undefined;
-      let pending: Promise<void> | undefined;
-      let dropRelay: (() => void) | undefined;
-      let revoked = false;
-      const flow = flows && {
-        host,
-        async revoke() {
-          revoked = true;
-          if (dropRelay) dropRelay();
-          else {
-            release();
-            stream.destroy();
-            stream.resume();
-            opening?.destroy();
-          }
-          giveUp.abort();
-          await pending;
-          flows.delete(this);
-        },
-      };
-      if (flows && flow) flows.add(flow);
-
-      function track<T>(work: () => Promise<T>) {
-        const result = Promise.resolve().then(() => {
-          giveUp.signal.throwIfAborted();
-          return work();
-        });
-        // The timeout only bounds what the request waits for, not what activation must drain.
-        pending = result.then(() => {}, () => {});
-        return withTimeout(result, connectTimeoutMs);
-      }
+      const legacyAbort = managed ? undefined : new AbortController();
+      managed?.watch(host);
       try {
-        const addresses = await (flow
-          ? track(() => options.resolve(host, giveUp.signal))
-          : withTimeout(options.resolve(host, giveUp.signal), connectTimeoutMs));
-        if (revoked || gone()) return release();
+        const addresses = await (managed
+          ? managed.resolve(host)
+          : withTimeout(options.resolve(host, legacyAbort!.signal), connectTimeoutMs));
+        if (managed?.stopped) return;
+        if (gone()) {
+          if (managed) return void managed.stop();
+          return release();
+        }
         if (addresses.length === 0) return refuse(502, host);
         const interfaces = options.interfaces?.();
+        if (managed?.stopped) return;
         const address = addresses.find((a) => !isRefusedAddress(a, interfaces));
         if (address === undefined) return refuse(403, host);
         // Dial the address that was checked, never the name: a second lookup could answer differently.
-        remote = flow
-          ? await track(async () => {
-              const socket = await options.dial(address, 443, giveUp.signal);
-              if (giveUp.signal.aborted) {
-                socket.destroy();
-                giveUp.signal.throwIfAborted();
-              }
-              return (opening = socket);
-            })
-          : await withTimeout(options.dial(address, 443, giveUp.signal), connectTimeoutMs, (late) => late.destroy());
+        remote = managed
+          ? await managed.dial(address)
+          : await withTimeout(options.dial(address, 443, legacyAbort!.signal), connectTimeoutMs, (late) => late.destroy());
       } catch (err) {
         // A dial that timed out is still connecting: stop it, or its socket outlives the slot.
-        giveUp.abort();
-        if (!revoked) return refuse(err === TIMEOUT ? 504 : 502, host);
+        if (managed) managed.cancel();
+        else legacyAbort!.abort();
+        if (!managed?.stopped) return refuse(err === TIMEOUT ? 504 : 502, host);
         return;
-      } finally {
-        if (flow && !opening) void pending?.then(() => flows!.delete(flow));
       }
-      if (revoked) return;
+      if (managed?.stopped) return;
       if (gone()) {
+        if (managed) return void managed.stop();
         release();
-        if (flow) flows!.delete(flow);
         return remote.destroy();
       }
+      if (managed && remote.destroyed) return refuse(502, host);
       options.log?.({ status: 200, host });
-      if (revoked) return;
+      if (managed?.stopped) return;
 
       // Closes the channel from this side. Its slot is freed here and not on 'close': ssh2 reports a
       // channel's close only once the peer has answered and the channel has been read to its end.
       const drop = () => {
+        if (managed) return void managed.stop();
         release();
         stream.destroy();
       };
       const idleTimer = setTimeout(() => {
-        if (dropRelay) {
-          flows!.delete(flow!);
-          return dropRelay();
-        }
         drop();
-        remote.destroy();
+        if (!managed) remote.destroy();
       }, idleTimeoutMs);
       const touch = () => idleTimer.refresh();
-      if (flow) {
-        dropRelay = () => {
-          clearTimeout(idleTimer);
-          stream.off("data", touch);
-          remote.off("data", touch);
-          stream.unpipe(remote);
-          remote.unpipe(stream);
-          drop();
-          stream.resume();
-          remote.destroy();
-        };
-      }
       // When one side is gone the other is ended, not destroyed: bytes already accepted for it may
       // still be queued (an SSH channel waits for window) and are delivered first. What it still
       // sends has nowhere to go and is read and discarded, so its own close is seen. From then on
       // nothing refreshes the idle timer, so it bounds the flush.
+      let flushing = false;
+      let finishing: Duplex | undefined;
+      const stopFlushing = () => { if (managed) void managed.stop(); };
       const flush = (to: Duplex, from: Duplex) => {
-        if (revoked) return;
+        if (managed) {
+          if (managed.stopped) return;
+          // Both sides may close without a 'finish' on a blocked ssh2 writable.
+          if (flushing || to.destroyed || (to === stream && gone())) return void managed.stop();
+          flushing = true;
+        }
         stream.off("data", touch);
         remote.off("data", touch);
         to.unpipe(from);
         to.resume();
+        if (managed) {
+          if (to.writableFinished) return void managed.stop();
+          finishing = to;
+          to.once("finish", stopFlushing);
+          to.end();
+          return;
+        }
         const shut = () => {
-          if (flow) flows!.delete(flow);
           if (to === stream) drop();
           else to.destroy();
         };
-        if (to.destroyed) {
-          if (flow) flows!.delete(flow);
-          return clearTimeout(idleTimer);
-        }
+        if (to.destroyed) return clearTimeout(idleTimer);
         to.once("close", () => clearTimeout(idleTimer));
         if (to.writableFinished) return shut();
         to.once("finish", shut);
         to.end();
       };
-      remote.on("error", () => {});
-      remote.once("close", () => flush(stream, remote));
-      stream.once("close", () => flush(remote, stream));
+      const onRemoteClose = () => flush(stream, remote);
+      const onStreamClose = () => flush(remote, stream);
+      if (managed) {
+        onRelayClose = onStreamClose;
+        detachRelay = () => {
+          clearTimeout(idleTimer);
+          finishing?.off("finish", stopFlushing);
+          remote.off("close", onRemoteClose);
+          stream.off("data", touch);
+          remote.off("data", touch);
+          stream.unpipe(remote);
+          remote.unpipe(stream);
+        };
+      } else {
+        remote.on("error", () => {});
+        stream.once("close", onStreamClose);
+      }
+      remote.once("close", onRemoteClose);
       stream.on("data", touch);
       remote.on("data", touch);
 
       stream.write("HTTP/1.1 200 Connection Established\r\n\r\n");
+      if (managed?.stopped) return;
       if (rest.length > 0) remote.write(rest);
+      if (managed?.stopped) return;
       stream.pipe(remote);
-      remote.pipe(stream);
+      if (!managed?.stopped) remote.pipe(stream);
     }
   };
   return handle;
