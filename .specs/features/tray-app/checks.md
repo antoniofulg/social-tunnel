@@ -477,6 +477,8 @@ Append-only notes on approved rows; the rows above stay as approved.
 - Orca accepted two independent follow-ups: C78/C79 risk recheck `ctx_ca4248a66f9a` (`task_6cca6a1aafde`) and fixture-only native Settings retest `ctx_e3fd5d549c56` (`task_1c606fb6315b`), both `ready` at `b798ba4f98`. The fixture observations are behavioral, not a claim of Concept A visual parity.
 - Independent risk verdict `ctx_ca4248a66f9a` at `b798ba4f98`: scoped C78/C79 **PASS**. The same validated startup path is persisted; the isolated real-backend test covers both alias retarget directions, exact plist program, disable/read-back, and unchanged external plist. No additional IPC grants, live toggles, or runtime actions. Native Settings retest remains in progress.
 - Native Settings retest `ctx_e3fd5d549c56` at `b798ba4f98`: **not observed**. Both PID-scoped menu paths returned AX `-1719`; the PID-scoped shortcut produced no window. The fixture stayed alive (169 `status`, zero `doctor`, zero `run`) and was cleaned. Evidence: [retest report](captures/s4-fixture-retest-report.md). This attempt did not confirm delivery of the Settings action or an app defect. Next: an attended click through the same isolated fixture, not the installed live-config tray. External PID/start/count/plist matched before and after; real tray closed, Open at Login off. Live C82 and full `ui` remain unverified.
+- Attended fixture retest at `b798ba4f98`: Antonio saw the native `fixture.invalid` menu and confirmed clicking `Settings…` did not leave a visible window. System Events reported zero windows; fixture PID `85759` remained alive, stderr empty before cleanup. The isolated fixture logged 695 `status`, four synthetic `doctor`, and zero `run` events. The exact fixture PID/text mapping was verified before stopping it; the disposable directory was removed. Evidence: `captures/s4-attended-events.log` and the user-supplied native menu image. This is now a user-observed native visibility failure, not just failed automation. Scoped root-cause investigation and fix at `d815f111ef` pending dispatch; no tray redesign or live-config launch.
+- Orca reopened the S4 implementer for the attended Settings failure: Task `task_3e29fea5d84b`, Dispatch `ctx_f6cf817c74f1`, state `ready`, at `d815f111ef`.
 
 ### S4 recovery proof
 
@@ -572,3 +574,60 @@ interaction beyond local read-only status. Installed app and fixture were both c
 walk; the tray login plist and job were absent. Reinstalled app executable (also fixture app)
 SHA-256 `d626ed341421288ceb16ddc63889ffaae3d7c84e2962f0fa739940989d091fa7`; installed
 sidecar SHA-256 `d36fe1bcdce756464afde7b1d1483f8a322ffdde1a63e463940217269e93d753`.
+
+### Attended Settings visibility investigation
+
+**Result: native behavior observed in an instrumented fixture; prior failure not localized.**
+No product fix, reinstall or launch of the installed app. `d815f111ef` source was built unsigned
+with temporary logs around the existing Settings dispatch and Tauri window events. The logs
+queried visibility, position, size, focus, and AppKit state without changing window policy or
+actions. The diagnostic executable SHA-256 was
+`3e949fc2ee41c85c150b0ac0bc8c18b520694c1336d65c6e7e79c348398ee718`, distinct from the installed
+`b798ba4f98` executable (`d626ed341421288ceb16ddc63889ffaae3d7c84e2962f0fa739940989d091fa7`).
+
+- **Dispatch and focus:** pinned Tauri 2.12.7 forwards the native menu action over its runtime
+  event-loop proxy; the `settings` callback calls `settings::show`. In tao 0.37.3, `set_focus`
+  checks that the AppKit window is already visible and not minimized, calls
+  `makeKeyAndOrderFront`, and requests app activation. The close delegate emits `CloseRequested`
+  and `Destroyed`; the existing exit hook prevents closing the last window from quitting the tray.
+- **Attended result, fixture PID `4479`:** Antonio confirmed Settings opened and stayed visible.
+  A canonical `lsof` text mapping verified the exact fixture PID. The first and second clicks both
+  entered the real menu callback and returned `Ok(Created)` with one visible 640×520 window and
+  accessory activation policy. The AppKit app was inactive immediately after showing the window;
+  it then activated and the window became key. Later `Focused(false)` left the window visible.
+- **Native walk:** captured the Status route with four stops and `All checks OK.`; used the
+  Server tab and read back its synthetic SHA-256 fingerprint and path, not key material. Pressed
+  the native close control. Orca did not provide a successful action receipt, but the tray trace
+  independently reported `CloseRequested` then `Destroyed`. System Events returned zero windows
+  and one menu extra while the same verified PID remained alive. Antonio then reopened Settings;
+  the same PID created the Status window again and the route was read back.
+- **Unresolved:** the earlier attended failure remains a valid observation. The first diagnostic
+  PID (`91293`) expired without a confirmed Settings click or window trace. The successful
+  diagnostic PID had logging and an attended click confirmed before its deadline, but those
+  differences do not establish a cause or a fix. Missing dispatch, failed creation, lost
+  activation, off-screen placement and dismissal were not observed in the successful trial;
+  they cannot be distinguished for the original failure without a trace of that failure.
+  The diagnostic edits were discarded; porting activation or placement changes would be
+  speculative. This is not independent visual parity, installed-build Settings certification,
+  or original live C82 evidence.
+
+Proof command from `app/`: gated `CARGO_BUILD_JOBS=2 taskpolicy -b nice -n 10 bunx tauri build
+--bundles app --no-sign --no-binary-patching -- --locked`. A direct launch used the copied bundle
+with only its sidecar replaced by the previously verified no-network fixture. Temporary HOME and
+per-process environment were isolated. Before launch, the fixture outputs matched their known
+hashes and bytes and `run --json` returned 64 without output. The attended walk called
+96 `status`, two synthetic `doctor`, zero `run`, and zero unknown. No aggregate checks were run.
+
+| Ignored local evidence | SHA-256 |
+| --- | --- |
+| [Status](captures/s4-settings-diagnostic-status.png) | `460e096ff2fa441c90956594d26dd720e6cbf9ec764fd9416e8ecfc7bee23de8` |
+| [Server](captures/s4-settings-diagnostic-server.png) | `00c5da87cb584f0dd058fcacbf27d9021f597c8cf56dcc371be204f4f93fd6b2` |
+| [Reopened Status](captures/s4-settings-diagnostic-reopen.png) | `399105320a323195dbac969a9316d055748d678e3f75e7c5ab182934867213fc` |
+| [Native lifecycle trace](captures/s4-settings-diagnostic-app.stderr) | `022c21f0e7d3d9966b07c7894aa81a1f2b1c3b2b3622a15466175554f422a4ed` |
+| [Fixture events](captures/s4-settings-diagnostic-events.log) | `a8e1ed22f94edde10d7c2fbacda858e6019d4f27490f3f9c08ca9de746358905` |
+
+The supervisor terminated only the verified fixture it owned and removed the disposable bundle.
+Before and after, read-only checks matched external PID `19886`, start `Sun Nov 22 13:07:58 2026`,
+one matching process and plist SHA-256
+`86a4a528b4f23c8c1845bd3f0ab4f9b05162ce32a40903ae0fed66a448d99b5e`. The installed app stayed
+closed and the tray login plist and launchd job were absent.
