@@ -264,15 +264,19 @@ export async function runS3Proof(mode: "ssh" | "chrome" | "integrated") {
         directWitness,
       };
     }
+    const enrolled = enrolledBrowser(chrome, "isolated-browser-1", () => ownsEnrolledBrowser);
+    const browsers = [enrolled];
     const authority = openDomainAuthority({
       enrollment: enroll, journalDir: journal, proxyPort, policy,
       forward: { epoch: 1, generation: "proxy-1" },
-      chrome: enrolledBrowser(chrome, "isolated-browser-1", () => ownsEnrolledBrowser),
+      browserRoster: () => ({ version: 0, browsers }), forwardOwnership: enrolled.ownership,
     }, () => performance.now() + clockOffset);
     controller = authority;
     await authority.bind(roleIngress("st_receipt", "proxy", 1));
     assert(await authority.refreshRuntime(), "protected forward challenge did not attest");
-    assert(await authority.provision({ epoch: 1, revision: 0, domains: initial, proxyGeneration: "proxy-1" }), "mandatory baseline was not independently proven");
+    const startedProof = performance.now();
+    const provisioned = await authority.provision({ epoch: 1, revision: 0, domains: initial, proxyGeneration: "proxy-1" });
+    assert(provisioned, `mandatory baseline was not independently proven (${Math.round(performance.now() - startedProof)} ms)`);
     assert(await authority.observe());
     // close() must see a binding that has started listening but has not registered its completion.
     const closingIngress = createDomainIngress(() => { throw new Error("retired listener dispatched"); });
@@ -504,11 +508,14 @@ async function integratedProof(
   let clockOffset = 0;
   let knownOwner = true;
   const policy = fileDomainPolicySink(policyDir, journal);
+  const browsers = [{
+    generation: "integrated-browser", input: chrome.stdio[3] as Writable, output: chrome.stdio[4] as Readable, directWitness,
+    ownership: () => knownOwner && chrome.exitCode === null && chrome.signalCode === null && ownsForward() &&
+      readdirSync(policyDir).filter((name) => name.endsWith(".json")).join() === DOMAIN_POLICY_FILE ? 1 : null,
+  }] as const;
   const authority = openDomainAuthority({
     enrollment: enroll, journalDir: journal, proxyPort, policy, forward: { epoch, generation },
-    chrome: { generation: "integrated-browser", input: chrome.stdio[3] as Writable, output: chrome.stdio[4] as Readable, directWitness,
-      ownership: () => knownOwner && chrome.exitCode === null && chrome.signalCode === null && ownsForward() &&
-        readdirSync(policyDir).filter((name) => name.endsWith(".json")).join() === DOMAIN_POLICY_FILE ? 1 : null },
+    browserRoster: () => ({ version: 0, browsers }), forwardOwnership: browsers[0].ownership,
   }, () => performance.now() + clockOffset);
   const visit = fixtureVisits(chrome, origins);
   const resolved: string[] = [];

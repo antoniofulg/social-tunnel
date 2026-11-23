@@ -75,10 +75,11 @@ function fixture(
 }
 
 function openLocalAuthority(f: ReturnType<typeof fixture>, policy = f.sink) {
+  const browsers = [{ generation: "isolated", input: new PassThrough(), output: new PassThrough(), ownership: () => null }];
   const authority = openDomainAuthority({
     enrollment: ENROLLMENT, journalDir: f.journalDir, proxyPort: PORT, policy,
     forward: { epoch: EPOCH, generation: "proxy-1" },
-    chrome: { generation: "isolated", input: new PassThrough(), output: new PassThrough(), ownership: () => null },
+    browserRoster: () => ({ version: 0, browsers }), forwardOwnership: () => null,
   });
   authority.open();
   return authority;

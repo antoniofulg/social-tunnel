@@ -309,9 +309,10 @@ async function serve(m: Manifest, platform: ReturnType<typeof guardedPlatform>) 
         return next === null ? null : ownership;
       } catch (e) { stop(e); return null; }
     };
+    const browsers = [{ generation, input, output, ownership: own, directWitness: { ...m.witness, mapping: DIRECT_WITNESS_MAPPING } }] as const;
     const a = authority = openDomainAuthority({ enrollment: m.enrollment, journalDir: JOURNAL, proxyPort: m.proxyPort, policy,
       forward: { epoch: m.baseline.epoch, generation: m.baseline.proxyGeneration },
-      chrome: { generation, input, output, ownership: own, directWitness: { ...m.witness, mapping: DIRECT_WITNESS_MAPPING } },
+      browserRoster: () => ({ version: 0, browsers }), forwardOwnership: own,
     });
     if (exists) {
       a.open();

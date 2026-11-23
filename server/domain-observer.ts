@@ -73,7 +73,14 @@ export interface BrowserEvidence {
   readonly expiresAt: number;
 }
 
-export function createDomainObserver(chrome: EnrolledChrome, now = () => performance.now(), directOrigin = startDirectWitness) {
+interface BrowserObserver {
+  alive(): boolean;
+  valid(proof: BrowserEvidence): boolean;
+  prove(policy: PolicyRevision, bytes: string, accept: (proof: BrowserEvidence) => boolean,
+    watchForward: (positive: string) => ForwardWitness): Promise<BrowserEvidence | null>;
+}
+
+export function createDomainObserver(chrome: EnrolledChrome, now = () => performance.now(), directOrigin = startDirectWitness): BrowserObserver {
   let active = true;
   let busy = false;
   let next = 0;
@@ -228,5 +235,131 @@ export function createDomainObserver(chrome: EnrolledChrome, now = () => perform
       busy = false;
     }
   }
+  return { alive, valid, prove };
+}
+
+export const MAX_ENROLLED_BROWSERS = 16;
+
+export interface BrowserCohortEvidence {
+  readonly generation: string;
+  readonly policyDigest: string;
+  readonly positive: string;
+  readonly negative: string;
+  readonly expiresAt: number;
+}
+
+export interface EnrolledBrowserRoster {
+  // Advance on every membership transition, even when a roster later
+  // returns to the same members. Null means the full roster is unavailable.
+  readonly version: number;
+  readonly browsers: readonly EnrolledChrome[];
+}
+
+export function createDomainCohort(
+  roster: () => EnrolledBrowserRoster | null,
+  now = () => performance.now(),
+  directOrigin = startDirectWitness,
+) {
+  const observers = new WeakMap<EnrolledChrome, BrowserObserver>();
+  type Observation = { chrome: EnrolledChrome; evidence: BrowserEvidence };
+  const proofs = new WeakMap<BrowserCohortEvidence, { version: number; members: Observation[] }>();
+  let latestVersion = -1;
+  let invalidatedVersion = -1;
+  let busy = false;
+
+  function snapshot() {
+    const current = roster();
+    if (!current || !Number.isSafeInteger(current.version) || current.version < 0 || current.version < latestVersion) {
+      invalidatedVersion = latestVersion;
+      return null;
+    }
+    latestVersion = current.version;
+    if (current.version <= invalidatedVersion) return null;
+    const { browsers: list, version } = current;
+    if (list.length === 0 || list.length > MAX_ENROLLED_BROWSERS) {
+      invalidatedVersion = version;
+      return null;
+    }
+    const generations = new Set<string>();
+    const channels = new Set<Readable | Writable>();
+    for (const chrome of list) {
+      if (!chrome.generation || generations.has(chrome.generation) ||
+          channels.has(chrome.input) || channels.has(chrome.output) || Object.is(chrome.input, chrome.output)) {
+        invalidatedVersion = version;
+        return null;
+      }
+      generations.add(chrome.generation);
+      channels.add(chrome.input);
+      channels.add(chrome.output);
+    }
+    return { list, version };
+  }
+
+  function observer(chrome: EnrolledChrome) {
+    let existing = observers.get(chrome);
+    if (!existing) {
+      existing = createDomainObserver(chrome, now, directOrigin);
+      observers.set(chrome, existing);
+    }
+    return existing;
+  }
+
+  function alive() {
+    const current = snapshot();
+    return !!current && current.list.every(chrome => observer(chrome).alive());
+  }
+
+  function valid(proof: BrowserCohortEvidence): boolean {
+    const current = snapshot();
+    const observed = proofs.get(proof);
+    return !!current && !!observed && current.version === observed.version &&
+      current.list.length === observed.members.length && observed.members.every(
+        ({ chrome, evidence }) => current.list.includes(chrome) && observer(chrome).valid(evidence),
+      );
+  }
+
+  async function prove(
+    policy: PolicyRevision, bytes: string, accept: (proof: BrowserCohortEvidence) => boolean,
+    watchForward: (positive: string) => ForwardWitness,
+  ) {
+    if (busy) return null;
+    const current = snapshot();
+    if (!current) return null;
+    let accepted: BrowserCohortEvidence | null = null;
+    function finish(members: Observation[], expiresAt: number) {
+      const first = members[0]?.evidence;
+      if (!first || !current) return false;
+      const proof = Object.freeze({
+        generation: members.length === 1 ? first.generation : hashBytes(JSON.stringify(members.map(member => member.evidence.generation).sort())),
+        policyDigest: first.policyDigest, positive: first.positive, negative: first.negative, expiresAt,
+      });
+      proofs.set(proof, { version: current.version, members });
+      if (!valid(proof) || !accept(proof)) return false;
+      accepted = proof;
+      return true;
+    }
+    busy = true;
+    try {
+      const list = [...current.list];
+      if (list.length === 1 && list[0]) {
+        const chrome = list[0];
+        const result = await observer(chrome).prove(policy, bytes,
+          evidence => finish([{ chrome, evidence }], evidence.expiresAt), watchForward);
+        return result ? accepted : null;
+      }
+      const observed: Observation[] = [];
+      let expiresAt = Infinity;
+      // The home proxy authenticates receipts serially with a small queue.
+      // Finish each one-use challenge before starting a sibling's challenge.
+      for (const chrome of list) {
+        const evidence = await observer(chrome).prove(policy, bytes, () => true, watchForward);
+        if (!evidence) return null;
+        observed.push({ chrome, evidence });
+        expiresAt = Math.min(expiresAt, evidence.expiresAt);
+      }
+      return finish(observed, expiresAt) ? accepted : null;
+    } finally { busy = false; }
+  }
+
   return { alive, valid, prove };
 }

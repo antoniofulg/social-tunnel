@@ -3,7 +3,7 @@ import { request } from "node:http";
 import { createConnection, createServer } from "node:net";
 import { PassThrough } from "node:stream";
 import { DIRECT_WITNESS_MAPPING, listenDirectWitness, type DirectWitness } from "../server/domain-direct-witness";
-import { createDomainObserver } from "../server/domain-observer";
+import { createDomainCohort, createDomainObserver, type EnrolledChrome } from "../server/domain-observer";
 import { createForwardAttestation } from "../server/forward-attestation";
 import { renderDomainPolicy } from "../src/domain-policy";
 import { parseManagedDomainSnapshot } from "../src/managed-domains";
@@ -50,7 +50,7 @@ test("[domains C8] the direct sink grants one exact local origin GET and rejects
 
 type Fault = "late_policy" | "expired" | "wrong_context" | "late_context" | "old_receipt" | "wrong_sink" | "late_connect" | "not_enrolled";
 
-function cdpFixture(fault?: Fault, oldReceipt?: string) {
+function cdpFixture(fault?: Fault, oldReceipt?: string, name = "fixture") {
   const input = new PassThrough();
   const output = new PassThrough();
   const expected = JSON.parse(bytes).ProxySettings;
@@ -100,12 +100,16 @@ function cdpFixture(fault?: Fault, oldReceipt?: string) {
     output.write(JSON.stringify({ id, sessionId, result }) + "\0");
     if (negative) negativeNavigation({ url: negative, sink });
   })().catch(() => output.end()));
-  const observer = createDomainObserver({ generation: "fixture", input, output, ownership: () => generation,
+  const chrome: EnrolledChrome = { generation: name, input, output, ownership: () => generation,
     directWitness: fault === "not_enrolled" ? undefined : settings,
-  }, () => now, async (_enrollment, name, challenge) => sink = await listenDirectWitness(name, challenge));
+  };
+  const directOrigin: Parameters<typeof createDomainObserver>[2] = async (_enrollment, host, challenge) =>
+    sink = await listenDirectWitness(host, challenge);
+  const observer = createDomainObserver(chrome, () => now, directOrigin);
   const watch = () => ({ positiveSeen: async () => true, valid: () => true, close() {} });
   return {
     observer, watch, reads: () => reads, visits: () => visits, navigated, receipt: () => body,
+    chrome,
     nextOwnership() { generation++; }, close() { sink?.close(); input.end(); output.end(); },
   };
 }
@@ -133,6 +137,98 @@ test("[domains C11] affirmative visits need current policy, exact browser contex
       }
     } finally { f.close(); }
   }
+});
+
+test("[domains C11] a cohort needs current evidence from every distinct protected Chrome", async () => {
+  const a = cdpFixture(undefined, undefined, "first");
+  const b = cdpFixture(undefined, undefined, "second");
+  const directSinks: DirectWitness[] = [];
+  let roster: readonly EnrolledChrome[] = [];
+  let version = 0;
+  const cohort = createDomainCohort(() => ({ version, browsers: roster }), () => 0, async (_enrollment, host, challenge) => {
+    const sink = await listenDirectWitness(host, challenge);
+    directSinks.push(sink);
+    return sink;
+  });
+  const accepted = () => { throw new Error("incomplete cohort must not reach finalization"); };
+  try {
+    expect(await cohort.prove(policy, bytes, accepted, a.watch)).toBeNull();
+    version++;
+    roster = [a.chrome, { ...a.chrome, generation: "alias" }];
+    expect(await cohort.prove(policy, bytes, accepted, a.watch)).toBeNull();
+    version++;
+    roster = [a.chrome, b.chrome];
+    const nonces = new Set<string>();
+    const proof = await cohort.prove(policy, bytes, () => true, nonce => {
+      nonces.add(nonce);
+      return a.watch();
+    });
+    expect(proof).not.toBeNull();
+    if (!proof) return;
+    expect(nonces.size).toBe(2);
+    expect([a.visits(), b.visits()]).toEqual([2, 2]);
+    expect(cohort.valid(proof)).toBe(true);
+    roster = [a.chrome];
+    version++;
+    expect(cohort.valid(proof)).toBe(false);
+    roster = [a.chrome, b.chrome];
+    version++;
+    expect(cohort.valid(proof)).toBe(false);
+    version -= 2;
+    expect(cohort.valid(proof)).toBe(false);
+  } finally {
+    for (const sink of directSinks) sink.close();
+    a.close();
+    b.close();
+  }
+});
+
+test("[domains C11] one stale Chrome prevents committing the whole cohort", async () => {
+  const a = cdpFixture(undefined, undefined, "first");
+  const b = cdpFixture("late_policy", undefined, "second");
+  const directSinks: DirectWitness[] = [];
+  const cohort = createDomainCohort(() => ({ version: 0, browsers: [a.chrome, b.chrome] }), () => 0, async (_enrollment, host, challenge) => {
+    const sink = await listenDirectWitness(host, challenge);
+    directSinks.push(sink);
+    return sink;
+  });
+  try {
+    let accepted = false;
+    expect(await cohort.prove(policy, bytes, () => { accepted = true; return true; }, a.watch)).toBeNull();
+    expect(accepted).toBe(false);
+    expect([a.visits(), b.visits()]).toEqual([2, 2]);
+  } finally {
+    for (const sink of directSinks) sink.close();
+    a.close();
+    b.close();
+  }
+});
+
+test("[domains C11] transient roster loss while probing fences that version", async () => {
+  const a = cdpFixture(undefined, undefined, "first");
+  const b = cdpFixture(undefined, undefined, "second");
+  const list = { version: 1, browsers: [a.chrome, b.chrome] };
+  let available = true;
+  let challenges = 0;
+  let readsBeforeSecondChallenge = 0;
+  const cohort = createDomainCohort(() => available ? list : null, () => 0,
+    (_enrollment, host, challenge) => listenDirectWitness(host, challenge));
+  try {
+    let accepted = false;
+    const proof = await cohort.prove(policy, bytes, () => { accepted = true; return true; }, () => {
+      if (++challenges === 1) {
+        available = false;
+        cohort.alive();
+        available = true;
+      } else readsBeforeSecondChallenge = a.reads();
+      return a.watch();
+    });
+    expect(proof).toBeNull();
+    expect(accepted).toBe(false);
+    expect(cohort.alive()).toBe(false);
+    expect(challenges).toBe(2);
+    expect(readsBeforeSecondChallenge).toBe(2);
+  } finally { a.close(); b.close(); }
 });
 
 test("[domains C8] a wrong CONNECT entering home after the browser reports navigation cannot certify a direct route", async () => {

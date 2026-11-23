@@ -5,7 +5,7 @@ import {
   type ProxyPreimage,
 } from "../src/domain-publisher";
 import { createDomainIngress, type RemoteOperation, type RoleIngress } from "./domain-ingress";
-import { createDomainObserver, type BrowserEvidence, type EnrolledChrome } from "./domain-observer";
+import { createDomainCohort, type BrowserCohortEvidence, type EnrolledBrowserRoster } from "./domain-observer";
 import { createForwardAttestation, type ForwardScope } from "./forward-attestation";
 import { domainTag } from "../src/domain-wire";
 
@@ -25,23 +25,27 @@ function proxyOperation(operation: PublisherOperation) {
   };
 }
 
-export type DomainEnrollment = Options & { chrome: EnrolledChrome; forward: ForwardScope };
+export type DomainEnrollment = Options & {
+  browserRoster: () => EnrolledBrowserRoster | null;
+  forwardOwnership: () => number | null;
+  forward: ForwardScope;
+};
 
 const utf8 = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true });
 const unavailable = Object.freeze({ ok: false as const, code: "not_ready" as const });
 const invalid = Object.freeze({ ok: false as const, code: "invalid_request" as const });
 
 export function openDomainAuthority(enrollment: DomainEnrollment, now = () => performance.now()) {
-  const { chrome, policy, proxyPort } = enrollment;
-  const forward = createForwardAttestation(enrollment.enrollment, proxyPort, () => chrome.ownership(), now);
+  const { browserRoster, forwardOwnership, policy, proxyPort } = enrollment;
+  const forward = createForwardAttestation(enrollment.enrollment, proxyPort, forwardOwnership, now);
   const bootstrap = Object.freeze({ ...enrollment.forward });
   let recoveryScope: ForwardScope | undefined;
-  const observer = createDomainObserver(chrome, now);
+  const observer = createDomainCohort(browserRoster, now);
   const admin = Object.freeze({});
   const identities = new WeakMap<object, PublisherPrincipal>();
   identities.set(admin, { role: "local_admin", enrollment: enrollment.enrollment });
   const options = { ...enrollment, identify: (session: object) => identities.get(session) ?? null };
-  let proven: { epoch: number; revision: number; generation: string; bytes: string; evidence: BrowserEvidence } | undefined;
+  let proven: { epoch: number; revision: number; generation: string; bytes: string; evidence: BrowserCohortEvidence } | undefined;
   let publisher: ReturnType<typeof openDomainPublisher<object>> | undefined;
   let closing = false;
   const view = () => publisher?.inspect(admin);
@@ -145,9 +149,11 @@ export function openDomainAuthority(enrollment: DomainEnrollment, now = () => pe
     const target = { epoch: baseline.epoch, revision: baseline.revision, routes: [...baseline.domains].sort() };
     const expected = renderDomainPolicy(proxyPort, target);
     if (policy.read() !== expected || !readLive(scope)) return false;
+    const forwardOwner = forwardOwnership();
+    if (forwardOwner === null) return false;
     const evidence = await observer.prove(target, expected, (proof) => {
       const live = readLive(scope);
-      if (closing || publisher || !observer.valid(proof) || live?.generation !== base.generation ||
+      if (closing || publisher || forwardOwnership() !== forwardOwner || !observer.valid(proof) || live?.generation !== base.generation ||
           live.revision !== base.revision || live.domainsDigest !== base.domainsDigest || policy.read() !== expected) return false;
       provisionDomainPublisher(options, baseline);
       open();
@@ -167,9 +173,11 @@ export function openDomainAuthority(enrollment: DomainEnrollment, now = () => pe
     if (!current(target, v.proxyGeneration)) return false;
     const bytes = renderDomainPolicy(proxyPort, target.policy);
     if (policy.read() !== bytes) return false;
+    const forwardOwner = forwardOwnership();
+    if (forwardOwner === null) return false;
     const proof = await observer.prove(target.policy, bytes, (evidence) => {
       const reread = view();
-      if (closing || !publisher || !observer.valid(evidence) || !reread?.ok ||
+      if (closing || !publisher || forwardOwnership() !== forwardOwner || !observer.valid(evidence) || !reread?.ok ||
           reread.value.epoch !== v.epoch || reread.value.proxyGeneration !== v.proxyGeneration ||
           reread.value.pending?.operationId !== operation?.operationId || reread.value.pending?.phase !== operation?.phase ||
           !current(target, v.proxyGeneration) || policy.read() !== bytes) return false;
