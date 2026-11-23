@@ -23,6 +23,7 @@ import { connectSsh, fingerprint } from "../src/tunnel";
 import { main, type Io } from "../src/cli";
 import { loadConfig } from "../src/config";
 import { enrollmentBinding, managedKeyFingerprint } from "../src/domain-enrollment";
+import { fixtureOrigins, fixtureVisits } from "./managed-domains-browser-routes";
 
 const enroll = "isolated-fixture";
 const sshPort = 22183;
@@ -32,6 +33,8 @@ const capacityRevision = 9007199254740960;
 const longHost = (i: number) => `${i.toString(16).padStart(3, "0")}${"a".repeat(60)}.${"b".repeat(63)}.${"c".repeat(63)}.${"d".repeat(57)}.org`;
 const capacityInitial = Array.from({ length: 127 }, (_, i) => longHost(i));
 const capacityAdd = longHost(127);
+const capacityKeep = capacityInitial[0]!;
+const checkedFixtureAddress = "1.1.1.1";
 const commandBin = "/usr/local/bin/st-domains-command";
 const roles = { st_editor: 41111, st_receipt: 41112, st_editor_next: 41113, st_receipt_next: 41114, st_forward: 41115 } as const;
 type Account = keyof typeof roles;
@@ -73,7 +76,7 @@ async function request(client: Client, name: RemoteOperation, body?: unknown) {
   const reply = collect(channel);
   channel.end(body === undefined ? undefined : JSON.stringify(body));
   const result = await reply;
-  assert.equal(result.code, 0);
+  assert.equal(result.code, 0, `${name} exited ${result.code} after ${Buffer.byteLength(result.stdout)} stdout bytes`);
   assert(Buffer.byteLength(result.stdout) <= DOMAIN_RESPONSE_LIMIT);
   return JSON.parse(result.stdout);
 }
@@ -86,24 +89,29 @@ function snapshot(revision: number, domains: readonly string[]) {
 
 const operationId = (epoch: number, expected: number, id: number) => `${epoch}.${expected}.${id.toString(16).padStart(32, "0")}`;
 
-function ownsForward(): boolean {
+function forwardInode(): string | null {
   // Exactly one LISTEN on the fixed port, in this isolated namespace, owned by the dedicated
   // forward UID. SSH ingress role UIDs are distinct and cannot bind a substitute for this proof.
   const port = proxyPort.toString(16).toUpperCase().padStart(4, "0");
   const listeners = ["/proc/net/tcp", "/proc/net/tcp6"].flatMap((file) => readFileSync(file, "utf8").trim().split("\n").slice(1)
     .map((line) => line.trim().split(/\s+/)).filter((cols) => cols[3] === "0A" && cols[1]?.endsWith(`:${port}`)));
-  return listeners.length === 1 && listeners[0]![1] === `0100007F:${port}` && listeners[0]![7] === String(roles.st_forward);
+  return listeners.length === 1 && listeners[0]![1] === `0100007F:${port}` && listeners[0]![7] === String(roles.st_forward)
+    ? listeners[0]![9] ?? null : null;
 }
 
-function fixtureChrome(root: string, label: string, uid = 65534): ChildProcess {
+const ownsForward = () => forwardInode() !== null;
+
+function fixtureChrome(root: string, label: string, uid = 65534, routes?: { spki: string }): ChildProcess {
   const profile = join(root, label);
   mkdirSync(profile, { mode: 0o700 });
   chownSync(profile, uid, uid);
+  const rules = routes ? `, MAP ${capacityAdd} 127.0.0.1, MAP ${capacityKeep} 127.0.0.1` : "";
   return spawn("/usr/bin/setpriv", [`--reuid=${uid}`, `--regid=${uid}`, "--clear-groups", "--no-new-privs", "--",
     "/opt/google/chrome/chrome", "--headless", "--remote-debugging-pipe", "--disable-setuid-sandbox",
     "--no-first-run", "--no-default-browser-check", "--disable-background-networking", "--disable-component-update", "--disable-sync",
     "--disable-dev-shm-usage", "--renderer-process-limit=2", "--disable-gpu", `--user-data-dir=${profile}/profile`,
-    `--host-resolver-rules=${DIRECT_WITNESS_MAPPING}, MAP * ^NOTFOUND, EXCLUDE 127.0.0.1`, "about:blank"], {
+    `--host-resolver-rules=${DIRECT_WITNESS_MAPPING}${rules}, MAP * ^NOTFOUND, EXCLUDE 127.0.0.1`,
+    ...(routes ? [`--ignore-certificate-errors-spki-list=${routes.spki}`] : []), "about:blank"], {
     env: { HOME: profile, XDG_CONFIG_HOME: `${profile}/config`, XDG_CACHE_HOME: `${profile}/cache`, PATH: "/usr/bin:/bin" },
     stdio: ["ignore", "ignore", "ignore", "pipe", "pipe"],
   });
@@ -213,8 +221,11 @@ export async function runS3Proof(mode: "ssh" | "chrome" | "integrated") {
     const sshdReady = () => readFileSync("/proc/net/tcp", "utf8").includes(`0100007F:${sshPort.toString(16).toUpperCase()}`);
     if (mode === "integrated") {
       await until(sshdReady);
-      chrome = fixtureChrome(root, "enrolled");
-      await integratedProof(root, journal, policyDir, chrome, target, connect);
+      const origins = await fixtureOrigins(root, capacityAdd, capacityKeep);
+      try {
+        chrome = fixtureChrome(root, "enrolled", 65534, origins);
+        await integratedProof(root, journal, policyDir, chrome, target, connect, origins);
+      } finally { origins.close(); }
       return;
     }
     await until(sshdReady);
@@ -427,6 +438,8 @@ export async function runS3Proof(mode: "ssh" | "chrome" | "integrated") {
     assert(await authority.refreshRuntime());
     const recoveryGrant = value<PublisherOperation>(await request(freshReceipt, "begin", recoveryId));
     assert.deepEqual(recoveryGrant.homePreimage, currentHome);
+    assert(!Object.hasOwn(recoveryGrant.target.policy, "routes"));
+    assert.deepEqual(recoveryGrant.intent, { kind: "recovery" });
     await apply(recoveryGrant);
     assert(await authority.refreshRuntime());
     assert((await request(freshReceipt, "receipt", ack(recoveryGrant, 2))).ok);
@@ -463,6 +476,7 @@ export async function runS3Proof(mode: "ssh" | "chrome" | "integrated") {
 async function integratedProof(
   root: string, journal: string, policyDir: string, chrome: ChildProcess,
   target: ReturnType<typeof fixtureSsh>["target"], connect: ReturnType<typeof fixtureSsh>["connect"],
+  origins: Awaited<ReturnType<typeof fixtureOrigins>>,
 ) {
   const home = join(root, "home");
   mkdirSync(home, { mode: 0o700 });
@@ -496,12 +510,28 @@ async function integratedProof(
       ownership: () => knownOwner && chrome.exitCode === null && chrome.signalCode === null && ownsForward() &&
         readdirSync(policyDir).filter((name) => name.endsWith(".json")).join() === DOMAIN_POLICY_FILE ? 1 : null },
   }, () => performance.now() + clockOffset);
+  const visit = fixtureVisits(chrome, origins);
+  const resolved: string[] = [];
   const io: Io = {
     env: {}, platform: "linux", homedir: () => home, stdout: () => {}, stderr: () => {}, readFile: readFileSync, stat: statSync,
     resolve: async () => { throw new Error("fixture must not resolve external names"); },
     dial: async () => { throw new Error("fixture must not dial externally"); },
-    managedResolve: async () => { throw new Error("unexpected resolution during capacity proof"); },
-    managedDial: async () => { throw new Error("unexpected dial during capacity proof"); },
+    managedResolve: async (host) => {
+      resolved.push(host);
+      assert(host === capacityAdd || host === capacityKeep);
+      return [checkedFixtureAddress];
+    },
+    // Existing fixture I/O seam: leave public-IP and :443 checks intact, but
+    // deliver the authorized synthetic egress to the fixture's other loopback origin.
+    managedDial: async (address, port, signal) => {
+      assert.equal(address, checkedFixtureAddress);
+      assert.equal(port, 443);
+      const socket = createConnection({ host: "127.0.0.1", port: origins.port, signal });
+      return new Promise((resolve, reject) => {
+        socket.once("connect", () => resolve(socket));
+        socket.once("error", reject);
+      });
+    },
     managedPollMs: 950, connectTimeoutMs: 3000, onSignal: (fn) => { stop = fn; },
   };
   async function cli(...args: string[]) {
@@ -514,6 +544,7 @@ async function integratedProof(
   let proxySsh: Client | undefined;
   try {
     await until(() => !!stop && ownsForward());
+    const forwardIdentity = forwardInode();
     const role = (user: "st_receipt" | "st_editor") => ({ directory: join(root, user), group: roles[user] });
     await authority.bind({ ...role("st_receipt"), identity: { role: "proxy", enrollment: enroll, epoch, generation } });
     assert(await authority.refreshRuntime());
@@ -544,6 +575,9 @@ async function integratedProof(
       await sleep(30);
     }
     const scope = ["--expected-enrollment", status.value.trayEnrollment];
+    await visit(capacityAdd, "DIRECT");
+    await visit(capacityKeep, "PROXY");
+    assert(!resolved.includes(capacityAdd), "unselected Add preimage must not reach home DNS");
     const proposal = await cli("domains", "add", capacityAdd, "--expected-revision", String(capacityRevision), ...scope);
     assert.equal(proposal.code, 0);
     const id = proposal.value.pending.operationId;
@@ -564,19 +598,65 @@ async function integratedProof(
     assert.equal(proxyRead.pending.target.policy.routes, undefined);
     assert.equal(editorRead.pending.operationId, id);
     assert.equal(proxyRead.pending.operationId, id);
-    const deadline = performance.now() + 12000;
-    while (value(authority.inspectLocal()).pending?.phase !== "published") {
-      assert(performance.now() < deadline, "real managed run did not publish the admitted maximum");
-      await authority.refreshRuntime();
-      await sleep(150);
+    const wireBytes = (value: unknown) => Buffer.byteLength(JSON.stringify({ ok: true, value }) + "\n");
+    console.log(`[domains C9] bounded role inspect replies: editor ${wireBytes(editorRead)} B, proxy ${wireBytes(proxyRead)} B, cap ${DOMAIN_RESPONSE_LIMIT} B`);
+    async function publishAndObserve(id: string) {
+      const deadline = performance.now() + 12000;
+      for (;;) {
+        const operation = value(authority.inspectLocal()).pending;
+        assert.equal(operation?.operationId, id);
+        if (operation.phase === "published") break;
+        assert(performance.now() < deadline, "managed run did not publish the admitted operation");
+        await authority.refreshRuntime();
+        await sleep(150);
+      }
+      assert(await authority.observe(), "enrolled Chrome did not prove the updated publisher policy");
+      assert.equal(forwardInode(), forwardIdentity);
     }
-    assert(await authority.observe());
+    async function readRevision(revision: number) {
+      const deadline = performance.now() + 5000;
+      for (;;) {
+        const current = await cli("status", "--tray-scope");
+        if (current.value.managedDomains.active?.revision === revision) return;
+        assert(performance.now() < deadline, "managed run did not report the applied revision");
+        await sleep(40);
+      }
+    }
+    await publishAndObserve(id);
     const final = value(authority.inspectLocal());
     assert.equal(final.lastProven.domains.length, 128);
     assert.equal(final.history.length, 32);
     assert.equal(final.history.at(-1)?.operationId, id);
     assert.equal(final.history.at(-1)?.disposition, "applied");
     console.log("[domains C7/C9] 127→128 × 253-byte names and 32 history: both role replies cross production caps; expired claim re-proved and applied by actual managed run");
+    const added = capacityRevision + 1;
+    await readRevision(added);
+    const reconciled = await cli("domains", "retry", id, ...scope);
+    assert.equal(reconciled.value.state, "applied");
+    assert.equal(reconciled.value.active.revision, added);
+    await visit(capacityAdd, "PROXY");
+    const addLookups = resolved.filter((name) => name === capacityAdd).length;
+    assert(addLookups > 0);
+    await visit(capacityKeep, "PROXY");
+    const remove = await cli("domains", "remove", capacityAdd, "--expected-revision", String(added), ...scope);
+    assert.equal(remove.code, 0);
+    await publishAndObserve(remove.value.pending.operationId);
+    await readRevision(added + 1);
+    const removed = await cli("domains", "retry", remove.value.pending.operationId, ...scope);
+    assert.equal(removed.value.state, "applied");
+    assert(!removed.value.active.domains.includes(capacityAdd));
+    await visit(capacityAdd, "DIRECT");
+    await visit(capacityKeep, "PROXY");
+    assert.equal(resolved.filter((name) => name === capacityAdd).length, addLookups, "removed host must stop reaching home DNS");
+    stop!();
+    assert.equal(await run, 0);
+    await until(() => !ownsForward());
+    const beforeOutage = [...resolved];
+    await visit(capacityKeep, "unavailable");
+    await visit(capacityAdd, "DIRECT");
+    assert.deepEqual(resolved, beforeOutage);
+    assert.equal(await authority.observe(), false);
+    console.log("[domains C5/C11] actual managed CLI, Linux OpenSSH and enrolled Chrome: add DIRECT→PROXY, remove PROXY→DIRECT, retained PROXY throughout; selected fresh outage never reaches either origin");
   } finally {
     knownOwner = false;
     stop?.();
