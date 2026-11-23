@@ -102,6 +102,10 @@ export function openDomainAuthority(enrollment: DomainEnrollment, now = () => pe
     }
     try {
       const input: unknown = JSON.parse(utf8.decode(body));
+      if (verb === "reconcile") {
+        const result = publisher.reconcile(ticket, input);
+        return result.ok ? { ok: true, value: wireInspect(v, identity.role) } : result;
+      }
       if (verb === "begin") {
         if (typeof input !== "string" || input.length > 68) return invalid;
         if (v.pending?.intent.kind === "recovery" ? !observer.alive() || !samePreimage(v.pending.homePreimage, v.epoch) : !ready(v)) return unavailable;

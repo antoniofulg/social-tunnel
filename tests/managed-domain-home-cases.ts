@@ -8,11 +8,14 @@ import { domainAction } from "../src/domain-cli";
 import { loadConfig } from "../src/config";
 import { enrollmentBinding, managedKeyFingerprint, readDomainEnrollment, readDomainRole, writeDomainLocal } from "../src/domain-enrollment";
 import { dialManagedAddress, resolveManagedHost } from "../src/domain-network";
+import { DOMAIN_COMMAND_UNAVAILABLE } from "../src/domain-protocol";
+import { domainSubmission } from "../src/domain-submission";
 import { hashBytes } from "../src/domain-policy";
 import type { PublisherOperation, ProxyPublicationReceipt } from "../src/domain-publisher";
 import { createManagedRun, readActiveHome } from "../src/domain-runtime";
 import { DOMAIN_COMMANDS, domainRoleClient, type DomainAttestation, type DomainVerb, type ProposalBody, type WireError } from "../src/domain-wire";
 import { fingerprint } from "../src/tunnel";
+import { writeState } from "../src/state";
 import { createForwardAttestation } from "../server/forward-attestation";
 import { cli, keyPair, testIo, until, writeConfig } from "./helpers";
 import { pair } from "./proxy-harness";
@@ -212,7 +215,10 @@ test("[domains C6] [domains C7] [domains C12] CLI and managed run reconcile one 
         if (accepted) attested = body;
         return reply(ch, accepted ? ok(null) : error("receipt_mismatch"));
       }
-      if (verb === "inspect") {
+      if (verb === "inspect" || (role === "editor" && verb === "reconcile")) {
+        if (verb === "reconcile" && JSON.parse(input) !== (pending?.operationId ?? archived[0]?.operationId)) {
+          return reply(ch, error("unknown_operation"));
+        }
         const active = baselineProved && live?.revision === observed.revision && live.domainsDigest === hashBytes(JSON.stringify(observed.domains)) ? observed : null;
         return reply(ch, ok({ epoch: EPOCH, proxyGeneration: GEN, active, activeForMs: active ? forwardProof.freshFor(scope) : 0, lastRevision: observed.revision,
           state: pending ? pending.phase === "published" ? "activation_unknown" : "pending" : active ? "ready" : "activation_unknown",
@@ -322,6 +328,7 @@ test("[domains C6] [domains C10] interrupted runtime neither replays a grant nor
     inspect: async () => { observed++; return ok({ epoch: 1, proxyGeneration: GEN, active: INITIAL, activeForMs: 5000, lastRevision: 0,
       state: "pending", pending: { operationId, phase: "activating", operation: "remove", host: "wikipedia.org" }, history: [] }); },
     begin: async () => { issued++; return noop(); }, receipt: async () => { receipts++; return noop(); }, attest: noop, propose: noop,
+    reconcile: noop,
   }, resolve: async () => { throw new Error("uncertain route reached DNS"); }, dial: async () => pair()[0] });
   try {
     managed.onState("connected");
@@ -364,6 +371,7 @@ test("[domains C11] [domains C12] active needs both matching bytes and unexpired
       inspect: async () => ok({ epoch: EPOCH, proxyGeneration: GEN, active: { revision: 0, domains: ["mozilla.org"] },
         activeForMs: 5000, lastRevision: 0, state: "ready", pending: null, history: [] }),
       propose: async () => { proposed++; return noop(); }, begin: noop, receipt: noop, attest: noop,
+      reconcile: noop,
     };
     expect(await domainAction({ kind: "list" }, enrollment, client, () => INITIAL)).toMatchObject({
       ok: true, view: { state: "activation_unknown", active: null },
@@ -393,4 +401,114 @@ test("[domains C6] an aborted managed dial leaves no unreturned loopback socket"
     for (const peer of peers) peer.destroy();
     await new Promise<void>((resolve) => server.close(() => resolve()));
   }
+});
+
+test("[domains C10] a killed fixture CLI exposes the durably saved ID and Retry never resubmits", async () => {
+  const sent = Promise.withResolvers<ProposalBody>();
+  const finish = Promise.withResolvers<void>();
+  let proposals = 0;
+  const reconciled: string[] = [];
+  let retained: ProposalBody | undefined;
+  const f = await sshFixture((_role, verb, input, ch) => {
+    if (verb === "add") {
+      proposals++;
+      retained = JSON.parse(input);
+      sent.resolve(retained!);
+      // The claim is visible to the next connection, but this client gets no stdout.
+      void finish.promise.then(() => { ch.exit(2); ch.end(); });
+      return;
+    }
+    if (verb === "reconcile") reconciled.push(JSON.parse(input));
+    return reply(ch, ok({ epoch: EPOCH, proxyGeneration: GEN, active: INITIAL, lastRevision: 0, activeForMs: 6500,
+      state: retained ? "pending" : "ready", history: [],
+      pending: retained && { operation: "add", phase: "claimed", ...retained } || null,
+    }));
+  });
+  const e = f.enroll();
+  writeState(f.statePath, { version: 1, pid: process.pid, state: "connected", reason: null, since: new Date().toISOString(),
+    retryAt: null, updatedAt: new Date().toISOString(), server: f.config.server, remotePort: f.config.remotePort });
+  const at = Date.now();
+  writeDomainLocal(e, "state", { version: 1, binding: e.binding, enrollment: ENROLL, epoch: EPOCH, generation: GEN,
+    pid: process.pid, at, expiresAt: at + 6500, active: INITIAL });
+  const child = Bun.spawn([process.execPath, new URL("../src/cli.ts", import.meta.url).pathname,
+    "--config", f.path, "--json", "domains", "add", "WIPO.INT.", "--expected-revision", "0"], { stdout: "pipe", stderr: "pipe" });
+  try {
+    const proposal = await Promise.race([sent.promise, child.exited.then(() => { throw new Error("fixture child exited before send"); })]);
+    expect(domainSubmission(e).saved).toEqual({ kind: "add", proposal });
+    child.kill("SIGKILL");
+    await child.exited;
+    expect(await new Response(child.stdout).text()).toBe("");
+    const recovered = (await runCli(f.path, ["domains", "list"])).payload.pending;
+    expect(recovered).toMatchObject({ operationId: proposal.operationId, host: "wipo.int" });
+    const refused = (await runCli(f.path, ["domains", "add", "mozilla.org", "--expected-revision", "0"])).payload;
+    expect(refused.error.code).toBe("conflict");
+    const wrong = "1.0." + "e".repeat(32);
+    expect((await runCli(f.path, ["domains", "retry", wrong])).payload.error.code).toBe("unknown_operation");
+    expect(reconciled).toEqual([]);
+    expect((await runCli(f.path, ["domains", "retry", proposal.operationId])).payload.pending.operationId).toBe(proposal.operationId);
+    expect(reconciled).toEqual([proposal.operationId]);
+    expect(proposals).toBe(1);
+  } finally {
+    if (child.exitCode === null && child.signalCode === null) child.kill("SIGKILL");
+    finish.resolve();
+    await child.exited;
+    await f.close();
+  }
+}, 8000);
+
+test("[domains C10] no-effect proof releases the crash-before-send slot and accepted edits return no old proof", async () => {
+  let queries = 0;
+  let proposals = 0;
+  const f = await sshFixture(() => {});
+  try {
+    const enrollment = f.enroll();
+    const id = "1.0." + "c".repeat(32);
+    const proposal = { version: 1 as const, operationId: id, expectedRevision: 0, host: "wipo.int" };
+    expect(domainSubmission(enrollment, { claim: { kind: "add", proposal } }).claimed).toBe(true);
+    const seen = ok({ epoch: EPOCH, proxyGeneration: GEN, active: INITIAL, lastRevision: 0, activeForMs: 6500,
+      state: "ready", history: [], pending: null });
+    const noop = async () => error("unauthorized");
+    const client = {
+      inspect: async () => seen,
+      reconcile: async (id: string) => { queries++; expect(id).toBe(proposal.operationId); return error("operation_cancelled"); },
+      propose: async (_kind: string, sent: ProposalBody) => {
+        proposals++;
+        expect(domainSubmission(enrollment).saved?.proposal).toEqual(sent);
+        return ok({ operationId: sent.operationId, revision: 1, phase: "claimed" });
+      },
+      begin: noop, receipt: noop, attest: noop,
+    };
+    expect(await domainAction({ kind: "list" }, enrollment, client, () => INITIAL)).toMatchObject({
+      view: { state: "activation_unknown", active: null, pending: { operationId: id, phase: "unconfirmed" } },
+    });
+    expect(await domainAction({ kind: "retry", id }, enrollment, client, () => INITIAL)).toMatchObject({ error: { code: "operation_cancelled" } });
+    expect(domainSubmission(enrollment).saved).toBeNull();
+    expect(queries).toBe(1);
+    expect(proposals).toBe(0);
+    const add = () => domainAction({ kind: "add", host: "mozilla.org", expected: "0" }, enrollment, client, () => INITIAL);
+    const results = await Promise.all([add(), add()]);
+    expect(results.filter((r) => r.ok)).toMatchObject([{ view: { state: "pending", active: null } }]);
+    expect(results.filter((r) => !r.ok)).toMatchObject([{ error: { code: "conflict" } }]);
+    expect(proposals).toBe(1);
+  } finally { await f.close(); }
+});
+
+test("[domains C2] only explicit unsupported returns setup required for a recognized enrollment", async () => {
+  let code = 1;
+  let errorCode: WireError | undefined;
+  const f = await sshFixture((_role, _verb, _input, ch) => {
+    if (errorCode) reply(ch, error(errorCode));
+    else { ch.exit(code); ch.end(); }
+  });
+  try {
+    expect((await runCli(f.path, ["domains", "list"])).payload.state).toBe("setup_required");
+    f.enroll();
+    for (code of [1, DOMAIN_COMMAND_UNAVAILABLE]) {
+      expect((await runCli(f.path, ["domains", "list"])).payload.state).toBe("activation_unknown");
+    }
+    errorCode = "fenced";
+    expect((await runCli(f.path, ["domains", "list"])).payload.state).toBe("recovery_required");
+    errorCode = "unsupported";
+    expect((await runCli(f.path, ["domains", "list"])).payload.state).toBe("setup_required");
+  } finally { await f.close(); }
 });

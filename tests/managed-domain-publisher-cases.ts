@@ -235,6 +235,37 @@ test("[domains C10] a claimed no-effect edit cancels without a policy write and 
   expect(f.sink.read()).toBe(f.initial);
 });
 
+test("[domains C10] no-effect reconciliation fences queued proposals without evicting live tombstones", () => {
+  const f = fixture();
+  const p = f.open();
+  expect(p.reconcile(f.proxy, id())).toEqual(err("unauthorized"));
+  expect(p.reconcile(f.editor, id(1, EPOCH + 1))).toEqual(err("invalid_request"));
+  expect(p.reconcile(f.editor, id(1, EPOCH, INIT + 1))).toEqual(err("invalid_request"));
+  const untouched = f.bytes();
+  expect(value(p.inspect(f.editor)).pending).toBeNull();
+  expect(f.bytes()).toEqual(untouched);
+  for (let n = 1; n <= 128; n++) expect(p.reconcile(f.editor, id(n))).toEqual(err("operation_cancelled"));
+  expect(p.reconcile(f.editor, id(129))).toEqual(err("limit"));
+  p.close();
+  const resumed = f.open();
+  expect(resumed.propose(f.editor, "add", wire("wipo.int", id()))).toEqual(err("operation_cancelled"));
+  const won = value(resumed.propose(f.editor, "add", wire("wipo.int", id(129))));
+  expect(resumed.reconcile(f.editor, won.operationId)).toEqual({ ok: true, value: null });
+  expect(value(resumed.inspect(f.editor)).pending).toEqual(won);
+  expect(f.sink.read()).toBe(f.initial);
+  value(resumed.beginActivation(f.proxy, won.operationId));
+  value(resumed.publish(f.proxy, receipt(won)));
+  const observer = f.session({ role: "observer", epoch: EPOCH, generation: "chrome" });
+  const revision = won.target.policy.revision;
+  value(resumed.finalize(observer, { ...receipt(won), browserGeneration: "chrome",
+    policyDigest: hashBytes(f.sink.read()), positive: `${"a".repeat(32)}.e${EPOCH}.r${revision}.pac.invalid`,
+    negative: `${"b".repeat(32)}.e${EPOCH - 1}.r${revision}.pac.invalid`,
+  }));
+  expect(resumed.reconcile(f.editor, id())).toEqual(err("superseded"));
+  expect(resumed.propose(f.editor, "add", wire("who.int", id()))).toEqual(err("conflict"));
+  expect(resumed.reconcile(f.editor, id(1, EPOCH, revision))).toEqual(err("operation_cancelled"));
+});
+
 test("[domains C10] only fresh protected publication proof can re-enable a no-effect fenced enrollment", () => {
   const f = fixture(["wikipedia.org"]);
   const p = f.open();

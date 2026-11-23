@@ -3,7 +3,7 @@ import { createConnection, createServer, type Server, type Socket } from "node:n
 import { join } from "node:path";
 import { protectedDirectory } from "../src/domain-policy";
 import type { PublisherPrincipal } from "../src/domain-publisher";
-import { DOMAIN_COMMANDS, DOMAIN_REQUEST_LIMIT as REQUEST_LIMIT, DOMAIN_RESPONSE_LIMIT as RESPONSE_LIMIT, type DomainVerb } from "../src/domain-protocol";
+import { DOMAIN_COMMANDS, DOMAIN_COMMAND_UNAVAILABLE, DOMAIN_REQUEST_LIMIT as REQUEST_LIMIT, DOMAIN_RESPONSE_LIMIT as RESPONSE_LIMIT, type DomainVerb } from "../src/domain-protocol";
 
 const SESSION_MS = 3000;
 const CAP = 4;
@@ -14,7 +14,7 @@ const ACCEPTED = Buffer.from("+");
 type RemoteIdentity = Extract<PublisherPrincipal, { role: "editor" | "proxy" }>;
 export type RemoteOperation = DomainVerb;
 export const domainCommands = DOMAIN_COMMANDS;
-const verbs: readonly DomainVerb[] = ["inspect", "add", "remove", "begin", "receipt", "attest"];
+const verbs: readonly DomainVerb[] = ["inspect", "add", "remove", "begin", "receipt", "attest", "reconcile"];
 
 export interface RoleIngress {
   readonly directory: string;
@@ -70,7 +70,7 @@ export function createDomainIngress(dispatch: (identity: RemoteIdentity, verb: R
       const input = Buffer.concat(chunks, bytes);
       const verb = verbs[input[0]!];
       const valid = verb && (verb === "inspect" ? bytes === 1 : bytes > 1);
-      const allowed = verb === "inspect" || (identity.role === "editor" ? verb === "add" || verb === "remove" :
+      const allowed = verb === "inspect" || (identity.role === "editor" ? verb === "add" || verb === "remove" || verb === "reconcile" :
         verb === "begin" || verb === "receipt" || verb === "attest");
       let response: string;
       try {
@@ -143,9 +143,9 @@ export function createDomainIngress(dispatch: (identity: RemoteIdentity, verb: R
 // destination or select a role; only the root-owned forced argv names the socket.
 export async function forwardDomainCommand(
   path: string, command: string | undefined, stdin: AsyncIterable<Uint8Array>, emit: (data: Buffer) => Promise<void>,
-): Promise<boolean> {
+): Promise<number> {
   const index = verbs.findIndex((verb) => domainCommands[verb] === command);
-  if (index < 0) return false;
+  if (index < 0) return 1;
   const socket = createConnection({ path, allowHalfOpen: true });
   const done = Promise.withResolvers<boolean>();
   const deadline = setTimeout(() => { socket.destroy(); done.resolve(false); }, SESSION_MS);
@@ -155,6 +155,7 @@ export async function forwardDomainCommand(
   socket.once("error", () => done.resolve(false));
   socket.once("close", () => done.resolve(false));
   socket.once("end", () => {
+    if (bytes === 0) return done.resolve(false);
     void emit(Buffer.concat(response, bytes)).then(() => done.resolve(true), () => done.resolve(false));
   });
   socket.on("data", (first: Buffer) => {
@@ -181,5 +182,5 @@ export async function forwardDomainCommand(
     if (bytes > RESPONSE_LIMIT) socket.destroy();
     else response.push(chunk);
   });
-  try { return await done.promise; } finally { clearTimeout(deadline); socket.destroy(); }
+  try { return await done.promise ? 0 : DOMAIN_COMMAND_UNAVAILABLE; } finally { clearTimeout(deadline); socket.destroy(); }
 }

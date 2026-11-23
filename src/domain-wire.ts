@@ -6,12 +6,14 @@ import { DOMAIN_COMMANDS, DOMAIN_REQUEST_LIMIT, DOMAIN_RESPONSE_LIMIT, type Doma
 export { DOMAIN_COMMANDS, type DomainVerb } from "./domain-protocol";
 export type DomainRole = "editor" | "proxy";
 export type WireError = "unavailable" | "unsupported" | "unauthorized" | "not_ready" | "fenced" | "limit" | "conflict" |
-  "invalid_request" | "invalid_domain" | "duplicate_domain" | "domain_not_found" | "unknown_operation" | "receipt_mismatch" | "recovery_required";
+  "invalid_request" | "invalid_domain" | "duplicate_domain" | "domain_not_found" | "unknown_operation" | "receipt_mismatch" |
+  "recovery_required" | "operation_cancelled" | "superseded";
 export type WireResult<T = unknown> = { ok: true; value: T } | { ok: false; code: WireError };
 export interface ProposalBody { version: 1; operationId: string; expectedRevision: number; host: string }
 export interface DomainAttestation extends ProxyPreimage { enrollment: string; epoch: number; host: string }
 export interface DomainClient {
   inspect(): Promise<WireResult>;
+  reconcile(id: string): Promise<WireResult>;
   propose(kind: "add" | "remove", body: ProposalBody): Promise<WireResult>;
   begin(id: string): Promise<WireResult>;
   receipt(receipt: ProxyPublicationReceipt): Promise<WireResult>;
@@ -22,13 +24,14 @@ const utf8 = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true });
 const errors = {
   unavailable: true, unsupported: true, unauthorized: true, not_ready: true, fenced: true, limit: true, conflict: true,
   invalid_request: true, invalid_domain: true, duplicate_domain: true, domain_not_found: true, unknown_operation: true,
-  receipt_mismatch: true, recovery_required: true,
+  receipt_mismatch: true, recovery_required: true, operation_cancelled: true, superseded: true,
 } satisfies Record<WireError, true>;
 const unavailable = { ok: false, code: "unavailable" } as const;
 
 export function domainRoleClient(role: DomainRole, target: SshTarget, timeoutMs = 4000): DomainClient {
   async function request(verb: DomainVerb, message?: unknown): Promise<WireResult> {
-    if (verb !== "inspect" && (role === "editor" ? verb !== "add" && verb !== "remove" : verb === "add" || verb === "remove")) {
+    const edit = verb === "add" || verb === "remove" || verb === "reconcile";
+    if (verb !== "inspect" && edit !== (role === "editor")) {
       return { ok: false, code: "unauthorized" };
     }
     const body = message === undefined ? "" : JSON.stringify(message);
@@ -66,7 +69,6 @@ export function domainRoleClient(role: DomainRole, target: SshTarget, timeoutMs 
           channel.on("error", () => result.resolve(unavailable));
           channel.once("close", (code: number | undefined) => {
             if (stderr || bytes > DOMAIN_RESPONSE_LIMIT) return result.resolve(unavailable);
-            if (code === 1 && bytes === 0) return result.resolve({ ok: false, code: "unsupported" });
             if (code !== 0) return result.resolve(unavailable);
             try {
               const raw: unknown = JSON.parse(utf8.decode(Buffer.concat(chunks)));
@@ -87,6 +89,7 @@ export function domainRoleClient(role: DomainRole, target: SshTarget, timeoutMs 
     }
   }
   return { inspect: () => request("inspect"), propose: request, begin: (id) => request("begin", id),
+    reconcile: (id) => request("reconcile", id),
     receipt: (proof) => request("receipt", proof), attest: (proof) => request("attest", proof) };
 }
 
@@ -94,7 +97,7 @@ export const domainUInt = (value: unknown): value is number => typeof value === 
 export const domainTag = (value: unknown): value is string => typeof value === "string" && /^[A-Za-z0-9_-]{1,64}$/.test(value);
 export const domainDigest = (value: unknown): value is string => typeof value === "string" && /^[0-9a-f]{64}$/.test(value);
 export const operationIdFormat = (id: unknown): id is string => typeof id === "string" && /^\d{1,16}\.\d{1,16}\.[0-9a-f]{32}$/.test(id);
-export const proofHost = (host: unknown): host is string => typeof host === "string" && /^[0-9a-f]{32}\.(?:live|e\d{1,16}\.r\d{1,16})\.pac\.invalid$/.test(host);
+export const proofHost = (host: unknown): host is string => typeof host === "string" && /^[0-9a-f]{32}\.(?:live|barrier|e\d{1,16}\.r\d{1,16})\.pac\.invalid$/.test(host);
 export function wireObject(value: unknown): Record<string, unknown> | null {
   return value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : null;
 }

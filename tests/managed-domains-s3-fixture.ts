@@ -10,6 +10,8 @@ import { createDomainIngress, domainCommands, type RemoteOperation, type RoleIng
 import { openDomainAuthority, type LiveProxyRevision } from "../server/domain-authority";
 import { createDomainObserver, type EnrolledChrome } from "../server/domain-observer";
 import { DOMAIN_POLICY_FILE, fileDomainPolicySink, hashBytes, renderDomainPolicy } from "../src/domain-policy";
+import { createProofOutbox } from "../src/domain-proof-outbox";
+import { DOMAIN_COMMAND_UNAVAILABLE } from "../src/domain-protocol";
 import type { PublisherOperation, ProxyPublicationReceipt } from "../src/domain-publisher";
 import { domainRoleClient, proofHost } from "../src/domain-wire";
 import { parseManagedDomainSnapshot } from "../src/managed-domains";
@@ -189,6 +191,7 @@ export async function runS3Proof(mode: "ssh" | "chrome") {
     let watch: { names: Set<string>; seen: Set<string> } | undefined;
     let resolves = 0;
     let sendProof = proxyClient("st_receipt");
+    const proofs = createProofOutbox((proof) => sendProof.attest(proof));
     let receiptEpoch = 1;
     let suppressCanary = false;
     const proxy = createManagedProxy({
@@ -196,9 +199,9 @@ export async function runS3Proof(mode: "ssh" | "chrome") {
       dial: async () => { throw new Error("no real upstream in isolated proof"); },
       log: ({ host, status }) => {
         if (status !== 403 || !host) return;
-        if (watch?.names.has(host)) watch.seen.add(host);
+        if (watch?.names.has(host)) { watch.seen.add(host); return; }
         if (mode === "chrome" && live && proofHost(host) && (!suppressCanary || host.includes(".live."))) {
-          void sendProof.attest({ ...live, host, enrollment: enroll, epoch: receiptEpoch });
+          proofs.observe({ ...live, host, enrollment: enroll, epoch: receiptEpoch });
         }
       },
     }, snapshot(0, initial));
@@ -218,7 +221,12 @@ export async function runS3Proof(mode: "ssh" | "chrome") {
         watchCanaries(positive, negative) {
           const probe = { names: new Set([positive, negative]), seen: new Set<string>() };
           watch = probe;
-          return { seen: (host) => !suppressCanary && probe.seen.has(host), close: () => { watch = undefined; } };
+          return {
+            positiveSeen: () => !suppressCanary && probe.seen.has(positive),
+            negativeClear: () => !probe.seen.has(negative),
+            valid: () => !probe.seen.has(negative),
+            close: () => { watch = undefined; },
+          };
         },
       };
     }
@@ -280,6 +288,15 @@ export async function runS3Proof(mode: "ssh" | "chrome") {
       const payload = { version: 1, operationId: operationId(1, 0, 1), expectedRevision: 0, host: "wikipedia.org" };
       assert.deepEqual(await request(receiptClient, "remove", payload), { ok: false, code: "unauthorized" });
       assert.deepEqual(await request(editor, "begin", payload.operationId), { ok: false, code: "unauthorized" });
+      assert.deepEqual(await request(receiptClient, "reconcile", payload.operationId), { ok: false, code: "unauthorized" });
+      const late = await exec(editor, domainCommands.remove);
+      const lateResult = collect(late);
+      await until(() => authority.admittedCount() === 1);
+      assert.deepEqual(await request(editor, "reconcile", payload.operationId), { ok: false, code: "operation_cancelled" });
+      late.end(JSON.stringify(payload));
+      const denied = await lateResult;
+      assert.equal(denied.code, 0);
+      assert.deepEqual(JSON.parse(denied.stdout), { ok: false, code: "operation_cancelled" });
       const blockers = await Promise.all([connect("st_editor"), connect("st_receipt"), connect("st_editor"), connect("st_receipt")]);
       clients.push(...blockers);
       const held = await Promise.all(blockers.map((client) => exec(client, domainCommands.remove)));
@@ -352,7 +369,10 @@ export async function runS3Proof(mode: "ssh" | "chrome") {
     await retired;
     await apply(uncertain);
     await assert.rejects(request(receiptClient, "receipt", ack(uncertain, 1)));
-    await assert.rejects(request(editor, "inspect"));
+    const retiredInspect = await exec(editor, domainCommands.inspect);
+    const retiredOutput = collect(retiredInspect);
+    retiredInspect.end();
+    assert.deepEqual(await retiredOutput, { code: DOMAIN_COMMAND_UNAVAILABLE, stdout: "" });
     assert.equal(value(authority.inspectLocal()).recovery?.operationId, lost.operationId);
     const recoveryId = operationId(2, 1, 3);
     receiptEpoch = 2;

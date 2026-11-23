@@ -1,5 +1,6 @@
 import { hashBytes } from "./domain-policy";
 import { readDomainLocal, writeDomainLocal, type ManagedEnrollment } from "./domain-enrollment";
+import { createProofOutbox } from "./domain-proof-outbox";
 import { domainDigest, domainUInt, operationIdFormat, proofHost, wireObject, type DomainClient } from "./domain-wire";
 import { normalizeManagedDomain, parseManagedDomainSnapshot, type ManagedDomainSnapshot } from "./managed-domains";
 import { createManagedProxy, type Dialer } from "./proxy";
@@ -169,8 +170,7 @@ export function createManagedRun(options: ManagedRunOptions) {
   let busy: Promise<void> | undefined;
   let timer: ReturnType<typeof setTimeout> | undefined;
   let acknowledged: { receipt: ProxyPublicationReceipt; incarnation: number } | undefined;
-  let attestBusy: Promise<unknown> | undefined;
-  const canaries = new Set<string>();
+  const canaries = createProofOutbox((proof) => client.attest(proof));
   const bound = { version: 1, binding: enrollment.binding, enrollment: enrollment.enrollment, epoch: enrollment.epoch } as const;
   const sameConnection = (id: number) => connected && !stopping && incarnation === id;
   function recordLive(snapshot: DomainRevision | null, remainingMs = 0) {
@@ -184,20 +184,13 @@ export function createManagedRun(options: ManagedRunOptions) {
     ...bound, active: revision(snapshot), applying: applying && revision(applying),
   });
 
-  function flushCanaries() {
-    if (attestBusy || !connected || stopping || settling || !canaries.size) return;
-    const host = canaries.values().next().value!;
-    canaries.delete(host);
-    attestBusy = client.attest({ enrollment: enrollment.enrollment, epoch: enrollment.epoch, generation: enrollment.proxyGeneration,
-      revision: active.revision, domainsDigest: digest(active), host,
-    }).catch(() => {}).finally(() => { attestBusy = undefined; flushCanaries(); });
-  }
   const proxy = createManagedProxy({
     resolve: options.resolve, dial: options.dial, trafficReady: () => allow && !stopping,
     log: ({ status, host }) => {
-      if (status !== 403 || !proofHost(host) || !connected || stopping || settling || canaries.size >= 3) return;
-      canaries.add(host);
-      flushCanaries();
+      if (status !== 403 || !proofHost(host) || !connected || stopping) return;
+      if (settling) { canaries.uncertain(); return; }
+      canaries.observe({ enrollment: enrollment.enrollment, epoch: enrollment.epoch, generation: enrollment.proxyGeneration,
+        revision: active.revision, domainsDigest: digest(active), host });
     },
   }, active);
 
@@ -243,7 +236,7 @@ export function createManagedRun(options: ManagedRunOptions) {
         await client.receipt(acknowledged.receipt);
       }
     } catch { interrupted = true; allow = false; }
-    finally { settling = false; flushCanaries(); }
+    finally { settling = false; }
   }
 
   function kick() {
@@ -275,7 +268,7 @@ export function createManagedRun(options: ManagedRunOptions) {
       connected = false;
       clearTimeout(timer);
       canaries.clear();
-      await Promise.all([busy, attestBusy]);
+      await Promise.all([busy, canaries.settled()]);
       try { recordLive(null); } catch {}
     },
   };

@@ -44,7 +44,7 @@ export function createForwardAttestation(enrollment: string, port: number, owner
     };
     const timer = setTimeout(close, NONCE_MS);
     probes.set(host, probe);
-    return { promise, close, owner };
+    return { promise, close, owner, expires: probe.expires, armed: () => probes.get(host) === probe };
   }
 
   function attest(identity: { enrollment: string; epoch: number; generation: string }, value: unknown): boolean {
@@ -96,11 +96,27 @@ export function createForwardAttestation(enrollment: string, port: number, owner
 
   function watch(positive: string, negative: string, scope: ForwardScope, expected: ProxyPreimage) {
     const currentProbe = arm(positive, scope, expected);
-    const wrongProbe = arm(negative, scope, expected);
-    let wrongSeen = false;
-    void wrongProbe.promise.then((claim) => { wrongSeen = claim !== null; });
+    let wrongProbe;
+    try { wrongProbe = arm(negative, scope, expected); }
+    catch (error) { currentProbe.close(); throw error; }
+    let ordered = false;
+    // A consumed or invalidated negative probe can never certify absence.
+    const valid = () => ordered && wrongProbe.armed() && ownership() === wrongProbe.owner && now() < wrongProbe.expires;
     return {
-      seen: (host: string) => host === positive ? currentProbe.promise.then((claim) => claim !== null) : wrongSeen,
+      positiveSeen: async () => (await currentProbe.promise) !== null,
+      async negativeClear() {
+        if (!wrongProbe.armed() || ownership() !== wrongProbe.owner || now() >= wrongProbe.expires) return false;
+        const host = `${randomBytes(16).toString("hex")}.barrier.pac.invalid`;
+        const barrier = arm(host, scope, expected);
+        try {
+          // After the observed browser navigation terminated, drain the same home
+          // receipt FIFO through a fresh marker on the verified forward.
+          const [refused, confirmed] = await Promise.all([connectCanary(host), barrier.promise]);
+          ordered = refused && confirmed !== null && barrier.owner === wrongProbe.owner;
+          return valid();
+        } finally { barrier.close(); }
+      },
+      valid,
       close() { currentProbe.close(); wrongProbe.close(); },
     };
   }

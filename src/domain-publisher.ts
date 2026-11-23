@@ -97,12 +97,14 @@ type JournalState = {
   recovery: Recovery | null;
   history: Archived[];
   lastBrowserProof?: BrowserFinalization;
+  cancelledUnadmitted?: string[];
 };
 
 export type PublisherView = Pick<JournalState, "epoch" | "proxyGeneration" | "editingEnabled" | "lastProven" | "lastBrowserProof" | "recordedPolicy" | "pending" | "recovery" | "history">;
 
 type Failure = "unauthorized" | "fenced" | "invalid_request" | "invalid_domain" | "duplicate_domain" | "domain_not_found"
-  | "limit" | "conflict" | "recovery_required" | "not_ready" | "unknown_operation" | "receipt_mismatch" | "unavailable";
+  | "limit" | "conflict" | "recovery_required" | "not_ready" | "unknown_operation" | "receipt_mismatch" | "unavailable"
+  | "operation_cancelled" | "superseded";
 type Failed = { ok: false; code: Failure };
 export type PublisherResult<T> = { ok: true; value: T } | Failed;
 const fail = (code: Failure): Failed => ({ ok: false, code });
@@ -251,6 +253,30 @@ export function openDomainPublisher<Session>(options: PublisherOptions<Session>)
     }));
   }
 
+  function reconcile(session: Session, id: unknown): PublisherResult<null> {
+    return store.transact((state, save) => {
+      const denied = authorize(state, session, "editor");
+      if (denied) return denied;
+      if (typeof id !== "string" || id.length > 66) return fail("invalid_request");
+      const expected = Number(id.split(".", 3)[1]);
+      if (!uint(expected) || !operationId(id, state.epoch, expected)) return fail("invalid_request");
+      const history = state.history.find((item) => item.operationId === id);
+      if (history?.disposition === "cancelled") return fail("operation_cancelled");
+      if (state.pending?.operationId === id || history) return ok(null);
+      const revision = state.lastProven.policy.revision;
+      if (expected < revision) return fail("superseded");
+      if (expected !== revision) return fail("invalid_request");
+      if (state.recovery || !state.editingEnabled) return fail("recovery_required");
+      const cancelled = state.cancelledUnadmitted ??= [];
+      if (cancelled.includes(id)) return fail("operation_cancelled");
+      // Never evict a tombstone while its revision can still admit proposals.
+      if (cancelled.length >= 128) return fail("limit");
+      cancelled.push(id);
+      save();
+      return fail("operation_cancelled");
+    });
+  }
+
   function propose(session: Session, kind: Edit, bytes: Uint8Array): PublisherResult<PublisherOperation> {
     return store.transact((state, save) => {
       const denied = authorize(state, session, "editor");
@@ -265,6 +291,7 @@ export function openDomainPublisher<Session>(options: PublisherOptions<Session>)
       const result = decodeProposal(bytes, state.epoch);
       if (!result.ok) return result;
       const proposal = result.value;
+      if (state.cancelledUnadmitted?.includes(proposal.operationId)) return fail("operation_cancelled");
       const pending = state.pending;
       if (pending) {
         return pending.operationId === proposal.operationId && pending.intent.kind === kind && pending.intent.proposal.host === proposal.host
@@ -389,6 +416,7 @@ export function openDomainPublisher<Session>(options: PublisherOptions<Session>)
       state.history.push({ operationId: pending.operationId, revision: pending.target.policy.revision, disposition: "applied" });
       if (state.history.length > MAX_HISTORY) state.history.splice(0, state.history.length - MAX_HISTORY);
       state.lastProven = pending.target;
+      delete state.cancelledUnadmitted;
       state.lastBrowserProof = proof;
       state.pending = null;
       save();
@@ -421,6 +449,7 @@ export function openDomainPublisher<Session>(options: PublisherOptions<Session>)
         state.pending = null;
       }
       state.epoch++;
+      delete state.cancelledUnadmitted;
       state.editingEnabled = false;
       save();
       return ok(state.epoch);
@@ -473,5 +502,5 @@ export function openDomainPublisher<Session>(options: PublisherOptions<Session>)
     });
   }
 
-  return { inspect, propose, beginActivation, publish, finalize, disable, authorizeRecovery, close: store.close };
+  return { inspect, propose, reconcile, beginActivation, publish, finalize, disable, authorizeRecovery, close: store.close };
 }

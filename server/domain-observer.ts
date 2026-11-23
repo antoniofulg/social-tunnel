@@ -2,6 +2,7 @@ import { randomBytes } from "node:crypto";
 import type { Readable, Writable } from "node:stream";
 import { setTimeout as sleep } from "node:timers/promises";
 import { hashBytes, type PolicyRevision } from "../src/domain-policy";
+import { withTimeout } from "../src/proxy";
 
 const PROOF_MS = 30000;
 
@@ -54,7 +55,12 @@ export interface EnrolledChrome {
   // between reads. Null means the process/profile/forward is not exclusively owned.
   ownership(): number | null;
   // Arms only the two generated synthetic names at a protected refusal observer, with no payload access.
-  watchCanaries(positive: string, negative: string): { seen(host: string): boolean | Promise<boolean>; close(): void };
+  watchCanaries(positive: string, negative: string): {
+    positiveSeen(): boolean | Promise<boolean>;
+    negativeClear(): boolean | Promise<boolean>;
+    valid(): boolean;
+    close(): void;
+  };
 }
 
 export interface BrowserEvidence {
@@ -177,8 +183,12 @@ export function createDomainObserver(chrome: EnrolledChrome, now = () => perform
       pages.push(witness);
       if (page.browserContextId !== witness.browserContextId) return null;
       watch = watchCanaries(positive, negative);
-      if (await navigate(`https://${positive}/`, witness) !== "net::ERR_TUNNEL_CONNECTION_FAILED" || !(await watch.seen(positive))) return null;
-      if (await navigate(`https://${negative}/`, witness) !== "net::ERR_NAME_NOT_RESOLVED" || await watch.seen(negative)) return null;
+      if (await navigate(`https://${positive}/`, witness) !== "net::ERR_TUNNEL_CONNECTION_FAILED" ||
+          !(await withTimeout(Promise.resolve(watch.positiveSeen()), CDP_TIMEOUT))) return null;
+      if (await navigate(`https://${negative}/`, witness) !== "net::ERR_NAME_NOT_RESOLVED") return null;
+      if ((await call("Target.closeTarget", { targetId: witness.targetId })).success !== true) return null;
+      pages.pop();
+      if (!(await withTimeout(Promise.resolve(watch.negativeClear()), CDP_TIMEOUT))) return null;
       // Commit only against effective browser policy read *after* the paired visits.
       // The protected callback is synchronous so no other request can race the CAS.
       if (!(await effective(page))) return null;
@@ -186,7 +196,7 @@ export function createDomainObserver(chrome: EnrolledChrome, now = () => perform
         generation: `${chrome.generation}.${owner}`, ownership: owner, expiresAt,
         policyDigest: hashBytes(expectedBytes), positive, negative,
       };
-      return valid(evidence) && (!accept || accept(evidence)) ? evidence : null;
+      return watch.valid() && valid(evidence) && (!accept || accept(evidence)) ? evidence : null;
     } catch { return null; }
     finally {
       watch?.close();
