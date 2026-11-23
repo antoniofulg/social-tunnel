@@ -3,7 +3,7 @@
 Profile: ui
 Risk: C2, C3, C4, C5, C6, C7, C8, C9, C10, C11 - authorization, fail-closed routing, publication and recovery.
 Build: `load-gate wait && taskpolicy -b nice -n 10 bun run typecheck`
-Run core: `env -u CLAUDECODE taskpolicy -b nice -n 10 bun test tests/managed-domains.test.ts`
+Run core: `set -e; report=$(mktemp -t managed-domains-junit); trap 'rm -f "$report"' EXIT; env -u CI -u CLAUDECODE taskpolicy -b nice -n 10 bun test --reporter=junit --reporter-outfile="$report" tests/managed-domains.test.ts; python3 -c 'import sys, xml.etree.ElementTree as x; print("\n".join("(pass) " + c.attrib["name"] for c in x.parse(sys.argv[1]).iter("testcase") if not any(e.tag in {"failure","error","skipped"} for e in c)))' "$report"`
 Run UI: `cd app && load-gate wait && taskpolicy -b nice -n 10 bunx --no-install vitest run src/settings/DomainsTab.test.tsx --reporter=verbose --maxWorkers=2`
 Run native: `cd app/src-tauri && load-gate wait && taskpolicy -b nice -n 10 cargo test --offline --locked -j 2 --lib --test domains --test policy --test sidecar -- --test-threads=2`
 Plan: `.specs/features/domain-management/plan.md`
