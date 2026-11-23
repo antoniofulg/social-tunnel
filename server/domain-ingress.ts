@@ -152,10 +152,14 @@ export async function forwardDomainCommand(
   const response: Buffer[] = [];
   let bytes = 0;
   let admitted = false;
-  socket.once("error", () => done.resolve(false));
-  socket.once("close", () => done.resolve(false));
+  const disconnected = () => done.resolve(false);
+  socket.once("error", disconnected);
+  socket.once("close", disconnected);
   socket.once("end", () => {
-    if (bytes === 0) return done.resolve(false);
+    if (bytes === 0 || bytes > RESPONSE_LIMIT) return done.resolve(false);
+    // Once the complete bounded reply has arrived, Unix socket close is normal.
+    // The deadline still bounds draining stdout, which can lag on large SSH replies.
+    socket.off("close", disconnected);
     void emit(Buffer.concat(response, bytes)).then(() => done.resolve(true), () => done.resolve(false));
   });
   socket.on("data", (first: Buffer) => {

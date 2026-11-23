@@ -8,7 +8,7 @@ import { domainAction } from "../src/domain-cli";
 import { loadConfig } from "../src/config";
 import { captureTrayEnrollment, enrollmentBinding, managedKeyFingerprint, readDomainEnrollment, readDomainRole, writeDomainLocal } from "../src/domain-enrollment";
 import { dialManagedAddress, resolveManagedHost } from "../src/domain-network";
-import { DOMAIN_COMMAND_UNAVAILABLE } from "../src/domain-protocol";
+import { DOMAIN_COMMAND_UNAVAILABLE, DOMAIN_RESPONSE_LIMIT } from "../src/domain-protocol";
 import { domainSubmission } from "../src/domain-submission";
 import { hashBytes } from "../src/domain-policy";
 import type { PublisherOperation, ProxyPublicationReceipt } from "../src/domain-publisher";
@@ -17,7 +17,8 @@ import { DOMAIN_COMMANDS, domainRoleClient, type DomainAttestation, type DomainV
 import { fingerprint } from "../src/tunnel";
 import { writeState } from "../src/state";
 import { createForwardAttestation } from "../server/forward-attestation";
-import { cli, keyPair, spawnCli, testIo, until, writeConfig } from "./helpers";
+import { forwardDomainCommand } from "../server/domain-ingress";
+import { cli, keyPair, spawnCli, testIo, tmp, until, writeConfig } from "./helpers";
 import { pair } from "./proxy-harness";
 import { freePort } from "./ssh-server";
 
@@ -693,4 +694,36 @@ test("[domains C2] only explicit unsupported returns setup required for a recogn
     errorCode = "unsupported";
     expect((await runCli(f.path, ["domains", "list"])).payload.state).toBe("setup_required");
   } finally { await f.close(); }
+});
+
+test("[domains C9] a full role reply drains stdout after the Unix socket closes", async () => {
+  const path = join(tmp(), "role.sock");
+  const text = '{"ok":true,"value":"';
+  const reply = text + "x".repeat(DOMAIN_RESPONSE_LIMIT - text.length - 3) + '"}\n';
+  const closed = Promise.withResolvers<void>();
+  const started = Promise.withResolvers<void>();
+  const drained = Promise.withResolvers<void>();
+  const server = net.createServer({ allowHalfOpen: true }, (socket) => {
+    socket.once("close", () => closed.resolve());
+    socket.once("end", () => socket.end(reply));
+    socket.resume();
+    socket.write("+");
+  });
+  await new Promise<void>((resolve) => server.listen(path, resolve));
+  try {
+    let bytes = 0;
+    const result = forwardDomainCommand(path, DOMAIN_COMMANDS.inspect, (async function* () {})(), async (data) => {
+      bytes = data.length;
+      started.resolve();
+      await drained.promise;
+    });
+    await Promise.all([closed.promise, started.promise]);
+    await new Promise<void>((resolve) => setTimeout(resolve, 10));
+    drained.resolve();
+    expect(await result).toBe(0);
+    expect(bytes).toBe(DOMAIN_RESPONSE_LIMIT);
+  } finally {
+    drained.resolve();
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+  }
 });
