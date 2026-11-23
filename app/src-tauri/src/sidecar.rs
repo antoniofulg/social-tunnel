@@ -186,9 +186,19 @@ fn run_process(
                 break child.wait().ok();
             }
             Ok(None) => std::thread::sleep(Duration::from_millis(20)),
-            Err(_) => break None,
+            Err(_) => {
+                let _ = child.kill();
+                break child.wait().ok();
+            }
         }
     };
+    while !reader.is_finished() {
+        if started.elapsed() >= timeout || cancel.is_some_and(|c| c.load(Ordering::SeqCst)) {
+            // The child is already reaped. Do not wait for a different process holding stdout.
+            return CallOutput { timed_out: true, ..CallOutput::default() };
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    }
     let (stdout, overflow) = reader.join().unwrap_or_default();
     CallOutput { exit: status.and_then(|s| s.code()), stdout, timed_out, overflow }
 }

@@ -1,6 +1,7 @@
 //! social-tunnel menu bar app. The CLI is the only tunnel, status and check implementation; this
 //! crate runs it as a sidecar and draws its state (AGENTS.md).
 
+mod domain_calls;
 pub mod doctor;
 pub mod domains;
 pub mod driver;
@@ -13,6 +14,7 @@ pub mod status;
 pub mod supervisor;
 
 use driver::{Driver, Icon, PollGate, Snapshot, TraySink, FRAME_MS, POLL_MS};
+use domain_calls::{ConfigStamp, DomainCalls};
 use doctor::{Clipboard, Doctors};
 use domains::{DomainCall, DomainError, DomainView, ErrorCode};
 use model::{Doctor, Entry, Inputs, TrayImage, Tracker};
@@ -87,9 +89,9 @@ struct Core {
 struct AppState {
     core: Mutex<Core>,
     gate: PollGate,
-    domain_gate: PollGate,
+    domain_calls: DomainCalls,
     doctors: Doctors,
-    /// Set by Quit: kills running status and doctor calls (criterion 46).
+    /// Set by Quit: cancels the app's short-lived sidecar calls (criterion 46).
     quitting: Arc<AtomicBool>,
     sidecar: PathBuf,
     /// Bumped to stop the running frame timer.
@@ -173,11 +175,18 @@ fn poll(app: &AppHandle) {
         Ok(out) => read_status(&out, |path| Path::new(path).try_exists().unwrap_or(false)),
         Err(_) => StatusRead::Unreadable,
     };
+    let config_path = match &read {
+        StatusRead::Run(run) => run.config_path.as_deref(),
+        StatusRead::ConfigInvalid { config_path, .. } => Some(config_path.as_str()),
+        StatusRead::Unreadable => None,
+    };
+    let config = config_path.and_then(|path| ConfigStamp::read(path).ok());
     let now = now_ms();
     let mut core = state.core.lock().unwrap();
     if state.quitting.load(Ordering::SeqCst) {
         return;
     }
+    state.domain_calls.observe(config);
     core.tracker.observe(&read, now);
     // The spawn decision comes before the tray is judged (criterion 50).
     let Core { sup, spawner, .. } = &mut *core;
@@ -214,6 +223,7 @@ fn redraw(app: &AppHandle, core: &mut Core, now: i64) -> TrayImage {
     let mut snapshot = Snapshot::new(&model, &core.status, doctor.as_ref(), core.sup.child_pid());
     snapshot.reduce_transparency = reduce_transparency();
     snapshot.checking = inputs.checking;
+    snapshot.domains_scope = state.domain_calls.scope();
     core.driver.apply(&model, snapshot, reduce_motion(), &mut TauriSink { app });
     model.image
 }
@@ -266,6 +276,7 @@ fn show_settings(app: &AppHandle, view: settings::View) {
 fn reconnect(app: &AppHandle) {
     let state = app.state::<AppState>();
     let mut core = state.core.lock().unwrap();
+    if state.quitting.load(Ordering::SeqCst) { return; }
     let Core { sup, spawner, .. } = &mut *core;
     sup.reconnect(now_ms(), spawner);
     redraw(app, &mut core, now_ms());
@@ -273,19 +284,25 @@ fn reconnect(app: &AppHandle) {
 
 fn quit(app: &AppHandle) {
     let state = app.state::<AppState>();
-    supervisor::begin_quit(&state.quitting, &mut state.core.lock().unwrap().sup, now_ms());
+    state.domain_calls.close(&state.quitting);
 }
 
 /// Reaps the child, fires restarts and the stop deadline, and exits once Quit has finished.
 fn supervise(app: &AppHandle) {
+    let mut closing = false;
     loop {
         std::thread::sleep(Duration::from_millis(TICK_MS));
         let state = app.state::<AppState>();
         let mut core = state.core.lock().unwrap();
         let Core { sup, spawner, .. } = &mut *core;
-        let tick = sup.tick(now_ms(), spawner);
+        let now = now_ms();
+        if !closing && state.quitting.load(Ordering::SeqCst) {
+            sup.quit(now);
+            closing = true;
+        }
+        let tick = sup.tick(now, spawner);
         drop(core);
-        if tick.exit {
+        if tick.exit && state.domain_calls.drained() {
             app.exit(0);
             return;
         }
@@ -345,14 +362,12 @@ fn domain_sender(window: &tauri::WebviewWindow) -> Result<(), DomainError> {
 }
 
 async fn call_domains(app: AppHandle, command: DomainCall) -> Result<DomainView, DomainError> {
+    let ticket = app.state::<AppState>().domain_calls.ticket()?;
     tauri::async_runtime::spawn_blocking(move || {
         let state = app.state::<AppState>();
-        if !state.domain_gate.try_start() {
-            return Err(ErrorCode::Conflict.error());
-        }
-        let result = domains::run(&CancellableRunner(state.quitting.clone()), &state.sidecar, command);
-        state.domain_gate.finish();
-        result
+        state.domain_calls.run(ticket, matches!(command, DomainCall::List), || {
+            domains::run(&CancellableRunner(state.quitting.clone()), &state.sidecar, command)
+        })
     }).await.map_err(|_| ErrorCode::Internal.error())?
 }
 
@@ -409,7 +424,7 @@ pub fn run() {
                     open_at_login: login::read(&login::Autostart(app.handle())),
                 }),
                 gate: PollGate::default(),
-                domain_gate: PollGate::default(),
+                domain_calls: DomainCalls::default(),
                 doctors: Doctors::default(),
                 quitting: Arc::new(AtomicBool::new(false)),
                 sidecar: program,

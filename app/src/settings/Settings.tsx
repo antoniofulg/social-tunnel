@@ -43,37 +43,35 @@ export function Settings({ initialView = null }: { initialView?: View | null }) 
 
   const surface = snapshot?.reduceTransparency ? "solid" : "glass";
 
-  if (view === "setup") {
-    return (
-      <div className="surface h-screen overflow-y-auto overscroll-none px-[22px] py-4" data-surface={surface}>
-        <SetUp snapshot={snapshot} busy={busy} onCheck={onCheck} />
-      </div>
-    );
-  }
-
   const words = snapshot === null || busy ? allWords("Checking…") : stopWords(snapshot.doctor, snapshot.statusUnreadable);
   const allOk = !busy && snapshot?.doctor != null && !snapshot.statusUnreadable && snapshot.doctor.hops.length > 0 && snapshot.doctor.hops.every((h) => h.ok);
   const tab: Tab = TABS.includes(view as Tab) ? (view as Tab) : "status";
+  const setup = view === "setup";
 
   return (
-    <div className="surface flex h-screen flex-col" data-surface={surface}>
-      <header className="border-b-[.5px] border-hairline px-[22px] pt-3 pb-3">
-        <RouteStrip words={words} />
-        <p className="m-0 mt-2.5 h-4 text-center text-xs text-text-2">{allOk && "All checks OK."}</p>
-      </header>
-      <div className="flex justify-center px-[22px] py-3">
-        <Tabs selected={tab} onSelect={setRequested} />
-      </div>
+    <div className={setup ? "surface h-screen overflow-y-auto overscroll-none px-[22px] py-4" : "surface flex h-screen flex-col"} data-surface={surface}>
+      {setup ? <SetUp snapshot={snapshot} busy={busy} onCheck={onCheck} /> : (
+        <>
+          <header className="border-b-[.5px] border-hairline px-[22px] pt-3 pb-3">
+            <RouteStrip words={words} />
+            <p className="m-0 mt-2.5 h-4 text-center text-xs text-text-2">{allOk && "All checks OK."}</p>
+          </header>
+          <div className="flex justify-center px-[22px] py-3">
+            <Tabs selected={tab} onSelect={setRequested} />
+          </div>
+        </>
+      )}
       <main
         role="tabpanel"
         id={panelId(tab)}
         aria-labelledby={tabId(tab)}
+        hidden={setup}
         className="min-h-0 flex-1 overflow-y-auto overscroll-none px-[22px] pb-[18px]"
       >
-        {tab === "status" && <StatusTab snapshot={snapshot} busy={busy} onCheck={onCheck} />}
-        {tab === "server" && <ServerTab snapshot={snapshot} />}
-        {tab === "domains" && <DomainsTab key={snapshot?.configPath ?? ""} snapshot={snapshot} />}
-        {tab === "general" && <GeneralTab snapshot={snapshot} />}
+        {!setup && tab === "status" && <StatusTab snapshot={snapshot} busy={busy} onCheck={onCheck} />}
+        {!setup && tab === "server" && <ServerTab snapshot={snapshot} />}
+        <DomainsTab key={snapshot?.domainsScope ?? 0} snapshot={snapshot} visible={!setup && tab === "domains"} />
+        {!setup && tab === "general" && <GeneralTab snapshot={snapshot} />}
       </main>
     </div>
   );

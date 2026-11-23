@@ -1,9 +1,10 @@
 import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { expect, it, vi } from "vitest";
-import { snapshot } from "../fixtures";
+import { snapshot, unreadable } from "../fixtures";
 import { installIpc } from "../test-support";
 import type { DomainRevision, DomainView } from "../types";
 import { DomainsTab } from "./DomainsTab";
+import { Settings } from "./Settings";
 
 const base: DomainRevision = { revision: 7, domains: ["example.com", "www.example.com"] };
 const id = "1.7.0123456789abcdef0123456789abcdef";
@@ -70,7 +71,8 @@ it("[domains C12] confirms a named removal, keeps covered routes clear, and supp
   const child = screen.getByRole("button", { name: "Remove www.example.com" });
   fireEvent.click(child);
   const confirmation = screen.getByRole("group", { name: "Remove www.example.com?" });
-  expect(confirmation.textContent).toContain("because example.com covers it");
+  expect(confirmation.textContent).toContain("the enrolled browser will still select the tunnel because example.com matches this domain");
+  expect(confirmation.textContent).toContain("The home proxy may still block the connection.");
   const cancel = within(confirmation).getByRole("button", { name: "Cancel" });
   expect(cancel).toBe(document.activeElement);
   fireEvent.keyDown(cancel, { key: "Escape" });
@@ -123,4 +125,115 @@ it("[domains C12] bounds pending refreshes and offers manual Retry of only the s
     expect(ipc.calls("retry_domain_edit").at(-1)).toEqual({ operationId: id });
     expect(ipc.calls("edit_domain")).toHaveLength(1);
   } finally { vi.useRealTimers(); }
+});
+
+it("[domains C12] preserves the exact pending ID and historical rows across tab switches and unreadable status", async () => {
+  const edit = Promise.withResolvers<DomainView>();
+  const ipc = installIpc({ snapshot: managed(), answers: {
+    get_domains: () => ready(), edit_domain: () => edit.promise, retry_domain_edit: () => unknown,
+  } });
+  render(<Settings initialView="domains" />);
+  await waitFor(() => expect(field().readOnly).toBe(false));
+  fireEvent.change(field(), { target: { value: "wipo.int" } });
+  fireEvent.submit(field().form!);
+  fireEvent.click(screen.getByRole("tab", { name: "General" }));
+  ipc.emit("snapshot", unreadable());
+  await act(async () => edit.resolve(pending));
+  ipc.emit("snapshot", managed(null));
+  vi.useFakeTimers();
+  try {
+    await act(async () => vi.advanceTimersByTimeAsync(30_000));
+    expect(ipc.calls("get_domains")).toHaveLength(1);
+    expect(ipc.calls("retry_domain_edit")).toEqual([]);
+    ipc.emit("snapshot", unreadable());
+    fireEvent.click(screen.getByRole("tab", { name: "Domains" }));
+    expect(screen.getByText("Domain routing is unavailable.")).toBeTruthy();
+    expect(within(screen.getByRole("list", { name: "Last verified domains" })).getByText("www.example.com")).toBeTruthy();
+    expect(screen.queryByRole("list", { name: "Domains that use home internet" })).toBeNull();
+    expect(screen.getByRole("button", { name: "Retry" }).getAttribute("aria-disabled")).toBe("true");
+    ipc.emit("snapshot", managed(null));
+    await act(async () => {});
+    expect(ipc.calls("retry_domain_edit")).toEqual([{ operationId: id }]);
+    expect(screen.getByText("wipo.int")).toBeTruthy();
+    expect(ipc.calls("edit_domain")).toHaveLength(1);
+  } finally { vi.useRealTimers(); }
+});
+
+it("[domains C12] reopens by reading the durable CLI intent before offering the same-ID Retry", async () => {
+  let saved = ready();
+  const ipc = installIpc({ snapshot: managed(), answers: {
+    get_domains: () => saved,
+    edit_domain: () => { saved = { ...unknown, pending: pending.pending }; return saved; },
+    retry_domain_edit: () => Promise.reject({ code: "operation_cancelled" }),
+  } });
+  const first = render(<Settings initialView="domains" />);
+  await waitFor(() => expect(field().readOnly).toBe(false));
+  fireEvent.change(field(), { target: { value: "wipo.int" } });
+  fireEvent.submit(field().form!);
+  await screen.findByRole("button", { name: "Retry" });
+  first.unmount();
+
+  render(<Settings initialView="domains" />);
+  fireEvent.click(await screen.findByRole("button", { name: "Retry" }));
+  await screen.findByText("The authority cancelled that operation.");
+  expect(screen.queryByRole("button", { name: "Retry" })).toBeNull();
+  expect(ipc.calls("get_domains")).toHaveLength(2);
+  expect(ipc.calls("retry_domain_edit")).toEqual([{ operationId: id }]);
+  expect(ipc.calls("edit_domain")).toHaveLength(1);
+});
+
+it("[domains C12] same-path config replacement clears rows and pending and ignores the outgoing Retry reply", async () => {
+  const oldReply = Promise.withResolvers<DomainView>();
+  const newRevision = { revision: 7, domains: ["wikimedia.org"] };
+  let list = ready();
+  const ipc = installIpc({ snapshot: managed(), answers: {
+    get_domains: () => list, edit_domain: () => pending, retry_domain_edit: () => oldReply.promise,
+  } });
+  render(<Settings initialView="domains" />);
+  await waitFor(() => expect(field().readOnly).toBe(false));
+  fireEvent.change(field(), { target: { value: "wipo.int" } });
+  fireEvent.submit(field().form!);
+  fireEvent.click(await screen.findByRole("button", { name: "Retry" }));
+
+  list = ready(newRevision);
+  ipc.emit("snapshot", { ...managed(newRevision), domainsScope: 2 });
+  await within(await screen.findByRole("list", { name: "Domains that use home internet" })).findByText("wikimedia.org");
+  await act(async () => oldReply.resolve({ ...pending, pending: { ...pending.pending!, host: "retired.example.com" } }));
+  expect(screen.queryByRole("list", { name: "Last verified domains" })).toBeNull();
+  expect(screen.queryByText(/retired\.example\.com|wipo\.int|www\.example\.com/)).toBeNull();
+  expect(screen.queryByRole("button", { name: "Retry" })).toBeNull();
+  expect(ipc.calls("retry_domain_edit")).toEqual([{ operationId: id }]);
+  expect(field().readOnly).toBe(false);
+});
+
+it("[domains C12] a late baseline snapshot cannot put the window back on an older config", async () => {
+  const old = Promise.withResolvers<ReturnType<typeof snapshot>>();
+  const active = { revision: 7, domains: ["wikimedia.org"] };
+  const ipc = installIpc({ answers: { get_snapshot: () => old.promise, get_domains: () => ready(active) } });
+  render(<Settings initialView="domains" />);
+  await waitFor(() => expect(ipc.calls("get_snapshot")).toHaveLength(1));
+  ipc.emit("snapshot", { ...managed(active), domainsScope: 2 });
+  await screen.findByText("wikimedia.org");
+  await act(async () => old.resolve(managed()));
+  expect(screen.getByRole("list", { name: "Domains that use home internet" })).toBeTruthy();
+  expect(ipc.calls("get_domains")).toHaveLength(1);
+});
+
+it("[domains C12] tab reentry keeps old rows historical until a fresh read confirms them", async () => {
+  const onReturn = Promise.withResolvers<DomainView>();
+  let lists = 0;
+  const ipc = installIpc({ snapshot: managed(), answers: {
+    get_domains: () => ++lists === 1 ? ready() : onReturn.promise,
+  } });
+  render(<Settings initialView="domains" />);
+  await waitFor(() => expect(field().readOnly).toBe(false));
+  fireEvent.click(screen.getByRole("tab", { name: "General" }));
+  fireEvent.click(screen.getByRole("tab", { name: "Domains" }));
+  expect(ipc.calls("get_domains")).toHaveLength(2);
+  expect(screen.getByRole("list", { name: "Last verified domains" })).toBeTruthy();
+  expect(screen.queryByRole("list", { name: "Domains that use home internet" })).toBeNull();
+  expect(field().readOnly).toBe(true);
+  await act(async () => onReturn.resolve(ready()));
+  expect(screen.getByRole("list", { name: "Domains that use home internet" })).toBeTruthy();
+  expect(field().readOnly).toBe(false);
 });

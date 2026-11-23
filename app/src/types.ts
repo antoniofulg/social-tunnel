@@ -63,6 +63,7 @@ export interface Snapshot {
   statusUnreadable: boolean;
   status: RunStatus | null;
   configPath: string | null;
+  domainsScope: number;
   doctor: Doctor | null;
   ownership: "owned" | "external" | null;
   openAtLogin: boolean;

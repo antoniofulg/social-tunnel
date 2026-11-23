@@ -57,6 +57,7 @@ export function snapshot(overrides: Partial<Snapshot> = {}): Snapshot {
       configPath: CONFIG_PATH,
     },
     configPath: CONFIG_PATH,
+    domainsScope: 1,
     doctor: doctor(),
     ownership: "owned",
     openAtLogin: false,

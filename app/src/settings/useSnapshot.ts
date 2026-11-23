@@ -11,26 +11,25 @@ export function useSnapshot(onSnapshotEvent: (snapshot: Snapshot) => void, onVie
 
   useEffect(() => {
     let live = true;
-    const unlisten: Promise<() => void>[] = [
-      onSnapshot((next) => {
-        if (!live) return;
-        setSnapshot(next);
-        onSnapshotEvent(next);
-      }),
-      onView((view) => live && onViewRequest(view)),
-    ];
-    // An event that landed first is newer than the answer.
-    getSnapshot().then(
-      (first) => {
-        if (!live) return;
-        setSnapshot((current) => current ?? first);
-        if (first) onSnapshotEvent(first);
-      },
-      () => undefined,
-    );
+    let sawSnapshot = false;
+    const snapshotListener = onSnapshot((next) => {
+      if (!live) return;
+      sawSnapshot = true;
+      setSnapshot(next);
+      onSnapshotEvent(next);
+    });
+    const viewListener = onView((view) => live && onViewRequest(view));
+    // The listener must be registered before asking for the baseline. A newer event wins.
+    void snapshotListener.then(async () => {
+      if (!live) return;
+      const first = await getSnapshot();
+      if (!live || sawSnapshot) return;
+      setSnapshot(first);
+      if (first) onSnapshotEvent(first);
+    }).catch(() => undefined);
     return () => {
       live = false;
-      for (const un of unlisten) un.then((fn) => fn());
+      for (const listener of [snapshotListener, viewListener]) void listener.then((unlisten) => unlisten(), () => undefined);
     };
   }, [onSnapshotEvent, onViewRequest]);
 

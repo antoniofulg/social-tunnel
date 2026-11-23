@@ -27,6 +27,8 @@ pub struct Snapshot {
     pub status_unreadable: bool,
     pub status: Option<RunStatus>,
     pub config_path: Option<String>,
+    /// Native generation of the selected configuration; unavailable status does not change it.
+    pub domains_scope: u64,
     pub doctor: Option<Doctor>,
     pub ownership: Option<String>,
     pub open_at_login: bool,
@@ -63,6 +65,7 @@ impl Snapshot {
             status_unreadable: matches!(status, StatusRead::Unreadable),
             status: run,
             config_path,
+            domains_scope: 0,
             doctor: doctor.cloned(),
             ownership,
             open_at_login,

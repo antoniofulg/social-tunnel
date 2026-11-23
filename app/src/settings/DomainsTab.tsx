@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type SubmitEvent } from "react";
+import { useEffect, useLayoutEffect, useRef, useState, type SubmitEvent } from "react";
 import { editDomain, getDomains, retryDomainEdit } from "../ipc";
 import type { DomainEdit, DomainRevision, DomainView, Snapshot } from "../types";
 import { Button } from "./Button";
@@ -39,15 +39,16 @@ function status(view: DomainView, working: "read" | "edit" | null): string {
   return working === "read" ? "Checking domain routing…" : "Selected domains use your home internet in the enrolled browser.";
 }
 
-export function DomainsTab({ snapshot }: { snapshot: Snapshot | null }) {
+export function DomainsTab({ snapshot, visible = true }: { snapshot: Snapshot | null; visible?: boolean }) {
   const [view, setView] = useState<DomainView | null>(null);
+  const latestView = useRef<DomainView | null>(null);
   const [lastVerified, setLastVerified] = useState<DomainRevision | null>(null);
   const [input, setInput] = useState("");
   const [confirmation, setConfirmation] = useState<Confirmation | null>(null);
   const [error, setError] = useState<DomainFault | null>(null);
   const [working, setWorking] = useState<"read" | "edit" | null>(null);
   const [attempts, setAttempts] = useState(RETRY_ATTEMPTS);
-  const alive = useRef(false);
+  const instance = useRef(0);
   const inFlight = useRef(false);
   const inputRef = useRef<HTMLInputElement>(null);
   const confirmRef = useRef<HTMLDivElement>(null);
@@ -58,26 +59,44 @@ export function DomainsTab({ snapshot }: { snapshot: Snapshot | null }) {
   const nativeState = native?.state;
   const readable = snapshot !== null && !snapshot.statusUnreadable;
   const config = snapshot?.configPath;
+  const usable = readable && !!config;
+  const recovering = nativeState === "recovery_required";
+  const activity = useRef({ visible, usable, recovering });
+  const evidence = useRef(0);
 
-  function accept(next: DomainView) {
+  function publish(next: DomainView) {
+    if (next.pending && next.pending.operationId !== latestView.current?.pending?.operationId) setAttempts(RETRY_ATTEMPTS);
+    latestView.current = next;
     setView(next);
-    if (next.active && (next.state === "ready" || next.state === "applied")) setLastVerified(next.active);
-    if (next.pending && next.pending.operationId !== view?.pending?.operationId) setAttempts(RETRY_ATTEMPTS);
-    if (next.state === "applied") setInput("");
   }
 
-  useEffect(() => {
-    alive.current = true;
-    return () => { alive.current = false; };
+  useLayoutEffect(() => () => {
+    instance.current++;
+    inFlight.current = false;
+    queuedRead.current = false;
   }, []);
 
-  // Re-read on entry and when the native evidence changes. No periodic query when idle.
+  useLayoutEffect(() => {
+    activity.current = { visible, usable, recovering };
+    if (!visible || !usable) {
+      queuedRead.current = false;
+      setConfirmation(null);
+    }
+  }, [visible, usable, recovering]);
+
+  useLayoutEffect(() => {
+    evidence.current++;
+    if (latestView.current?.active) {
+      publish({ ...UNKNOWN, pending: latestView.current.pending });
+    }
+  }, [visible, usable, nativeState, revision]);
+
+  // Read on entry or when native evidence changes. Hidden tabs never start a call.
   useEffect(() => {
-    if (!readable || !config) return;
+    if (!visible || !usable) return;
     if (inFlight.current) { queuedRead.current = true; return; }
-    const id = view?.state !== "recovery_required" ? view?.pending?.operationId : undefined;
-    void refresh(id);
-  }, [config, nativeState, readable, revision]);
+    void refresh(pendingId());
+  }, [visible, usable, nativeState, revision]);
 
   const current = view ?? (readable && !native ? SETUP : UNKNOWN);
   const pending = current.pending;
@@ -85,13 +104,13 @@ export function DomainsTab({ snapshot }: { snapshot: Snapshot | null }) {
   const operationId = canRetry ? pending.operationId : null;
 
   useEffect(() => {
-    if (!operationId || working || attempts === 0 || !readable || nativeState === "recovery_required") return;
+    if (!visible || !usable || !operationId || working || attempts === 0 || nativeState === "recovery_required") return;
     const timer = window.setTimeout(() => {
       setAttempts((n) => n - 1);
       void refresh(operationId);
     }, RETRY_INTERVAL_MS);
     return () => clearTimeout(timer);
-  }, [operationId, working, attempts, readable, nativeState]);
+  }, [visible, usable, operationId, working, attempts, nativeState]);
 
   useEffect(() => {
     if (confirmation) confirmRef.current?.querySelector("button")?.focus();
@@ -100,7 +119,10 @@ export function DomainsTab({ snapshot }: { snapshot: Snapshot | null }) {
   const verified = readable && native?.active && current.active && native.active.revision === current.active.revision &&
     native.active.domains.length === current.active.domains.length && native.active.domains.every((host, i) => host === current.active?.domains[i]) &&
     (current.state === "ready" || current.state === "applied") ? current.active : null;
-  const editable = verified !== null && !pending && working === null;
+  useLayoutEffect(() => {
+    if (verified) setLastVerified(verified);
+  }, [verified]);
+  const editable = visible && verified !== null && !pending && working === null;
   const activeConfirmation = confirmation && verified?.revision === confirmation.revision &&
     verified.domains.includes(confirmation.host) ? confirmation : null;
   const parent = activeConfirmation && verified?.domains.find((host) => activeConfirmation.host.endsWith(`.${host}`));
@@ -110,65 +132,80 @@ export function DomainsTab({ snapshot }: { snapshot: Snapshot | null }) {
   const statusView = nativeState === "recovery_required" ? { ...UNKNOWN, state: "recovery_required" as const }
     : !verified && (current.state === "ready" || current.state === "applied") ? UNKNOWN : current;
 
+  function pendingId() {
+    const saved = latestView.current;
+    return !activity.current.recovering && saved?.state !== "recovery_required" ? saved?.pending?.operationId : undefined;
+  }
+
   async function refresh(id?: string, clearError = false) {
-    if (inFlight.current || !alive.current) return;
+    if (inFlight.current || !activity.current.visible || !activity.current.usable) return;
+    if (id !== undefined && activity.current.recovering) return;
     inFlight.current = true;
+    const owner = instance.current;
+    const started = evidence.current;
     setWorking("read");
     try {
       const next = await (id === undefined ? getDomains() : retryDomainEdit(id));
-      if (alive.current) {
-        const retainsOperation = id !== undefined && next.state === "activation_unknown" && next.pending === null;
-        if (retainsOperation) setView((previous) => ({ ...next, pending: previous?.pending ?? null }));
-        else accept(next);
-        if (next.state === "applied" || clearError) setError(null);
-      }
+      if (instance.current !== owner) return;
+      const ambiguous = next.pending ? id !== undefined && next.pending.operationId !== id :
+        next.state === "activation_unknown" || next.state === "recovery_required" || (id !== undefined && next.state === "setup_required");
+      const pending = ambiguous ? latestView.current?.pending ?? null : next.pending;
+      const fresh = started === evidence.current && activity.current.usable && activity.current.visible;
+      publish(fresh && !(ambiguous && (next.state === "setup_required" || next.pending !== null))
+        ? { ...next, pending } : { ...UNKNOWN, pending });
+      if (fresh && next.state === "applied" && !ambiguous) setInput("");
+      if (next.state === "applied" || clearError) setError(null);
     } catch (reason) {
-      if (alive.current) {
-        const e = fault(reason, false);
-        setError((previous) => previous?.field ? previous : e);
-        setView((previous) => ({ ...UNKNOWN,
-          state: e.code === "recovery_required" ? "recovery_required" : "activation_unknown",
-          pending: e.code === "operation_cancelled" || e.code === "unknown_operation" ? null : previous?.pending ?? null,
-        }));
-      }
+      if (instance.current !== owner) return;
+      const e = fault(reason, false);
+      setError((previous) => previous?.field ? previous : e);
+      publish({ ...UNKNOWN,
+        state: e.code === "recovery_required" ? "recovery_required" : "activation_unknown",
+        pending: e.code === "operation_cancelled" || e.code === "unknown_operation" ? null : latestView.current?.pending ?? null,
+      });
     } finally {
-      release();
+      release(owner);
     }
   }
 
   async function edit(operation: DomainEdit["operation"], host: string, expectedRevision: number) {
     if (!editable || inFlight.current) return;
     inFlight.current = true;
+    const owner = instance.current;
+    const started = evidence.current;
     setWorking("edit");
     setError(null);
     setConfirmation(null);
     let recheck = false;
     try {
       const next = await editDomain({ operation, host, expectedRevision });
-      if (!alive.current) return;
-      accept(next);
-      if (next.pending) queuedRead.current = false;
+      if (instance.current !== owner) return;
+      const fresh = started === evidence.current && activity.current.usable && activity.current.visible;
+      publish(fresh ? next : { ...UNKNOWN, pending: next.pending });
+      if (fresh && next.state === "applied") setInput("");
+      if (next.pending && fresh) queuedRead.current = false;
     } catch (reason) {
-      if (!alive.current) return;
+      if (instance.current !== owner) return;
       const e = fault(reason, operation === "add");
       setError(e);
-      if (e.code === "recovery_required") setView({ ...UNKNOWN, state: "recovery_required" });
-      else if (e.code === "conflict" || e.code === "not_ready" || e.code === "unavailable") { setView(UNKNOWN); recheck = true; }
-      if (operation === "add") inputRef.current?.focus();
-      else opener.current?.focus();
+      if (e.code === "recovery_required") publish({ ...UNKNOWN, state: "recovery_required" });
+      else if (e.code === "conflict" || e.code === "not_ready" || e.code === "unavailable") { publish(UNKNOWN); recheck = true; }
+      if (activity.current.visible && activity.current.usable) {
+        if (operation === "add") inputRef.current?.focus();
+        else opener.current?.focus();
+      }
     } finally {
-      release(recheck);
+      release(owner, recheck);
     }
   }
 
-  function release(recheck = false) {
+  function release(owner: number, recheck = false) {
+    if (instance.current !== owner) return;
     inFlight.current = false;
-    if (!alive.current) return;
     setWorking(null);
-    if (recheck || queuedRead.current) {
-      queuedRead.current = false;
-      void refresh(view?.pending?.operationId);
-    }
+    const read = recheck || queuedRead.current;
+    queuedRead.current = false;
+    if (read) void refresh(pendingId());
   }
 
   function add(event: SubmitEvent<HTMLFormElement>) {
@@ -182,7 +219,7 @@ export function DomainsTab({ snapshot }: { snapshot: Snapshot | null }) {
   }
 
   return (
-    <div className="pt-1">
+    <div className="pt-1" hidden={!visible}>
       {current.state !== "setup_required" && snapshot?.status?.managedDomains && (
         <form onSubmit={add} className="mb-2.5 grid gap-[5px]">
           <label htmlFor="managed-domain" className="font-medium">Add domain</label>
@@ -227,7 +264,7 @@ export function DomainsTab({ snapshot }: { snapshot: Snapshot | null }) {
         }} className="mb-3 rounded-box bg-warn-bg px-3 py-2.5">
           <p id="domain-remove-title" className="m-0 break-all font-semibold">Remove {activeConfirmation.host}?</p>
           <p className="mt-1 mb-0 text-xs text-text-2">
-            {parent ? <>It will still be routed through the tunnel because <code className="break-all">{parent}</code> covers it.</>
+            {parent ? <>After removal, the enrolled browser will still select the tunnel because <code className="break-all">{parent}</code> matches this domain. The home proxy may still block the connection.</>
               : "Once applied, new connections to this domain may go directly from the server."}
           </p>
           <div className="mt-2 flex justify-end gap-2">
@@ -245,7 +282,7 @@ export function DomainsTab({ snapshot }: { snapshot: Snapshot | null }) {
       </div>
       {nativeState !== "recovery_required" && (canRetry || (statusView.state === "activation_unknown" && !pending && readable && native)) && (
         <div className="mt-2">
-          <Button small disabled={working !== null} onClick={() => void refresh(operationId ?? undefined, true)}>
+          <Button small disabled={!usable || working !== null} onClick={() => void refresh(operationId ?? undefined, true)}>
             {canRetry ? "Retry" : "Refresh"}
           </Button>
         </div>
