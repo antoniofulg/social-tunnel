@@ -295,6 +295,29 @@ export function openDomainPublisher<Session>(options: PublisherOptions<Session>)
     return !!bound && reservationId(state, operation, bound.policyPreimageDigest) === bound.id;
   }
 
+  function activationPreimage(state: JournalState, operation: PublisherOperation) {
+    const sync = operation.intent.kind === "recovery" && state.syncInterruptedRecovery === true;
+    const selected = sync ? state.possiblyWritten : state.recordedPolicy;
+    if (!selected) return null;
+    const bytes = rendered(selected);
+    return policy.read() === bytes ? { bytes, selected, sync } : null;
+  }
+
+  function inspectIdleCandidate(session: Session) {
+    return store.transact((state) => {
+      const denied = authorize(state, session, "local_admin");
+      if (denied) return denied;
+      const operation = state.pending;
+      if (state.version === 1 || operation?.phase !== "claimed" || operation.target.policy.epoch !== state.epoch ||
+          (state.recovery && !state.idleRecoveryOrigin)) return fail("not_ready");
+      const preimage = activationPreimage(state, operation);
+      if (!preimage) return fail("not_ready");
+      const scope = reservationScope(state, operation, hashBytes(preimage.bytes));
+      const origin = state.idleRecoveryOrigin;
+      return ok({ scope, recoveryOf: origin ?? null, operationDigest: idleWindowDigest(origin?.scope ?? scope) });
+    });
+  }
+
   function policyImage(state: JournalState, bytes: string) {
     if (bytes === rendered(state.recordedPolicy)) return "recorded";
     if (state.pending?.phase === "publishing" && bytes === rendered(state.pending.target.policy)) return "publishing";
@@ -414,12 +437,9 @@ export function openDomainPublisher<Session>(options: PublisherOptions<Session>)
       const operation = state.pending;
       if (!operation || operation.operationId !== id) return fail("unknown_operation");
       if (operation.phase !== "claimed" || operation.target.policy.epoch !== state.epoch) return fail("conflict");
-      const recovery = operation.intent.kind === "recovery";
-      const sync = recovery && state.syncInterruptedRecovery;
-      const selected = sync ? state.possiblyWritten : state.recordedPolicy;
-      if (!selected) return fail("not_ready");
-      const expected = rendered(selected);
-      if (policy.read() !== expected) return fail("not_ready");
+      const preimage = activationPreimage(state, operation);
+      if (!preimage) return fail("not_ready");
+      const { bytes: expected, selected, sync } = preimage;
       if (state.version !== 1) {
         const policyPreimageDigest = hashBytes(expected);
         const reservation = reservationId(state, operation, policyPreimageDigest);
@@ -434,7 +454,7 @@ export function openDomainPublisher<Session>(options: PublisherOptions<Session>)
         state.recordedPolicy = selected;
         delete state.syncInterruptedRecovery;
       }
-      if (recovery) state.possiblyWritten = null;
+      if (operation.intent.kind === "recovery") state.possiblyWritten = null;
       operation.phase = "activating";
       delete state.completedIdleWindow;
       save();
@@ -624,6 +644,6 @@ export function openDomainPublisher<Session>(options: PublisherOptions<Session>)
     });
   }
 
-  return { inspect, inspectPolicy, inspectCompletedIdleWindow, propose, reconcile, beginActivation, publish, finalize, disable,
-    authorizeRecovery, close: store.close };
+  return { inspect, inspectPolicy, inspectIdleCandidate, inspectCompletedIdleWindow, propose, reconcile, beginActivation,
+    publish, finalize, disable, authorizeRecovery, close: store.close };
 }

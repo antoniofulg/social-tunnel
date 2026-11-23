@@ -127,6 +127,12 @@ test("[domains C9] a guarded publisher grants, publishes and finalizes only unde
     domainsDigest: edit.target.domainsDigest, policyPreimageDigest: hashBytes(f.initial),
   };
   const binding = { id: "exact-lease", operationDigest: idleWindowDigest(scope) };
+  expect(p.inspectIdleCandidate(f.editor)).toEqual(err("unauthorized"));
+  expect(p.inspectIdleCandidate(f.admin)).toEqual({ ok: true, value: { scope, recoveryOf: null, operationDigest: binding.operationDigest } });
+  expect(f.bytes()).toEqual(beforeGrant);
+  writeFileSync(f.policyPath, f.initial.trimEnd());
+  expect(p.inspectIdleCandidate(f.admin)).toEqual(err("not_ready"));
+  writeFileSync(f.policyPath, f.initial);
   expect(p.inspectCompletedIdleWindow(f.admin, binding)).toEqual(err("not_ready"));
   held = { id: "wrong-operation-lease", scope: { ...scope, operationId: id(9) } };
   expect(p.beginActivation(f.proxy, edit.operationId)).toEqual(err("not_ready"));
@@ -134,6 +140,7 @@ test("[domains C9] a guarded publisher grants, publishes and finalizes only unde
   expect(p.beginActivation(f.proxy, edit.operationId)).toEqual(err("not_ready"));
   held = { scope, id: "exact-lease" };
   value(p.beginActivation(f.proxy, edit.operationId));
+  expect(p.inspectIdleCandidate(f.admin)).toEqual(err("not_ready"));
   p.close();
   p = f.open();
   held = { scope, id: "replacement-lease" };
@@ -485,6 +492,11 @@ test("[domains C10] losing the idle reservation during recovery sync cannot issu
   }));
   const proxy = f.session({ role: "proxy", epoch, generation: "proxy-2" });
   const beforeGrant = f.bytes();
+  expect(value(p.inspectIdleCandidate(f.admin))).toMatchObject({
+    scope: { operationId: recovered.operationId, policyPreimageDigest: hashBytes(f.sink.read()) },
+    recoveryOf: { scope: { operationId: edit.operationId, policyPreimageDigest: hashBytes(f.initial) } },
+  });
+  expect(f.bytes()).toEqual(beforeGrant);
   expect(p.beginActivation(proxy, recovered.operationId)).toEqual(err("not_ready"));
   expect(f.bytes()).toEqual(beforeGrant);
   expect(value(p.inspectPolicy(f.admin))).toBe("interrupted");
@@ -533,6 +545,9 @@ test("[domains C10] repeated Disable and reopen keep the original idle hold boun
   replacement = true;
   expect(p.beginActivation(latest.proxy, latest.operation.operationId)).toEqual(err("not_ready"));
   expect(f.sink.read()).toBe(preimage);
+  expect(p.inspectIdleCandidate(f.admin)).toEqual({ ok: true, value: {
+    scope: latest.scope, recoveryOf: { id: original.id, scope: expected }, operationDigest: original.operationDigest,
+  } });
   expect(value(p.inspect(f.admin)).pending?.phase).toBe("claimed");
   replacement = false;
   value(p.beginActivation(latest.proxy, latest.operation.operationId));

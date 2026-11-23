@@ -202,6 +202,7 @@ export function openDomainAuthority(enrollment: DomainEnrollment, now = () => pe
   return {
     open, provision, observe, inspectLocal: view,
     inspectPolicyLocal: () => publisher?.inspectPolicy(admin),
+    inspectIdleCandidateLocal: () => !closing && publisher ? publisher.inspectIdleCandidate(admin) : unavailable,
     inspectCompletedIdleWindowLocal: (binding: unknown) => !closing && publisher
       ? publisher.inspectCompletedIdleWindow(admin, binding) : unavailable,
     admittedCount: ingress.admittedCount,
