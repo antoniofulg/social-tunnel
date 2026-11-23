@@ -93,6 +93,7 @@ type JournalState = {
   lastProven: Target;
   recordedPolicy: PolicyRevision;
   possiblyWritten: PolicyRevision | null;
+  syncInterruptedRecovery?: true;
   pending: PublisherOperation | null;
   recovery: Recovery | null;
   history: Archived[];
@@ -346,7 +347,20 @@ export function openDomainPublisher<Session>(options: PublisherOptions<Session>)
       const operation = state.pending;
       if (!operation || operation.operationId !== id) return fail("unknown_operation");
       if (operation.phase !== "claimed" || operation.target.policy.epoch !== state.epoch) return fail("conflict");
-      if (policy.read() !== rendered(state.recordedPolicy)) return fail("not_ready");
+      const recovery = operation.intent.kind === "recovery";
+      const sync = recovery && state.syncInterruptedRecovery;
+      const selected = sync ? state.possiblyWritten : state.recordedPolicy;
+      if (!selected) return fail("not_ready");
+      const expected = rendered(selected);
+      if (policy.read() !== expected) return fail("not_ready");
+      if (sync) {
+        // The claim is read-only with respect to PAC. Make the recognized
+        // interrupted image durable before changing the journal or granting home.
+        policy.replace(expected, expected);
+        state.recordedPolicy = selected;
+        delete state.syncInterruptedRecovery;
+      }
+      if (recovery) state.possiblyWritten = null;
       operation.phase = "activating";
       save();
       return ok(operation);
@@ -465,6 +479,7 @@ export function openDomainPublisher<Session>(options: PublisherOptions<Session>)
         state.pending = null;
       }
       state.epoch++;
+      delete state.syncInterruptedRecovery;
       delete state.cancelledUnadmitted;
       state.editingEnabled = false;
       save();
@@ -498,14 +513,9 @@ export function openDomainPublisher<Session>(options: PublisherOptions<Session>)
           !release.domains.every((d) => retainRoutes.includes(d))) return fail("invalid_domain");
       const routes = snapshot(revision, retainRoutes.filter((d) => !release.domains.includes(d)));
       if (!routes || !domains.domains.every((d) => isAllowed(d, routes.domains))) return fail("invalid_domain");
-      const found = policy.read();
-      const image = policyImage(state, found);
-      if (image !== "recorded") {
-        if (image !== "interrupted" || !state.possiblyWritten) return fail("not_ready");
-        policy.replace(found, found);
-        state.recordedPolicy = state.possiblyWritten;
-      }
-      state.possiblyWritten = null;
+      const image = policyImage(state, policy.read());
+      if (image !== "recorded" && image !== "interrupted") return fail("not_ready");
+      if (image === "interrupted") state.syncInterruptedRecovery = true;
       const operation: PublisherOperation = {
         operationId: request.operationId, expectedRevision: expected, proxyGeneration: request.proxyGeneration,
         intent: { kind: "recovery", releaseDirect: release.domains }, target: target(state.epoch, domains, routes.domains), phase: "claimed",

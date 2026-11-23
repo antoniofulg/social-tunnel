@@ -373,6 +373,7 @@ test("[domains C10] only fresh protected publication proof can re-enable a no-ef
 test("[domains C10] administrator recovery stays narrower, retains uncertain routes, and requires a fresh receipt", () => {
   const f = fixture(["wikipedia.org"]);
   const from = f.open({ ...f.sink, replace(old, next) { f.sink.replace(old, next); throw new Error("interrupt"); } });
+  const beforeRename = f.sink.read();
   const op = value(from.propose(f.editor, "remove", wire("wikipedia.org")));
   value(from.beginActivation(f.proxy, op.operationId));
   expect(from.publish(f.proxy, receipt(op))).toEqual(err("unavailable"));
@@ -383,7 +384,19 @@ test("[domains C10] administrator recovery stays narrower, retains uncertain rou
   expect(restarted.inspectPolicy(f.editor)).toEqual(err("unauthorized"));
   const epoch = value(restarted.disable(f.admin, EPOCH));
   restarted.close();
-  const p = f.open();
+  let syncs = 0;
+  let failSync = false;
+  const open = () => f.open({
+    ...f.sink,
+    replace(old, next) {
+      if (old === next) {
+        syncs++;
+        if (failSync) throw new Error("sync failed");
+      }
+      f.sink.replace(old, next);
+    },
+  });
+  let p = open();
   expect(value(p.inspectPolicy(f.admin))).toBe("interrupted");
   expect(value(p.inspect(f.admin))).toMatchObject({ editingEnabled: false, pending: null, lastProven: { policy: { revision: INIT } } });
   expect(f.sink.read()).toBe(afterRename);
@@ -406,10 +419,25 @@ test("[domains C10] administrator recovery stays narrower, retains uncertain rou
   const recovery = value(p.authorizeRecovery(f.admin, adminRecovery));
   expect(f.sink.read()).toBe(afterRename);
   expect(statSync(f.policyPath).ino).toBe(inode);
-  expect(value(p.inspectPolicy(f.admin))).toBe("recorded");
+  expect(syncs).toBe(0);
+  p.close();
+  p = open();
+  expect(value(p.inspectPolicy(f.admin))).toBe("interrupted");
   expect(recovery.target).toMatchObject({ domains: [], policy: { revision: INIT + 2, routes: ["wikipedia.org"] } });
   expect(p.publish(fresh, receipt(recovery))).toEqual(err("receipt_mismatch"));
+  writeFileSync(f.policyPath, beforeRename);
+  expect(value(p.inspectPolicy(f.admin))).toBe("recorded");
+  expect(p.beginActivation(fresh, recovery.operationId)).toEqual(err("not_ready"));
+  expect(syncs).toBe(0);
+  writeFileSync(f.policyPath, afterRename);
+  failSync = true;
+  expect(p.beginActivation(fresh, recovery.operationId)).toEqual(err("unavailable"));
+  expect(value(p.inspect(f.admin)).pending?.phase).toBe("claimed");
+  expect(f.sink.read()).toBe(afterRename);
+  failSync = false;
   value(p.beginActivation(fresh, recovery.operationId));
+  expect(syncs).toBe(2);
+  expect(value(p.inspectPolicy(f.admin))).toBe("recorded");
   expect(p.publish(f.proxy, receipt(recovery))).toEqual(err("fenced"));
   expect(value(p.publish(fresh, receipt(recovery))).phase).toBe("published");
   expect(pac(f.sink.read())("wikipedia.org")).toBe(PROXY);
