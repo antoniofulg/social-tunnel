@@ -1,7 +1,10 @@
 import { afterEach, expect, test } from "bun:test";
 import { mkdirSync, readFileSync, renameSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { PassThrough } from "node:stream";
 import { runInNewContext } from "node:vm";
+import { openDomainAuthority } from "../server/domain-authority";
+import { dispatchLocalDisable } from "../server/domain-linux-supervisor";
 import {
   DOMAIN_POLICY_FILE, fileDomainPolicySink, hashBytes, renderDomainPolicy, type DomainPolicySink,
 } from "../src/domain-policy";
@@ -65,6 +68,16 @@ function fixture(domains = ["amazonaws.com", "mozilla.org", "wikipedia.org"]) {
     root, journalDir, policyDir, policyPath, initial, sink, session, editor, proxy, admin, open, options,
     bytes: () => readFileSync(join(journalDir, "domains.sqlite")),
   };
+}
+
+function openLocalAuthority(f: ReturnType<typeof fixture>, policy = f.sink) {
+  const authority = openDomainAuthority({
+    enrollment: ENROLLMENT, journalDir: f.journalDir, proxyPort: PORT, policy,
+    forward: { epoch: EPOCH, generation: "proxy-1" },
+    chrome: { generation: "isolated", input: new PassThrough(), output: new PassThrough(), ownership: () => null },
+  });
+  authority.open();
+  return authority;
 }
 
 function receipt(operation: PublisherOperation): ProxyPublicationReceipt {
@@ -237,6 +250,56 @@ test("[domains C10] a claimed no-effect edit cancels without a policy write and 
   expect(resumed.beginActivation(f.proxy, op.operationId)).toEqual(err("fenced"));
   expect(resumed.propose(f.editor, "remove", wire("wikipedia.org"))).toEqual(err("fenced"));
   expect(f.sink.read()).toBe(f.initial);
+});
+
+test.each(["uninspectable", "mismatched"] as const)("[domains C10] local Disable fences the epoch with a %s PAC", async (fault) => {
+  const f = fixture();
+  if (fault === "mismatched") writeFileSync(f.policyPath, f.initial.trimEnd());
+  const before = readFileSync(f.policyPath);
+  let reads = 0;
+  let writes = 0;
+  const a = openLocalAuthority(f, {
+    read() {
+      reads++;
+      if (fault === "uninspectable") throw new Error("mandatory policy ownership changed");
+      return f.sink.read();
+    },
+    replace(expected, next) { writes++; f.sink.replace(expected, next); },
+  });
+  try {
+    expect(a.inspectPolicyLocal()).toEqual(err(fault === "uninspectable" ? "unavailable" : "not_ready"));
+    expect(await dispatchLocalDisable({ op: "disable", epoch: EPOCH }, a)).toEqual({ ok: true, value: EPOCH + 1 });
+    expect({ reads, writes }).toEqual({ reads: 1, writes: 0 });
+    expect(readFileSync(f.policyPath)).toEqual(before);
+  } finally { await a.close(); }
+
+  const reopened = f.open();
+  expect(value(reopened.inspect(f.admin))).toMatchObject({ epoch: EPOCH + 1, editingEnabled: false });
+  expect(reopened.inspect(f.editor)).toEqual(err("fenced"));
+  expect(reopened.inspect(f.proxy)).toEqual(err("fenced"));
+});
+
+test("[domains C10] local Disable rejects a stale epoch and a replacement journal", async () => {
+  const f = fixture();
+  const other = fixture(["wipo.int"]);
+  const a = openLocalAuthority(f);
+  try {
+    const before = f.bytes();
+    const publisher = f.open();
+    expect(publisher.disable(f.session({ role: "local_admin" }, "different-enrollment"), EPOCH)).toEqual(err("unauthorized"));
+    publisher.close();
+    expect(await dispatchLocalDisable({ op: "disable", epoch: EPOCH - 1 }, a)).toEqual(err("conflict"));
+    expect(f.bytes()).toEqual(before);
+
+    const replacement = other.bytes();
+    const journal = join(f.journalDir, "domains.sqlite");
+    renameSync(journal, join(f.journalDir, "original.sqlite"));
+    renameSync(join(other.journalDir, "domains.sqlite"), journal);
+    expect(await dispatchLocalDisable({ op: "disable", epoch: EPOCH }, a)).toEqual(err("unavailable"));
+    expect(f.bytes()).toEqual(replacement);
+    expect(readFileSync(join(f.journalDir, "original.sqlite"))).toEqual(before);
+    expect(f.sink.read()).toBe(f.initial);
+  } finally { await a.close(); }
 });
 
 test("[domains C10] no-effect reconciliation fences queued proposals without evicting live tombstones", () => {

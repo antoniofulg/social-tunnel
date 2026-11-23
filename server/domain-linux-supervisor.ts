@@ -31,6 +31,14 @@ type Authority = ReturnType<typeof openDomainAuthority>;
 const error = (code: string) => ({ ok: false as const, code });
 const success = <T>(value: T) => ({ ok: true as const, value });
 
+// Called only after root-local admin admission. Revocation changes the journal, not the PAC.
+export function dispatchLocalDisable(raw: unknown, authority: Pick<Authority, "disable">) {
+  const request = exact(raw, "op epoch");
+  if (request?.op === "disable" && domainUInt(request.epoch)) {
+    return authority.disable(request.epoch).then((result) => result ?? error("not_ready"));
+  }
+}
+
 function safeSmall(path: string, max: number) {
   const fd = openSync(path, constants.O_RDONLY | constants.O_NONBLOCK | constants.O_NOFOLLOW);
   try {
@@ -373,12 +381,11 @@ async function serve(m: Manifest, platform: ReturnType<typeof guardedPlatform>) 
         marker.write("complete");
         return success({ staged: false });
       }
-      const disable = exact(raw, "op epoch");
-      if (disable?.op === "disable" && domainUInt(disable.epoch)) {
-        if (!a.inspectPolicyLocal()?.ok) return error("not_ready");
-        const disabled = await a.disable(disable.epoch);
-        if (disabled?.ok) { receipt = editor = prepared = undefined; lastProofAt = -Infinity; }
-        return disabled ?? error("not_ready");
+      const disable = dispatchLocalDisable(raw, a);
+      if (disable) {
+        const disabled = await disable;
+        if (disabled.ok) { receipt = editor = prepared = undefined; lastProofAt = -Infinity; }
+        return disabled;
       }
       const prepare = exact(raw, "op epoch");
       if (prepare?.op === "prepare" && domainUInt(prepare.epoch)) {
