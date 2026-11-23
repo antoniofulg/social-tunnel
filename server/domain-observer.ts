@@ -3,6 +3,8 @@ import type { Readable, Writable } from "node:stream";
 import { setTimeout as sleep } from "node:timers/promises";
 import { hashBytes, type PolicyRevision } from "../src/domain-policy";
 
+const PROOF_MS = 30000;
+
 const CDP_TIMEOUT = 4000;
 const MAX_FRAME = 256 * 1024;
 const POLICY_PAGE = "chrome://policy/";
@@ -48,8 +50,9 @@ export interface EnrolledChrome {
   readonly generation: string;
   readonly input: Writable;
   readonly output: Readable;
-  // Protected supervisor-owned process identity and exclusive loopback bind; never SSH data.
-  ownsContext(): boolean;
+  // Protected supervisor increments on every ownership/conflict transition, even
+  // between reads. Null means the process/profile/forward is not exclusively owned.
+  ownership(): number | null;
   // Arms only the two generated synthetic names at a protected refusal observer, with no payload access.
   watchCanaries(positive: string, negative: string): { seen(host: string): boolean; close(): void };
 }
@@ -59,16 +62,30 @@ export interface BrowserEvidence {
   readonly policyDigest: string;
   readonly positive: string;
   readonly negative: string;
+  readonly ownership: number;
+  readonly expiresAt: number;
 }
 
-export function createDomainObserver(chrome: EnrolledChrome) {
+export function createDomainObserver(chrome: EnrolledChrome, now = () => performance.now()) {
   let active = true;
   let busy = false;
   let next = 0;
   let pending: Pending | undefined;
   let frame: Buffer = Buffer.alloc(0);
-  const generation = chrome.generation;
-  const alive = () => active && chrome.ownsContext();
+  let highest = -1;
+  let fenced = -1;
+  function ownership(): number | null {
+    const generation = active ? chrome.ownership() : null;
+    if (generation === null || generation < highest || !Number.isSafeInteger(generation) || generation < 0) {
+      fenced = highest;
+      return null;
+    }
+    if (generation <= fenced) return null;
+    highest = generation;
+    return generation;
+  }
+  const alive = () => ownership() !== null;
+  const valid = (proof: BrowserEvidence) => ownership() === proof.ownership && now() < proof.expiresAt;
   function stop() { active = false; pending?.resolve(null); }
   chrome.output.once("end", stop);
   chrome.output.once("error", stop);
@@ -122,8 +139,11 @@ export function createDomainObserver(chrome: EnrolledChrome) {
   }
   const nonce = () => randomBytes(16).toString("hex");
 
-  async function prove(policy: PolicyRevision, expectedBytes: string): Promise<BrowserEvidence | null> {
-    if (busy || !alive()) return null;
+  async function prove(
+    policy: PolicyRevision, expectedBytes: string, accept?: (proof: BrowserEvidence) => boolean,
+  ): Promise<BrowserEvidence | null> {
+    const owner = ownership();
+    if (busy || owner === null) return null;
     busy = true;
     const pages: Visit[] = [];
     const positive = `${nonce()}.e${policy.epoch}.r${policy.revision}.pac.invalid`;
@@ -132,6 +152,12 @@ export function createDomainObserver(chrome: EnrolledChrome) {
     let watch: ReturnType<EnrolledChrome["watchCanaries"]> | undefined;
     try {
       const expected = JSON.parse(expectedBytes).ProxySettings;
+      async function effective(page: Visit) {
+        const state = await evaluate(POLICY_STATE, page) as { value?: Json; valid?: boolean; disabled?: boolean } | null;
+        return state?.valid && !state.disabled && state.value && Object.keys(state.value).length === 3 &&
+          state.value.ProxyMode === "pac_script" && state.value.ProxyPacMandatory === true &&
+          state.value.ProxyPacUrl === expected.ProxyPacUrl;
+      }
       const page = await tab();
       pages.push(page);
       if (await navigate(POLICY_PAGE, page)) return null;
@@ -141,20 +167,25 @@ export function createDomainObserver(chrome: EnrolledChrome) {
         await sleep(50);
       }
       deadline = performance.now() + 10000;
-      for (;;) {
-        const policyState = await evaluate(POLICY_STATE, page) as { value?: Json; valid?: boolean; disabled?: boolean } | null;
-        if (policyState?.valid && !policyState.disabled && policyState.value?.ProxyMode === "pac_script" &&
-            policyState.value.ProxyPacMandatory === true && policyState.value.ProxyPacUrl === expected.ProxyPacUrl) break;
+      while (!(await effective(page))) {
         if (performance.now() >= deadline) return null;
         await sleep(50);
       }
+      const expiresAt = now() + PROOF_MS;
       const witness = await tab();
       pages.push(witness);
       if (page.browserContextId !== witness.browserContextId) return null;
       watch = chrome.watchCanaries(positive, negative);
       if (await navigate(`https://${positive}/`, witness) !== "net::ERR_TUNNEL_CONNECTION_FAILED" || !watch.seen(positive)) return null;
       if (await navigate(`https://${negative}/`, witness) !== "net::ERR_NAME_NOT_RESOLVED" || watch.seen(negative)) return null;
-      return alive() ? { generation, policyDigest: hashBytes(expectedBytes), positive, negative } : null;
+      // Commit only against effective browser policy read *after* the paired visits.
+      // The protected callback is synchronous so no other request can race the CAS.
+      if (!(await effective(page))) return null;
+      const evidence = {
+        generation: `${chrome.generation}.${owner}`, ownership: owner, expiresAt,
+        policyDigest: hashBytes(expectedBytes), positive, negative,
+      };
+      return valid(evidence) && (!accept || accept(evidence)) ? evidence : null;
     } catch { return null; }
     finally {
       watch?.close();
@@ -164,5 +195,5 @@ export function createDomainObserver(chrome: EnrolledChrome) {
       busy = false;
     }
   }
-  return { alive, generation, prove };
+  return { alive, valid, prove };
 }

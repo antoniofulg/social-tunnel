@@ -2,13 +2,14 @@ import { hashBytes, renderDomainPolicy } from "../src/domain-policy";
 import {
   openDomainPublisher, provisionDomainPublisher, type PublisherOptions, type PublisherPrincipal,
   type PublisherView, type VerifiedPublisherBaseline,
+  type ProxyPreimage,
 } from "../src/domain-publisher";
 import { createDomainIngress, type RemoteOperation, type RoleIngress } from "./domain-ingress";
-import { createDomainObserver, type EnrolledChrome } from "./domain-observer";
+import { createDomainObserver, type BrowserEvidence, type EnrolledChrome } from "./domain-observer";
 
 type Options = Omit<PublisherOptions<object>, "identify">;
 type Target = PublisherView["lastProven"];
-export interface LiveProxyRevision { generation: string; revision: number; domainsDigest: string }
+export type LiveProxyRevision = ProxyPreimage;
 
 export interface DomainEnrollment extends Options {
   chrome: EnrolledChrome;
@@ -21,14 +22,14 @@ const utf8 = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true });
 const unavailable = Object.freeze({ ok: false as const, code: "not_ready" as const });
 const invalid = Object.freeze({ ok: false as const, code: "invalid_request" as const });
 
-export function openDomainAuthority(enrollment: DomainEnrollment) {
+export function openDomainAuthority(enrollment: DomainEnrollment, now = () => performance.now()) {
   const { chrome, liveProxy, policy, proxyPort } = enrollment;
-  const observer = createDomainObserver(chrome);
+  const observer = createDomainObserver(chrome, now);
   const admin = Object.freeze({});
   const identities = new WeakMap<object, PublisherPrincipal>();
   identities.set(admin, { role: "local_admin", enrollment: enrollment.enrollment });
   const options = { ...enrollment, identify: (session: object) => identities.get(session) ?? null };
-  let proven: { epoch: number; revision: number; generation: string; bytes: string } | undefined;
+  let proven: { epoch: number; revision: number; generation: string; bytes: string; evidence: BrowserEvidence } | undefined;
   let publisher: ReturnType<typeof openDomainPublisher<object>> | undefined;
   let closing = false;
   const view = () => publisher?.inspect(admin);
@@ -36,9 +37,19 @@ export function openDomainAuthority(enrollment: DomainEnrollment) {
     const live = liveProxy();
     return live?.generation === proxyGeneration && live.revision === expected.policy.revision && live.domainsDigest === expected.domainsDigest;
   };
-  const ready = (v: PublisherView) => !closing && observer.alive() && v.editingEnabled && !v.recovery &&
-    proven?.epoch === v.epoch && proven.revision === v.lastProven.policy.revision && proven.generation === v.proxyGeneration &&
-    current(v.lastProven, v.proxyGeneration) && policy.read() === proven.bytes;
+  const samePreimage = (expected: ProxyPreimage | undefined) => {
+    const live = liveProxy();
+    return !!expected && live?.generation === expected.generation && live.revision === expected.revision &&
+      live.domainsDigest === expected.domainsDigest;
+  };
+  function ready(v: PublisherView): boolean {
+    const owned = observer.alive();
+    if (!closing && owned && v.editingEnabled && !v.recovery && proven && observer.valid(proven.evidence) &&
+        proven.epoch === v.epoch && proven.revision === v.lastProven.policy.revision && proven.generation === v.proxyGeneration &&
+        current(v.lastProven, v.proxyGeneration) && policy.read() === proven.bytes) return true;
+    proven = undefined;
+    return false;
+  }
   const wireInspect = (v: PublisherView, role: RoleIngress["identity"]["role"]) => {
     const active = ready(v) ? { revision: v.lastProven.policy.revision, domains: v.lastProven.domains } : null;
     const pending = v.pending;
@@ -75,7 +86,7 @@ export function openDomainAuthority(enrollment: DomainEnrollment) {
       const input: unknown = JSON.parse(utf8.decode(body));
       if (verb === "begin") {
         if (typeof input !== "string" || input.length > 68) return invalid;
-        if (v.pending?.intent.kind === "recovery" ? !observer.alive() : !ready(v)) return unavailable;
+        if (v.pending?.intent.kind === "recovery" ? !observer.alive() || !samePreimage(v.pending.homePreimage) : !ready(v)) return unavailable;
         return publisher.beginActivation(ticket, input);
       }
       if (!v.pending || !observer.alive() || !current(v.pending.target, v.proxyGeneration)) return unavailable;
@@ -91,14 +102,17 @@ export function openDomainAuthority(enrollment: DomainEnrollment) {
 
   async function provision(baseline: VerifiedPublisherBaseline): Promise<boolean> {
     if (closing || publisher) return false;
-    const result = (await observer.prove({ epoch: baseline.epoch, revision: baseline.revision, routes: baseline.domains }, policy.read()));
-    const live = liveProxy();
-    if (!result || !observer.alive() || live?.generation !== baseline.proxyGeneration || live.revision !== baseline.revision ||
-        live.domainsDigest !== hashBytes(JSON.stringify([...baseline.domains].sort()))) return false;
-    if (hashBytes(policy.read()) !== result.policyDigest) return false;
-    provisionDomainPublisher(options, baseline);
-    open();
-    return true;
+    const expected = policy.read();
+    const evidence = await observer.prove({ epoch: baseline.epoch, revision: baseline.revision, routes: baseline.domains }, expected, (proof) => {
+      const live = liveProxy();
+      if (closing || publisher || !observer.valid(proof) || live?.generation !== baseline.proxyGeneration ||
+          live.revision !== baseline.revision || live.domainsDigest !== hashBytes(JSON.stringify([...baseline.domains].sort())) ||
+          policy.read() !== expected) return false;
+      provisionDomainPublisher(options, baseline);
+      open();
+      return true;
+    });
+    return !!evidence;
   }
 
   async function observe(): Promise<boolean> {
@@ -112,23 +126,26 @@ export function openDomainAuthority(enrollment: DomainEnrollment) {
     if (!current(target, v.proxyGeneration)) return false;
     const bytes = renderDomainPolicy(proxyPort, target.policy);
     if (policy.read() !== bytes) return false;
-    const proof = await observer.prove(target.policy, bytes);
-    if (!proof || closing || !observer.alive() || proof.generation !== observer.generation) return false;
-    const reread = view();
-    if (!reread?.ok || reread.value.epoch !== v.epoch || reread.value.proxyGeneration !== v.proxyGeneration ||
-        reread.value.pending?.operationId !== operation?.operationId || reread.value.pending?.phase !== operation?.phase ||
-        !current(target, v.proxyGeneration) || policy.read() !== bytes) return false;
-    if (pending) {
-      const ticket = token({ role: "observer", enrollment: enrollment.enrollment, epoch: v.epoch, generation: observer.generation });
-      const final = publisher.finalize(ticket, {
-        enrollment: enrollment.enrollment, epoch: v.epoch, operationId: pending.operationId, revision: target.policy.revision,
-        domainsDigest: target.domainsDigest, proxyGeneration: v.proxyGeneration, browserGeneration: proof.generation, policyDigest: proof.policyDigest,
-        positive: proof.positive, negative: proof.negative,
-      });
-      if (!final.ok) return false;
-    } else if (v.recovery || !v.editingEnabled || v.epoch !== target.policy.epoch) return false;
-    proven = { epoch: v.epoch, revision: target.policy.revision, generation: v.proxyGeneration, bytes };
-    return true;
+    const proof = await observer.prove(target.policy, bytes, (evidence) => {
+      const reread = view();
+      if (closing || !publisher || !observer.valid(evidence) || !reread?.ok ||
+          reread.value.epoch !== v.epoch || reread.value.proxyGeneration !== v.proxyGeneration ||
+          reread.value.pending?.operationId !== operation?.operationId || reread.value.pending?.phase !== operation?.phase ||
+          !current(target, v.proxyGeneration) || policy.read() !== bytes) return false;
+      if (pending) {
+        const ticket = token({ role: "observer", enrollment: enrollment.enrollment, epoch: v.epoch, generation: evidence.generation });
+        const final = publisher.finalize(ticket, {
+          enrollment: enrollment.enrollment, epoch: v.epoch, operationId: pending.operationId, revision: target.policy.revision,
+          domainsDigest: target.domainsDigest, proxyGeneration: v.proxyGeneration, browserGeneration: evidence.generation,
+          policyDigest: evidence.policyDigest, positive: evidence.positive, negative: evidence.negative,
+        });
+        if (!final.ok) return false;
+      } else if (v.recovery || !v.editingEnabled || v.epoch !== target.policy.epoch) return false;
+      proven = { epoch: v.epoch, revision: target.policy.revision, generation: v.proxyGeneration, bytes, evidence };
+      return true;
+    });
+    if (!proof) proven = undefined;
+    return !!proof;
   }
 
   return {
@@ -142,9 +159,18 @@ export function openDomainAuthority(enrollment: DomainEnrollment) {
       }
       return ingress.bind(role);
     },
-    disable(epoch: number) { return publisher?.disable(admin, epoch); },
+    async disable(epoch: number) {
+      const result = publisher?.disable(admin, epoch);
+      if (result?.ok) {
+        proven = undefined;
+        await ingress.retireBefore(result.value);
+      }
+      return result;
+    },
     authorizeRecovery(request: Parameters<NonNullable<typeof publisher>["authorizeRecovery"]>[1]) {
-      return publisher?.authorizeRecovery(admin, request);
+      const preimage = liveProxy();
+      if (!preimage || !observer.alive()) return unavailable;
+      return publisher?.authorizeRecovery(admin, request, preimage);
     },
     async close() {
       closing = true;

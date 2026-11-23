@@ -45,6 +45,8 @@ type Intent = { kind: Edit; proposal: Proposal } | { kind: "recovery"; releaseDi
 type Target = { policy: PolicyRevision; domains: readonly string[]; domainsDigest: string };
 type Phase = "claimed" | "activating" | "publishing" | "published";
 
+export interface ProxyPreimage { generation: string; revision: number; domainsDigest: string }
+
 export interface PublisherOperation {
   operationId: string;
   expectedRevision: number;
@@ -52,6 +54,7 @@ export interface PublisherOperation {
   intent: Intent;
   target: Target;
   phase: Phase;
+  homePreimage?: ProxyPreimage;
 }
 
 export interface ProxyPublicationReceipt {
@@ -429,12 +432,15 @@ export function openDomainPublisher<Session>(options: PublisherOptions<Session>)
   function authorizeRecovery(
     session: Session,
     request: { epoch: number; operationId: string; proxyGeneration: string; domains: readonly string[]; releaseDirect: readonly string[] },
+    homePreimage?: ProxyPreimage,
   ): PublisherResult<PublisherOperation> {
     return store.transact((state, save) => {
       const denied = authorize(state, session, "local_admin");
       if (denied) return denied;
       if (request.epoch !== state.epoch || state.pending || state.allocatedRevision === Number.MAX_SAFE_INTEGER) return fail("conflict");
       if (state.editingEnabled) return fail("not_ready");
+      if (homePreimage && (!tag(homePreimage.generation) || !uint(homePreimage.revision) ||
+          homePreimage.revision > state.allocatedRevision || !/^[0-9a-f]{64}$/.test(homePreimage.domainsDigest))) return fail("not_ready");
       const ceilingDomains = state.recovery?.ceiling ?? state.lastProven.domains;
       const retainRoutes = state.recovery?.retainRoutes ?? state.lastProven.policy.routes;
       const expected = state.lastProven.policy.revision;
@@ -457,6 +463,7 @@ export function openDomainPublisher<Session>(options: PublisherOptions<Session>)
       const operation: PublisherOperation = {
         operationId: request.operationId, expectedRevision: expected, proxyGeneration: request.proxyGeneration,
         intent: { kind: "recovery", releaseDirect: release.domains }, target: target(state.epoch, domains, routes.domains), phase: "claimed",
+        homePreimage,
       };
       state.pending = operation;
       state.allocatedRevision = revision;
