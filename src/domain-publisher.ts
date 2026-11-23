@@ -15,6 +15,7 @@ type Edit = "add" | "remove";
 export type PublisherPrincipal =
   | { role: "editor"; enrollment: string; epoch: number }
   | { role: "proxy"; enrollment: string; epoch: number; generation: string }
+  | { role: "observer"; enrollment: string; epoch: number; generation: string }
   | { role: "local_admin"; enrollment: string };
 
 export interface PublisherOptions<Session> {
@@ -62,7 +63,20 @@ export interface ProxyPublicationReceipt {
   proxyGeneration: string;
 }
 
-type Archived = { operationId: string; revision: number; disposition: "cancelled" | "recovery_required" };
+export interface BrowserFinalization {
+  enrollment: string;
+  epoch: number;
+  operationId: string;
+  revision: number;
+  domainsDigest: string;
+  proxyGeneration: string;
+  browserGeneration: string;
+  policyDigest: string;
+  positive: string;
+  negative: string;
+}
+
+type Archived = { operationId: string; revision: number; disposition: "cancelled" | "recovery_required" | "applied" | "reconciled" };
 type Recovery = { operationId: string; ceiling: readonly string[]; retainRoutes: readonly string[] };
 
 type JournalState = {
@@ -79,9 +93,10 @@ type JournalState = {
   pending: PublisherOperation | null;
   recovery: Recovery | null;
   history: Archived[];
+  lastBrowserProof?: BrowserFinalization;
 };
 
-export type PublisherView = Pick<JournalState, "epoch" | "lastProven" | "recordedPolicy" | "pending" | "recovery" | "history">;
+export type PublisherView = Pick<JournalState, "epoch" | "proxyGeneration" | "editingEnabled" | "lastProven" | "lastBrowserProof" | "recordedPolicy" | "pending" | "recovery" | "history">;
 
 type Failure = "unauthorized" | "fenced" | "invalid_request" | "invalid_domain" | "duplicate_domain" | "domain_not_found"
   | "limit" | "conflict" | "recovery_required" | "not_ready" | "unknown_operation" | "receipt_mismatch" | "unavailable";
@@ -227,6 +242,8 @@ export function openDomainPublisher<Session>(options: PublisherOptions<Session>)
   function inspect(session: Session): PublisherResult<PublisherView> {
     return store.transact((state) => authorize(state, session) ?? ok({
       epoch: state.epoch, lastProven: state.lastProven, recordedPolicy: state.recordedPolicy,
+      proxyGeneration: state.proxyGeneration, editingEnabled: state.editingEnabled,
+      lastBrowserProof: state.lastBrowserProof,
       pending: state.pending, recovery: state.recovery, history: state.history,
     }));
   }
@@ -335,6 +352,47 @@ export function openDomainPublisher<Session>(options: PublisherOptions<Session>)
     });
   }
 
+  // Called only by the protected in-process observer after a fresh paired browser probe.
+  // Recheck the whole publication tuple and bytes under the same lock as disable.
+  function finalize(session: Session, proof: BrowserFinalization): PublisherResult<PublisherView["lastProven"]> {
+    return store.transact((state, save) => {
+      const denied = authorize(state, session, "observer");
+      if (denied) return denied;
+      const observer = identify(session);
+      const pending = state.pending;
+      if (!pending || pending.phase !== "published" || !proof || observer?.role !== "observer" ||
+          proof.enrollment !== state.enrollment || proof.epoch !== state.epoch ||
+          proof.epoch !== pending.target.policy.epoch || proof.operationId !== pending.operationId ||
+          proof.revision !== pending.target.policy.revision || proof.domainsDigest !== pending.target.domainsDigest ||
+          proof.proxyGeneration !== state.proxyGeneration || proof.proxyGeneration !== pending.proxyGeneration ||
+          proof.browserGeneration !== observer.generation) return fail("receipt_mismatch");
+      const wrongEpoch = proof.epoch === 0 ? 1 : proof.epoch - 1;
+      const currentName = new RegExp(`^[a-f0-9]{32}\\.e${proof.epoch}\\.r${proof.revision}\\.pac\\.invalid$`);
+      const wrongName = new RegExp(`^[a-f0-9]{32}\\.e${wrongEpoch}\\.r${proof.revision}\\.pac\\.invalid$`);
+      if (!currentName.test(proof.positive) || !wrongName.test(proof.negative) ||
+          proof.positive.slice(0, 32) === proof.negative.slice(0, 32)) return fail("receipt_mismatch");
+      const expected = rendered(pending.target.policy);
+      if (hashBytes(expected) !== proof.policyDigest || policy.read() !== expected) return fail("not_ready");
+      if (pending.intent.kind === "recovery") {
+        const recovery = state.recovery;
+        if (recovery) {
+          const archived = state.history.find((item) => item.operationId === recovery.operationId);
+          if (archived) archived.disposition = "reconciled";
+          else state.history.push({ operationId: recovery.operationId, revision: pending.target.policy.revision, disposition: "reconciled" });
+          state.recovery = null;
+        }
+        state.editingEnabled = true;
+      }
+      state.history.push({ operationId: pending.operationId, revision: pending.target.policy.revision, disposition: "applied" });
+      if (state.history.length > MAX_HISTORY) state.history.splice(0, state.history.length - MAX_HISTORY);
+      state.lastProven = pending.target;
+      state.lastBrowserProof = proof;
+      state.pending = null;
+      save();
+      return ok(state.lastProven);
+    });
+  }
+
   function disable(session: Session, expectedEpoch: number): PublisherResult<number> {
     return store.transact((state, save) => {
       const denied = authorize(state, session, "local_admin");
@@ -376,17 +434,18 @@ export function openDomainPublisher<Session>(options: PublisherOptions<Session>)
       const denied = authorize(state, session, "local_admin");
       if (denied) return denied;
       if (request.epoch !== state.epoch || state.pending || state.allocatedRevision === Number.MAX_SAFE_INTEGER) return fail("conflict");
-      const recovery = state.recovery;
-      if (!recovery) return fail("not_ready");
+      if (state.editingEnabled) return fail("not_ready");
+      const ceilingDomains = state.recovery?.ceiling ?? state.lastProven.domains;
+      const retainRoutes = state.recovery?.retainRoutes ?? state.lastProven.policy.routes;
       const expected = state.lastProven.policy.revision;
       if (!operationId(request.operationId, state.epoch, expected) || !tag(request.proxyGeneration)) return fail("invalid_request");
       const revision = state.allocatedRevision + 1;
       const domains = snapshot(revision, request.domains);
       const release = snapshot(revision, request.releaseDirect);
-      const ceiling = snapshot(revision, recovery.ceiling);
+      const ceiling = snapshot(revision, ceilingDomains);
       if (!domains || !release || !ceiling || !domains.domains.every(ceiling.allows) ||
-          !release.domains.every((d) => recovery.retainRoutes.includes(d))) return fail("invalid_domain");
-      const routes = snapshot(revision, recovery.retainRoutes.filter((d) => !release.domains.includes(d)));
+          !release.domains.every((d) => retainRoutes.includes(d))) return fail("invalid_domain");
+      const routes = snapshot(revision, retainRoutes.filter((d) => !release.domains.includes(d)));
       if (!routes || !domains.domains.every((d) => isAllowed(d, routes.domains))) return fail("invalid_domain");
       const found = policy.read();
       if (found !== rendered(state.recordedPolicy)) {
@@ -407,5 +466,5 @@ export function openDomainPublisher<Session>(options: PublisherOptions<Session>)
     });
   }
 
-  return { inspect, propose, beginActivation, publish, disable, authorizeRecovery, close: store.close };
+  return { inspect, propose, beginActivation, publish, finalize, disable, authorizeRecovery, close: store.close };
 }

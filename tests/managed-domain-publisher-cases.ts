@@ -3,7 +3,7 @@ import { mkdirSync, readFileSync, renameSync, statSync, symlinkSync, writeFileSy
 import { join } from "node:path";
 import { runInNewContext } from "node:vm";
 import {
-  DOMAIN_POLICY_FILE, fileDomainPolicySink, renderDomainPolicy, type DomainPolicySink,
+  DOMAIN_POLICY_FILE, fileDomainPolicySink, hashBytes, renderDomainPolicy, type DomainPolicySink,
 } from "../src/domain-policy";
 import {
   openDomainPublisher, provisionDomainPublisher,
@@ -44,7 +44,8 @@ function fixture(domains = ["amazonaws.com", "mozilla.org", "wikipedia.org"]) {
   writeFileSync(policyPath, initial, { mode: 0o644 });
   const identities = new WeakMap<object, PublisherPrincipal>();
   const session = (principal: Omit<Extract<PublisherPrincipal, { role: "proxy" }>, "enrollment"> |
-    Omit<Extract<PublisherPrincipal, { role: "editor" }>, "enrollment"> | { role: "local_admin" }, enrollment = ENROLLMENT) => {
+    Omit<Extract<PublisherPrincipal, { role: "editor" }>, "enrollment"> |
+    Omit<Extract<PublisherPrincipal, { role: "observer" }>, "enrollment"> | { role: "local_admin" }, enrollment = ENROLLMENT) => {
     const ticket = Object.freeze({});
     identities.set(ticket, { ...principal, enrollment });
     return ticket;
@@ -232,6 +233,43 @@ test("[domains C10] a claimed no-effect edit cancels without a policy write and 
   expect(resumed.beginActivation(f.proxy, op.operationId)).toEqual(err("fenced"));
   expect(resumed.propose(f.editor, "remove", wire("wikipedia.org"))).toEqual(err("fenced"));
   expect(f.sink.read()).toBe(f.initial);
+});
+
+test("[domains C10] only fresh protected publication proof can re-enable a no-effect fenced enrollment", () => {
+  const f = fixture(["wikipedia.org"]);
+  const p = f.open();
+  const prior = value(p.propose(f.editor, "remove", wire("wikipedia.org")));
+  const epoch = value(p.disable(f.admin, EPOCH));
+  const editor = f.session({ role: "editor", epoch });
+  const proxy = f.session({ role: "proxy", epoch, generation: "proxy-2" });
+  const observer = f.session({ role: "observer", epoch, generation: "chrome-2" });
+  const stale = f.session({ role: "observer", epoch: EPOCH, generation: "chrome-2" });
+  const op = value(p.authorizeRecovery(f.admin, {
+    epoch, operationId: id(1, epoch), proxyGeneration: "proxy-2", domains: ["wikipedia.org"], releaseDirect: [],
+  }));
+  expect(p.propose(editor, "add", wire("wipo.int", id(2, epoch)))).toEqual(err("not_ready"));
+  value(p.beginActivation(proxy, op.operationId));
+  value(p.publish(proxy, receipt(op)));
+  const revision = op.target.policy.revision;
+  const proof = {
+    ...receipt(op), browserGeneration: "chrome-2", policyDigest: hashBytes(f.sink.read()),
+    positive: `${"a".repeat(32)}.e${epoch}.r${revision}.pac.invalid`,
+    negative: `${"b".repeat(32)}.e${epoch - 1}.r${revision}.pac.invalid`,
+  };
+  expect(p.finalize(editor, proof)).toEqual(err("unauthorized"));
+  expect(p.finalize(proxy, proof)).toEqual(err("unauthorized"));
+  expect(p.finalize(stale, proof)).toEqual(err("fenced"));
+  expect(p.finalize(observer, { ...proof, browserGeneration: "sibling" })).toEqual(err("receipt_mismatch"));
+  expect(p.finalize(observer, { ...proof, negative: proof.positive })).toEqual(err("receipt_mismatch"));
+  expect(p.finalize(observer, { ...proof, policyDigest: "0".repeat(64) })).toEqual(err("not_ready"));
+  expect(value(p.inspect(f.admin)).editingEnabled).toBe(false);
+  value(p.finalize(observer, proof));
+  p.close();
+  const reopened = f.open();
+  const state = value(reopened.inspect(f.admin));
+  expect(state.lastBrowserProof).toEqual(proof);
+  expect(state.history.find((item) => item.operationId === prior.operationId)?.disposition).toBe("cancelled");
+  expect(value(reopened.propose(editor, "add", wire("wipo.int", id(2, epoch, revision), revision))).phase).toBe("claimed");
 });
 
 test("[domains C10] administrator recovery stays narrower, retains uncertain routes, and requires a fresh receipt", () => {
