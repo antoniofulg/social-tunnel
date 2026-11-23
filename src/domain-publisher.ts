@@ -244,6 +244,22 @@ export function openDomainPublisher<Session>(options: PublisherOptions<Session>)
     return null;
   };
 
+  function policyImage(state: JournalState, bytes: string) {
+    if (bytes === rendered(state.recordedPolicy)) return "recorded";
+    if (state.pending?.phase === "publishing" && bytes === rendered(state.pending.target.policy)) return "publishing";
+    if (!state.editingEnabled && state.recovery && state.possiblyWritten && bytes === rendered(state.possiblyWritten)) return "interrupted";
+    return null;
+  }
+
+  function inspectPolicy(session: Session) {
+    return store.transact((state) => {
+      const denied = authorize(state, session, "local_admin");
+      if (denied) return denied;
+      const image = policyImage(state, policy.read());
+      return image ? ok(image) : fail("not_ready");
+    });
+  }
+
   function inspect(session: Session): PublisherResult<PublisherView> {
     return store.transact((state) => authorize(state, session) ?? ok({
       epoch: state.epoch, lastProven: state.lastProven, recordedPolicy: state.recordedPolicy,
@@ -483,8 +499,9 @@ export function openDomainPublisher<Session>(options: PublisherOptions<Session>)
       const routes = snapshot(revision, retainRoutes.filter((d) => !release.domains.includes(d)));
       if (!routes || !domains.domains.every((d) => isAllowed(d, routes.domains))) return fail("invalid_domain");
       const found = policy.read();
-      if (found !== rendered(state.recordedPolicy)) {
-        if (!state.possiblyWritten || found !== rendered(state.possiblyWritten)) return fail("not_ready");
+      const image = policyImage(state, found);
+      if (image !== "recorded") {
+        if (image !== "interrupted" || !state.possiblyWritten) return fail("not_ready");
         policy.replace(found, found);
         state.recordedPolicy = state.possiblyWritten;
       }
@@ -502,5 +519,5 @@ export function openDomainPublisher<Session>(options: PublisherOptions<Session>)
     });
   }
 
-  return { inspect, propose, reconcile, beginActivation, publish, finalize, disable, authorizeRecovery, close: store.close };
+  return { inspect, inspectPolicy, propose, reconcile, beginActivation, publish, finalize, disable, authorizeRecovery, close: store.close };
 }

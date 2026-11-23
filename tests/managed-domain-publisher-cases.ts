@@ -183,8 +183,10 @@ test("[domains C9] authorization is checked again after arming; disabling fences
   expect(p.publish(f.proxy, receipt(op))).toEqual(err("unauthorized"));
   expect(value(p.inspect(f.admin)).pending?.phase).toBe("publishing");
   expect(f.sink.read()).toBe(f.initial);
+  expect(value(p.inspectPolicy(f.admin))).toBe("recorded");
   allow = Number.POSITIVE_INFINITY;
   expect(value(p.disable(f.admin, EPOCH))).toBe(EPOCH + 1);
+  expect(value(p.inspectPolicy(f.admin))).toBe("recorded");
   expect(p.publish(f.proxy, receipt(op))).toEqual(err("fenced"));
   expect(p.beginActivation(f.proxy, op.operationId)).toEqual(err("fenced"));
   expect(p.propose(f.editor, "remove", wire("wikipedia.org"))).toEqual(err("fenced"));
@@ -201,6 +203,7 @@ test("[domains C10] a lost publication response reconciles exact bytes on restar
   expect(p.publish(f.proxy, receipt(op))).toEqual(err("unavailable"));
   const inode = statSync(f.policyPath).ino;
   expect(pac(f.sink.read())("wikipedia.org")).toBe("DIRECT");
+  expect(value(p.inspectPolicy(f.admin))).toBe("publishing");
   p.close();
 
   const resumed = f.open();
@@ -216,6 +219,7 @@ test("[domains C10] a lost publication response reconciles exact bytes on restar
   // Replacing the target with unrelated or rolled-back bytes is not an implicit rollback/apply.
   writeFileSync(f.policyPath, f.initial);
   expect(resumed.publish(f.proxy, receipt(op))).toEqual(err("unavailable"));
+  expect(resumed.inspectPolicy(f.admin)).toEqual(err("not_ready"));
   expect(f.sink.read()).toBe(f.initial);
 });
 
@@ -309,16 +313,37 @@ test("[domains C10] administrator recovery stays narrower, retains uncertain rou
   const op = value(from.propose(f.editor, "remove", wire("wikipedia.org")));
   value(from.beginActivation(f.proxy, op.operationId));
   expect(from.publish(f.proxy, receipt(op))).toEqual(err("unavailable"));
-  const epoch = value(from.disable(f.admin, EPOCH));
+  const afterRename = f.sink.read();
   from.close();
+  const restarted = f.open();
+  expect(value(restarted.inspectPolicy(f.admin))).toBe("publishing");
+  expect(restarted.inspectPolicy(f.editor)).toEqual(err("unauthorized"));
+  const epoch = value(restarted.disable(f.admin, EPOCH));
+  restarted.close();
   const p = f.open();
+  expect(value(p.inspectPolicy(f.admin))).toBe("interrupted");
+  expect(value(p.inspect(f.admin))).toMatchObject({ editingEnabled: false, pending: null, lastProven: { policy: { revision: INIT } } });
+  expect(f.sink.read()).toBe(afterRename);
   const adminRecovery = { epoch, operationId: id(3, epoch), proxyGeneration: "proxy-2", domains: [], releaseDirect: [] };
   const fresh = f.session({ role: "proxy", epoch, generation: "proxy-2" });
   const freshEditor = f.session({ role: "editor", epoch });
   expect(p.authorizeRecovery(freshEditor, adminRecovery)).toEqual(err("unauthorized"));
   expect(p.authorizeRecovery(f.admin, { ...adminRecovery, domains: ["www.wikipedia.org"] })).toEqual(err("invalid_domain"));
   expect(p.authorizeRecovery(f.admin, { ...adminRecovery, releaseDirect: ["who.int"] })).toEqual(err("invalid_domain"));
+  const beforeRecovery = f.bytes();
+  for (const unknown of [afterRename.trimEnd(), renderDomainPolicy(PORT, { epoch, revision: INIT + 1, routes: [] })]) {
+    writeFileSync(f.policyPath, unknown);
+    expect(p.inspectPolicy(f.admin)).toEqual(err("not_ready"));
+    expect(p.authorizeRecovery(f.admin, adminRecovery)).toEqual(err("not_ready"));
+    expect(f.sink.read()).toBe(unknown);
+    expect(f.bytes()).toEqual(beforeRecovery);
+  }
+  writeFileSync(f.policyPath, afterRename);
+  const inode = statSync(f.policyPath).ino;
   const recovery = value(p.authorizeRecovery(f.admin, adminRecovery));
+  expect(f.sink.read()).toBe(afterRename);
+  expect(statSync(f.policyPath).ino).toBe(inode);
+  expect(value(p.inspectPolicy(f.admin))).toBe("recorded");
   expect(recovery.target).toMatchObject({ domains: [], policy: { revision: INIT + 2, routes: ["wikipedia.org"] } });
   expect(p.publish(fresh, receipt(recovery))).toEqual(err("receipt_mismatch"));
   value(p.beginActivation(fresh, recovery.operationId));

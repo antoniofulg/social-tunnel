@@ -1,9 +1,9 @@
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { constants, closeSync, fstatSync, lstatSync, openSync, readFileSync, readSync, readdirSync, readlinkSync, realpathSync, statSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { createHash } from "node:crypto";
 import { DIRECT_WITNESS_HELPER } from "./domain-direct-witness";
-import { DOMAIN_POLICY_FILE, protectedDirectory } from "../src/domain-policy";
+import { DOMAIN_POLICY_FILE, hashBytes, protectedDirectory } from "../src/domain-policy";
 import { domainDigest, domainTag, domainUInt, wireObject } from "../src/domain-wire";
 import { parseManagedDomainSnapshot } from "../src/managed-domains";
 
@@ -19,7 +19,10 @@ export const COMMAND = "/usr/local/bin/st-domains-command";
 export const SETPRIV = "/usr/bin/setpriv";
 const SSHD = "/usr/sbin/sshd";
 const SSH_CONFIG = `${ROOT}/sshd.conf`;
-const PID_FILE = `${RUN}/sshd.pid`;
+export const SSH_RUN = `${RUN}/sshd`;
+export const SSH_SNAPSHOT = `${SSH_RUN}/sshd.conf`;
+export const SSH_LAUNCH = `${SSH_RUN}/launch.json`;
+const SSH_ENV = { PATH: "/usr/bin:/bin", LC_ALL: "C" };
 const CGROUP = "/sys/fs/cgroup";
 const UTF8 = new TextDecoder("utf-8", { fatal: true });
 export const ADMIN_SOCKET = `${RUN}/admin/control.sock`;
@@ -73,7 +76,7 @@ function account(raw: unknown): Account {
 }
 
 function invoke(program: string, args: string[], maxBuffer = 16384) {
-  const result = spawnSync(program, args, { env: { PATH: "/usr/bin:/bin", LC_ALL: "C" }, timeout: 3000, maxBuffer, encoding: "utf8" });
+  const result = spawnSync(program, args, { env: SSH_ENV, timeout: 3000, maxBuffer, encoding: "utf8" });
   if (result.status !== 0) throw new Error(`protected check failed: ${program}`);
   return result.stdout.trimEnd();
 }
@@ -196,30 +199,39 @@ function accountRestrictions(m: Manifest) {
 export function dropped(a: Account) { return [`--reuid=${a.uid}`, `--regid=${a.gid}`, "--clear-groups", "--no-new-privs", "--"]; }
 export const roleDirectory = (user: string) => `${RUN}/${user}`;
 
-function sshSettings(m: Manifest) {
-  const cfg = protectedFile(SSH_CONFIG, 65536, true).toString();
-  const allowed = [m.forward, ...m.epochs.flatMap((e) => [e.editor, e.receipt])].map((a) => a.user);
-  for (const line of cfg.split("\n")) {
-    const entry = /^\s*match\s+user\s+([a-z_][a-z0-9_-]*)\s*(?:#.*)?$/i.exec(line);
-    if (/^\s*match\b/i.test(line) && (!entry || !allowed.includes(entry[1]!))) throw new Error("unscoped SSH Match directive");
-  }
-  // Dedicated sshd, not an include into a shared daemon with independent Match/CA settings.
-  if (/^\s*(?:include|subsystem|authorizedkeyscommand|authorizedprincipalscommand|trustedusercakeys|permituserenvironment\s+yes|acceptenv|setenv)\b/im.test(cfg)) {
-    throw new Error("unsupported managed SSH configuration directive");
-  }
+export const readSshConfig = () => protectedFile(SSH_CONFIG, 65536, true);
+
+function sshSettings(m: Manifest, config: string) {
+  const cfg = UTF8.decode(protectedFile(config, 65536, true));
   const authorities = [m.forward, ...m.epochs.flatMap((e) => [e.editor, e.receipt])];
+  const globalOptions = new Set(("port listenaddress pidfile hostkey authorizedkeysfile allowusers authenticationmethods " +
+    "pubkeyauthentication passwordauthentication kbdinteractiveauthentication permitrootlogin permitemptypasswords usepam " +
+    "permittty x11forwarding allowagentforwarding allowstreamlocalforwarding permituserenvironment permituserrc gatewayports " +
+    "permitopen permitlisten allowtcpforwarding maxsessions strictmodes").split(" "));
+  const matchOptions = new Set(["maxsessions", "allowtcpforwarding", "permitlisten", "forcecommand", "disableforwarding"]);
+  let options = globalOptions;
+  for (const line of cfg.split("\n")) {
+    const text = line.trim();
+    if (!text || text.startsWith("#")) continue;
+    const entry = /^match\s+user\s+([a-z_][a-z0-9_-]*)\s*(?:#.*)?$/i.exec(text);
+    if (entry && authorities.some((a) => a.user === entry[1])) options = matchOptions;
+    else if (!options.has(/^([a-z][a-z0-9]*)\s+\S/i.exec(text)?.[1]?.toLowerCase() ?? "")) throw new Error("unsupported managed SSH directive");
+  }
+  invoke(SSHD, ["-t", "-f", config]);
   for (const who of authorities) {
     const n = who.user;
-    const text = invoke(SSHD, ["-T", "-f", SSH_CONFIG, "-C", `user=${n},addr=127.0.0.1,host=localhost,laddr=127.0.0.1,lport=${m.sshPort}`]);
+    const text = invoke(SSHD, ["-T", "-f", config, "-C", `user=${n},addr=127.0.0.1,host=localhost,laddr=127.0.0.1,lport=${m.sshPort}`]);
     const lines = text.split("\n");
     const expected = ["pubkeyauthentication yes", "authenticationmethods publickey", "passwordauthentication no", "kbdinteractiveauthentication no",
       "permitrootlogin no", "permitemptypasswords no", "usepam no", "permittty no", "x11forwarding no", "allowagentforwarding no", "allowstreamlocalforwarding no",
-      "permituserenvironment no", "permituserrc no", "gatewayports no", "permitopen none", `port ${m.sshPort}`, `pidfile ${PID_FILE}`,
+      "permituserenvironment no", "permituserrc no", "gatewayports no", "permitopen none", "strictmodes yes", `port ${m.sshPort}`, "pidfile none",
       `authorizedkeysfile ${ROOT}/keys/%u`, `forcecommand ${who === m.forward ? "/bin/false" : `${COMMAND} ${roleDirectory(n)}/authority.sock`}`,
       ...(who === m.forward ? ["maxsessions 0", "disableforwarding no", "allowtcpforwarding remote", `permitlisten 127.0.0.1:${m.proxyPort}`]
         : ["maxsessions 1", "disableforwarding yes", "allowtcpforwarding no", "permitlisten none"]),
     ];
     if (lines.filter((line) => line.startsWith("port ")).length !== 1) throw new Error("ambiguous dedicated SSH port");
+    const listeners = lines.filter((line) => line.startsWith("listenaddress "));
+    if (!listeners.length || listeners.some((line) => !line.endsWith(`:${m.sshPort}`))) throw new Error("unexpected dedicated SSH listen port");
     const expectedUsers = authorities.map((a) => `allowusers ${a.user}`);
     const actualUsers = lines.filter((line) => line.startsWith("allowusers "));
     if (actualUsers.length !== expectedUsers.length || expectedUsers.some((line) => !actualUsers.includes(line))) {
@@ -229,7 +241,6 @@ function sshSettings(m: Manifest) {
       throw new Error("effective managed SSH restrictions differ");
     }
   }
-  return cfg;
 }
 
 function roleKeys(m: Manifest, required: string[]) {
@@ -248,6 +259,86 @@ function roleKeys(m: Manifest, required: string[]) {
   }
 }
 
+function stamp(file: string) {
+  const s = lstatSync(file, { bigint: true });
+  return `${s.dev}:${s.ino}:${s.ctimeNs}`;
+}
+
+function pinExecutable(file: string, expected: string) {
+  executable(file);
+  const identity = stamp(file);
+  const hash = createHash("sha256");
+  const fd = openSync(file, constants.O_RDONLY | constants.O_NOFOLLOW);
+  try {
+    const buf = Buffer.allocUnsafe(128 * 1024);
+    for (let n; (n = readSync(fd, buf, 0, buf.length, null)) > 0;) hash.update(buf.subarray(0, n));
+  } finally { closeSync(fd); }
+  const check = () => {
+    if (stamp(file) !== identity) throw new Error("pinned executable changed");
+  };
+  if (hash.digest("hex") !== expected) throw new Error("pinned executable differs");
+  check();
+  return check;
+}
+
+function probeGuard(m: Manifest, guard: ReturnType<typeof readGuard>) {
+  if (invoke(SETPRIV, [...dropped(m.probe), PROGRAM, "bind-probe", String(m.proxyPort)]) !== "ipv4-and-ipv6-denied") {
+    throw new Error("kernel bind exclusion missing");
+  }
+  if (!guard.raw.equals(readGuard(m).raw)) throw new Error("bind guard changed");
+}
+
+function sshLaunchScope(m: Manifest, guard: ReturnType<typeof readGuard>, cfg: Buffer) {
+  const digest = (bytes: Buffer) => createHash("sha256").update(bytes).digest("hex");
+  return hashBytes(JSON.stringify([m, readlinkSync("/proc/self/ns/pid"), digest(guard.raw), digest(cfg)]));
+}
+
+// Runs only inside the attested service cgroup. Its fixed child inherits both
+// cgroup and network namespace; the unit denies namespace changes.
+export function guardedSshd(m: Manifest, cfg: Buffer) {
+  const checkExecutable = pinExecutable(SSHD, m.sshdSha256);
+  for (const file of [COMMAND, SETPRIV, PROGRAM]) executable(file);
+  sshSettings(m, SSH_SNAPSHOT);
+  const guard = readGuard(m);
+  const launcher = proc(process.pid);
+  if (!launcher || launcher.uid !== 0 || !launcher.noNewPrivs || launcher.cgroup !== guard.cgroup) {
+    throw new Error("dedicated guarded SSH service cgroup required");
+  }
+  const check = () => {
+    checkExecutable();
+    if (!cfg.equals(readSshConfig()) || !cfg.equals(protectedFile(SSH_SNAPSHOT, 65536, true))) throw new Error("SSH configuration changed");
+    accountRestrictions(m);
+    roleKeys(m, [m.forward.user]);
+    probeGuard(m, guard);
+  };
+  const scope = sshLaunchScope(m, guard, cfg);
+  return {
+    check,
+    start() {
+      check();
+      return spawn(SSHD, ["-D", "-f", SSH_SNAPSHOT], { env: SSH_ENV, stdio: ["ignore", "inherit", "inherit"] });
+    },
+    evidence(pid: number) {
+      const child = proc(pid);
+      if (!child || child.uid !== 0 || child.ppid !== process.pid || !child.noNewPrivs || child.cgroup !== guard.cgroup) {
+        throw new Error("owned SSH child unavailable");
+      }
+      return { scope, parent: process.pid, parentStart: launcher.start, pid, start: child.start };
+    },
+  };
+}
+
+function sshMaster(cgroup: string, scope: string) {
+  const launch = exact(JSON.parse(UTF8.decode(protectedFile(SSH_LAUNCH, 512, true))), "scope parent parentStart pid start");
+  if (!launch || launch.scope !== scope || !domainUInt(launch.parent) || !domainUInt(launch.pid) ||
+      launch.parent <= 1 || launch.pid <= 1) return null;
+  const parent = proc(launch.parent);
+  const child = proc(launch.pid);
+  if (parent?.uid !== 0 || !parent.noNewPrivs || parent.start !== launch.parentStart || parent.cgroup !== cgroup ||
+      child?.uid !== 0 || !child.noNewPrivs || child.start !== launch.start || child.ppid !== launch.parent || child.cgroup !== cgroup) return null;
+  return `${launch.pid}:${child.start}`;
+}
+
 export function policyScope() {
   checkDirectories(POLICY);
   const entries = readdirSync(POLICY);
@@ -258,30 +349,19 @@ export function policyScope() {
 // No effective BPF capabilities are needed by the service. Root's boot-scoped
 // attestation identifies the enforcing host hooks; a real unprivileged bind
 // must additionally be refused by the kernel, not by an already occupied port.
-export function guardedPlatform(m: Manifest) {
+export function guardedPlatform(m: Manifest, staging: boolean) {
   if (process.platform !== "linux" || process.geteuid?.() !== 0) throw new Error("Linux local root required");
   executable(SETPRIV);
   executable(PROGRAM);
   const g = readGuard(m);
-  const probe = () => {
-    if (invoke(SETPRIV, [...dropped(m.probe), PROGRAM, "bind-probe", String(m.proxyPort)]) !== "ipv4-and-ipv6-denied") {
-      throw new Error("kernel bind exclusion missing");
-    }
-    if (!g.raw.equals(readGuard(m).raw)) throw new Error("bind guard changed");
-  };
-  probe();
-  for (const file of [CHROME, SSHD, COMMAND, DIRECT_WITNESS_HELPER]) executable(file);
-  for (const [file, expected] of [[CHROME, m.chromeSha256], [SSHD, m.sshdSha256]] as const) {
-    const hash = createHash("sha256");
-    const fd = openSync(file, constants.O_RDONLY | constants.O_NOFOLLOW);
-    try {
-      const buf = Buffer.allocUnsafe(128 * 1024);
-      for (let n; (n = readSync(fd, buf, 0, buf.length, null)) > 0;) hash.update(buf.subarray(0, n));
-    } finally { closeSync(fd); }
-    if (hash.digest("hex") !== expected) throw new Error("pinned executable differs");
-  }
+  probeGuard(m, g);
+  for (const file of [COMMAND, DIRECT_WITNESS_HELPER]) executable(file);
+  pinExecutable(CHROME, m.chromeSha256);
+  pinExecutable(SSHD, m.sshdSha256);
   accountRestrictions(m);
-  const ssh = sshSettings(m);
+  const ssh = readSshConfig();
+  if (staging) sshSettings(m, SSH_CONFIG);
+  const scope = sshLaunchScope(m, g, ssh);
   roleKeys(m, [m.forward.user]);
   for (const dir of [ROOT, STATE, RUN, dirname(ADMIN_SOCKET), JOURNAL, STAGING]) checkDirectories(dir);
   for (const dir of [dirname(ADMIN_SOCKET), JOURNAL, STAGING]) protectedDirectory(dir, true);
@@ -297,20 +377,17 @@ export function guardedPlatform(m: Manifest) {
   return {
     profileIdentity: `${profile.dev}:${profile.ino}`,
     probe() {
-      probe();
-      if (protectedFile(SSH_CONFIG, 65536, true).toString() !== ssh) throw new Error("SSH configuration changed");
+      probeGuard(m, g);
+      if (!readSshConfig().equals(ssh)) throw new Error("SSH configuration changed");
       accountRestrictions(m);
     },
     requireRole(who: Account) { roleKeys(m, [m.forward.user, who.user]); },
-    // Runtime does not receive CAP_SYS_PTRACE. The master is pinned by its
-    // provisioned cgroup, process start stamp and fixed launch command.
+    // The root-only launch record already binds the attested network namespace.
+    // Do not read the higher-capability sshd master's procfs namespace or exe links.
     forwardIdentity() {
       try {
-        const rootPid = protectedFile(PID_FILE, 16).toString().trim();
-        if (!/^[1-9]\d{0,8}$/.test(rootPid) || namespace(rootPid) !== namespace("self")) return null;
-        const master = proc(rootPid);
-        if (!master || (master.exe !== undefined && master.exe !== SSHD) || master.uid !== 0 || master.cgroup !== g.cgroup || !master.start ||
-            !readFileSync(`/proc/${rootPid}/cmdline`, "utf8").replaceAll("\0", " ").includes(`${SSHD} -D -f ${SSH_CONFIG}`)) return null;
+        const master = sshMaster(g.cgroup, scope);
+        if (!master) return null;
         const hex = m.proxyPort.toString(16).toUpperCase().padStart(4, "0");
         const listeners = ["tcp", "tcp6"].flatMap((file) => readFileSync(`/proc/net/${file}`, "utf8").trim().split("\n").slice(1)
           .map((line) => line.trim().split(/\s+/)).filter((cols) => cols[3] === "0A" && cols[1]?.endsWith(`:${hex}`)));
@@ -318,24 +395,28 @@ export function guardedPlatform(m: Manifest) {
         if (listeners.length !== 1 || !socket || socket[1] !== `0100007F:${hex}` || socket[7] !== String(m.forward.uid) || !/^\d+$/.test(socket[9] ?? "")) return null;
         // The attached host guard grants this UID only in the fixed sshd cgroup.
         // This is a listener identity, not the exclusion mechanism.
-        return `${rootPid}:${master.start}:${socket[9]}`;
+        return master === sshMaster(g.cgroup, scope) ? `${master}:${socket[9]}` : null;
       } catch { /* absent or unobservable means not enrolled */ }
       return null;
     },
   };
 }
 
-export function proc(pid: string | number) {
+export function proc(pid: string | number, readExecutable = false) {
   try {
     const dir = `/proc/${pid}`;
     const stat = readFileSync(`${dir}/stat`, "utf8");
     const fields = stat.slice(stat.lastIndexOf(") ") + 2).split(" ");
+    const start = fields[19];
+    if (!start || !/^\d+$/.test(start) || /[XZ]/.test(fields[0] ?? "")) return null;
     const status = readFileSync(`${dir}/status`, "utf8");
     const uid = Number(/^Uid:\s+\d+\s+(\d+)/m.exec(status)?.[1]);
     const cgroup = /^0::(\S+)$/m.exec(readFileSync(`${dir}/cgroup`, "utf8"))?.[1];
     let exe: string | undefined;
-    try { exe = readlinkSync(`${dir}/exe`); } catch { /* credential transition can restrict procfs links */ }
-    return { uid, cgroup, exe, start: fields[19],
+    if (readExecutable) {
+      try { exe = readlinkSync(`${dir}/exe`); } catch { /* credential transition can restrict procfs links */ }
+    }
+    return { uid, cgroup, exe, start, ppid: Number(fields[1]),
       noNewPrivs: /^NoNewPrivs:\s+1$/m.test(status) };
   } catch { return null; }
 }

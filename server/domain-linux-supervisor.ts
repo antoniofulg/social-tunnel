@@ -8,7 +8,9 @@ import type { Readable, Writable } from "node:stream";
 import { setTimeout as sleep } from "node:timers/promises";
 import { openDomainAuthority } from "./domain-authority";
 import { DIRECT_WITNESS_MAPPING } from "./domain-direct-witness";
-import { ADMIN_SOCKET, CHROME, JOURNAL, POLICY, PROFILE, ROOT, SETPRIV, STAGING, dropped, exact, guardedPlatform, inspectBindHooks, loadManifest, policyScope, proc, roleDirectory, type Epoch, type Manifest } from "./domain-linux-platform";
+import { ADMIN_SOCKET, CHROME, JOURNAL, POLICY, PROFILE, ROOT, SETPRIV, SSH_LAUNCH, SSH_RUN, SSH_SNAPSHOT, STAGING,
+  dropped, exact, guardedPlatform, guardedSshd, inspectBindHooks, loadManifest, policyScope, proc, readSshConfig, roleDirectory,
+  type Epoch, type Manifest } from "./domain-linux-platform";
 import { DOMAIN_POLICY_FILE, fileDomainPolicySink, hashBytes, protectedDirectory, renderDomainPolicy, syncDirectory } from "../src/domain-policy";
 import { domainUInt, operationIdFormat } from "../src/domain-wire";
 import { parseManagedDomainSnapshot } from "../src/managed-domains";
@@ -40,7 +42,7 @@ function safeSmall(path: string, max: number) {
   } finally { closeSync(fd); }
 }
 
-function createSynced(path: string, data: string, mode: number) {
+function createSynced(path: string, data: string | Buffer, mode: number) {
   const fd = openSync(path, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW, mode);
   try { writeFileSync(fd, data); fchmodSync(fd, mode); fsyncSync(fd); } finally { closeSync(fd); }
   syncDirectory(dirname(path));
@@ -131,6 +133,62 @@ function serialLoop(work: () => Promise<unknown>, delay: number, fail: (e: unkno
   return async () => { signal.abort(); await done; };
 }
 
+async function serveSshd(m: Manifest) {
+  protectedDirectory(SSH_RUN, true);
+  if (lstatSync(SSH_LAUNCH, { throwIfNoEntry: false })) throw new Error("SSH launch record already exists");
+  const cfg = readSshConfig();
+  createSynced(SSH_SNAPSHOT, cfg, 0o600);
+  const ending = Promise.withResolvers<void>();
+  const exited = Promise.withResolvers<void>();
+  let stopping = false;
+  let failure: unknown;
+  const stop = (e?: unknown) => {
+    if (!stopping) failure = e;
+    stopping = true;
+    ending.resolve();
+  };
+  const signal = () => stop();
+  process.once("SIGINT", signal);
+  process.once("SIGTERM", signal);
+  let child: ChildProcess | undefined;
+  let closeLoop: (() => Promise<void>) | undefined;
+  let recorded = false;
+  try {
+    const launch = guardedSshd(m, cfg);
+    const sshd = child = launch.start();
+    sshd.once("error", stop);
+    sshd.once("exit", () => {
+      exited.resolve();
+      stop(new Error("owned SSH master exited"));
+    });
+    if (!sshd.pid) await ending.promise;
+    else {
+      createSynced(SSH_LAUNCH, JSON.stringify(launch.evidence(sshd.pid)), 0o600);
+      recorded = true;
+      closeLoop = serialLoop(async () => launch.check(), GUARD_MS, stop);
+      await ending.promise;
+    }
+    if (failure) throw failure;
+  } finally {
+    stopping = true;
+    try {
+      if (recorded) rmSync(SSH_LAUNCH);
+    } finally {
+      if (child?.pid && child.exitCode === null && child.signalCode === null) {
+        child.kill("SIGTERM");
+        try { await withTimeout(exited.promise, 1800); } catch {
+          if (child.exitCode === null && child.signalCode === null) child.kill("SIGKILL");
+          await withTimeout(exited.promise, 1800);
+        }
+      }
+      await closeLoop?.();
+      rmSync(SSH_SNAPSHOT);
+      process.off("SIGINT", signal);
+      process.off("SIGTERM", signal);
+    }
+  }
+}
+
 function control(dispatch: (request: unknown) => Promise<unknown>) {
   const open = new Set<Socket>();
   const server = createServer({ allowHalfOpen: true }, (socket) => {
@@ -195,7 +253,10 @@ async function serve(m: Manifest, platform: ReturnType<typeof guardedPlatform>) 
     };
     let policyIdentity = fileIdentity();
     const policy = {
-      read: () => fsPolicy.read(),
+      read() {
+        if (policyIdentity !== fileIdentity()) throw new Error("mandatory policy ownership changed");
+        return fsPolicy.read();
+      },
       replace(expected: string, next: string) {
         if (stopping || policyIdentity !== fileIdentity()) throw new Error("mandatory policy ownership changed");
         fsPolicy.replace(expected, next);
@@ -225,7 +286,7 @@ async function serve(m: Manifest, platform: ReturnType<typeof guardedPlatform>) 
     const own = () => {
       try {
         if (stopping || performance.now() >= guardUntil || !browser.pid || browser.exitCode !== null || browser.signalCode !== null) return lose();
-        const p = proc(browser.pid);
+        const p = proc(browser.pid, true);
         if (p?.uid !== m.profile.uid || (p.exe !== undefined && p.exe !== CHROME) || !p.noNewPrivs || !p.start) return lose();
         const profile = lstatSync(PROFILE);
         if (!profile.isDirectory() || `${profile.dev}:${profile.ino}` !== platform.profileIdentity || profile.uid !== m.profile.uid ||
@@ -246,14 +307,7 @@ async function serve(m: Manifest, platform: ReturnType<typeof guardedPlatform>) 
     });
     if (exists) {
       a.open();
-      const current = a.inspectLocal();
-      if (!current?.ok) throw new Error("authoritative journal cannot be opened");
-      const recorded = current.value.recordedPolicy;
-      const target = current.value.pending;
-      const contents = policy.read();
-      if (contents !== renderDomainPolicy(m.proxyPort, recorded) && (target?.phase !== "publishing" || contents !== renderDomainPolicy(m.proxyPort, target.target.policy))) {
-        throw new Error("mandatory policy is not a journaled preimage");
-      }
+      if (!a.inspectPolicyLocal()?.ok) throw new Error("mandatory policy is not a journaled image");
       if (boot === "attempted") marker.write("complete");
     }
     let receipt: Epoch | undefined;
@@ -321,6 +375,7 @@ async function serve(m: Manifest, platform: ReturnType<typeof guardedPlatform>) 
       }
       const disable = exact(raw, "op epoch");
       if (disable?.op === "disable" && domainUInt(disable.epoch)) {
+        if (!a.inspectPolicyLocal()?.ok) return error("not_ready");
         const disabled = await a.disable(disable.epoch);
         if (disabled?.ok) { receipt = editor = prepared = undefined; lastProofAt = -Infinity; }
         return disabled ?? error("not_ready");
@@ -446,9 +501,11 @@ if (import.meta.main) {
           renameSync(temp, `${ROOT}/bind-guard.json`);
           syncDirectory(ROOT);
         } finally { rmSync(temp, { force: true }); }
+      } else if (op === "serve-sshd" && !arg) {
+        await serveSshd(loadManifest());
       } else if ((op === "stage" || op === "serve") && !arg) {
         const m = loadManifest();
-        const platform = guardedPlatform(m);
+        const platform = guardedPlatform(m, op === "stage");
         if (op === "stage") stage(m); else await serve(m, platform);
       } else if ((op === "status" || op === "bootstrap") && !arg) await sendAdmin({ op });
       else if ((op === "disable" || op === "prepare") && arg && /^\d{1,16}$/.test(arg) && domainUInt(Number(arg))) await sendAdmin({ op, epoch: Number(arg) });
@@ -462,7 +519,7 @@ if (import.meta.main) {
         const req = exact(JSON.parse(utf8.decode(Buffer.concat(input, bytes))), "epoch operationId expectedRecovery domains releaseDirect");
         if (!req) throw new Error("invalid recovery request");
         await sendAdmin({ ...req, op });
-      } else throw new Error("use attest-bind <cgroup> <ipv4-tag> <ipv6-tag>, stage, serve, status, bootstrap, disable <epoch>, prepare <epoch>, or recover (JSON stdin)");
+      } else throw new Error("use attest-bind <cgroup> <ipv4-tag> <ipv6-tag>, stage, serve, serve-sshd, status, bootstrap, disable <epoch>, prepare <epoch>, or recover (JSON stdin)");
     }
   } catch (e) { console.error(e instanceof Error ? e.message : "managed supervisor unavailable"); process.exitCode = 1; }
 }

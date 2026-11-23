@@ -1,7 +1,7 @@
 [Unit]
 Description=Protected social-tunnel managed domains supervisor
 After=network.target social-tunnel-domains-sshd.service
-Requires=social-tunnel-domains-sshd.service
+BindsTo=social-tunnel-domains-sshd.service
 
 [Service]
 Type=simple
