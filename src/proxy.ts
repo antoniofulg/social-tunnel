@@ -75,6 +75,8 @@ type ManagedOptions = Omit<ProxyOptions, "domains" | "resolve" | "dial"> & {
   // Rejection means the dialer has already closed any socket it opened. Returned
   // sockets emit 'close' when local teardown finishes, not when destroy() starts.
   dial: Dialer;
+  // A freshly enrolled runtime may answer reserved probes before accepting payload.
+  trafficReady?: () => boolean;
 };
 
 type ManagedFlow = { host: string; revoke: () => Promise<void> };
@@ -88,7 +90,7 @@ export function createManagedProxy(options: ManagedOptions, initial: ManagedDoma
   const flows = new Set<ManagedFlow>();
   let current = initial;
   let activating = false;
-  const handle = channelHandler(options, (host) => current.allows(host), flows);
+  const handle = channelHandler(options, (host) => options.trafficReady?.() !== false && current.allows(host), flows);
 
   const activate = async (expectedRevision: number, next: ManagedDomainSnapshot): Promise<LocalActivation> => {
     if (activating || current.revision !== expectedRevision) return { ok: false, code: "conflict" };

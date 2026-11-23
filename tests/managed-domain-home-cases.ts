@@ -1,0 +1,396 @@
+import { expect, test } from "bun:test";
+import { mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
+import net from "node:net";
+import { join } from "node:path";
+import { Server, utils, type Connection, type ServerChannel } from "ssh2";
+import { main } from "../src/cli";
+import { domainAction } from "../src/domain-cli";
+import { loadConfig } from "../src/config";
+import { enrollmentBinding, managedKeyFingerprint, readDomainEnrollment, readDomainRole, writeDomainLocal } from "../src/domain-enrollment";
+import { dialManagedAddress, resolveManagedHost } from "../src/domain-network";
+import { hashBytes } from "../src/domain-policy";
+import type { PublisherOperation, ProxyPublicationReceipt } from "../src/domain-publisher";
+import { createManagedRun, readActiveHome } from "../src/domain-runtime";
+import { DOMAIN_COMMANDS, domainRoleClient, type DomainAttestation, type DomainVerb, type ProposalBody, type WireError } from "../src/domain-wire";
+import { fingerprint } from "../src/tunnel";
+import { createForwardAttestation } from "../server/forward-attestation";
+import { cli, keyPair, testIo, until, writeConfig } from "./helpers";
+import { pair } from "./proxy-harness";
+import { freePort } from "./ssh-server";
+
+const EPOCH = 1;
+const GEN = "runtime-1";
+const ENROLL = "home-test";
+const INITIAL = { revision: 0, domains: ["wikipedia.org"] };
+const DENY = "HTTP/1.1 403 Forbidden";
+
+type Account = "tunnel" | "editor" | "proxy";
+type Dispatch = (role: Account, verb: DomainVerb, input: string, channel: ServerChannel) => void;
+const reply = (channel: ServerChannel, value: unknown) => { channel.exit(0); channel.end(JSON.stringify(value) + "\n"); };
+const ok = (value: unknown) => ({ ok: true, value } as const);
+const error = <T extends WireError>(code: T) => ({ ok: false, code } as const);
+
+async function sshFixture(dispatch: Dispatch) {
+  const files = writeConfig();
+  const host = keyPair();
+  const editor = keyPair();
+  const proxy = keyPair();
+  const keys = { tunnel: files.publicKey, editor: editor.public, proxy: proxy.public };
+  const channels = new Set<net.Socket>();
+  const conns = new Set<Connection>();
+  const auth: Account[] = [];
+  let forwards = 0;
+  let status: net.Server | undefined;
+  const port = await freePort();
+  const server = new Server({ hostKeys: [host.private] }, (conn) => {
+    conns.add(conn);
+    conn.on("error", () => {});
+    conn.once("close", () => conns.delete(conn));
+    let account: Account | undefined;
+    conn.on("authentication", (ctx) => {
+      if (!Object.hasOwn(keys, ctx.username) || ctx.method !== "publickey") return ctx.reject(["publickey"]);
+      const role = ctx.username as Account;
+      auth.push(role);
+      const candidate = utils.parseKey(keys[role]);
+      if (candidate instanceof Error || Array.isArray(candidate) || ctx.key.algo !== candidate.type ||
+          !ctx.key.data.equals(candidate.getPublicSSH()) || (ctx.signature && candidate.verify(ctx.blob!, ctx.signature, ctx.hashAlgo) !== true)) {
+        return ctx.reject(["publickey"]);
+      }
+      account = role;
+      ctx.accept();
+    });
+    conn.on("ready", () => {
+      conn.on("request", (accept, reject, name, info) => {
+        if (account !== "tunnel" || info.bindAddr !== "127.0.0.1" || info.bindPort !== port) return reject?.();
+        if (name === "tcpip-forward" && !status) {
+          forwards++;
+          status = net.createServer((socket) => {
+            channels.add(socket);
+            socket.on("error", () => {});
+            socket.once("close", () => channels.delete(socket));
+            conn.forwardOut("127.0.0.1", port, "127.0.0.1", socket.remotePort!, (err, stream) => {
+              if (err) return socket.destroy();
+              stream.on("error", () => {});
+              socket.pipe(stream).pipe(socket);
+            });
+          });
+          status.listen(port, "127.0.0.1", () => accept?.());
+        } else if (name === "cancel-tcpip-forward") { status?.close(); status = undefined; accept?.(); }
+        else reject?.();
+      });
+      conn.on("session", (accept, reject) => {
+        if (!account || account === "tunnel") return reject?.();
+        const session = accept();
+        session.on("exec", (allow, no, info) => {
+          const verb = (Object.keys(DOMAIN_COMMANDS) as DomainVerb[]).find((v) => DOMAIN_COMMANDS[v] === info.command);
+          if (!verb || !account) return no();
+          const stream = allow();
+          let data = "";
+          stream.on("data", (chunk: Buffer) => data += chunk.toString());
+          stream.on("end", () => dispatch(account!, verb, data, stream));
+        });
+      });
+    });
+  });
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const hostKey = utils.parseKey(host.public);
+  if (hostKey instanceof Error || Array.isArray(hostKey)) throw new Error("bad fixture host key");
+  const actual = server.address() as net.AddressInfo;
+  const ssh = { host: "127.0.0.1", port: actual.port, user: "tunnel", hostKey: fingerprint(hostKey.getPublicSSH()) };
+  writeFileSync(files.path, JSON.stringify({ version: 1, server: ssh, keyPath: files.keyPath, remotePort: port, domains: ["instagram.com"] }));
+  const loaded = loadConfig(files.path, readFileSync, () => files.dir);
+  if (!loaded.ok) throw new Error(loaded.message);
+  const config = loaded.config;
+  const folder = `${files.path}.domains`;
+  const metadata = `${files.path}.domains.json`;
+  function enroll() {
+    mkdirSync(folder, { mode: 0o700 });
+    writeFileSync(join(folder, "editor.key"), editor.private, { mode: 0o600 });
+    writeFileSync(join(folder, "proxy.key"), proxy.private, { mode: 0o600 });
+    writeFileSync(metadata, JSON.stringify({ version: 1, enrollment: ENROLL, epoch: EPOCH, proxyGeneration: GEN,
+      binding: enrollmentBinding(files.path, config), baseline: INITIAL, tunnelKey: managedKeyFingerprint(readFileSync(files.keyPath)),
+      editor: { user: "editor", fingerprint: managedKeyFingerprint(Buffer.from(editor.private)) },
+      proxy: { user: "proxy", fingerprint: managedKeyFingerprint(Buffer.from(proxy.private)) },
+    }), { mode: 0o600 });
+    const result = readDomainEnrollment(files.path, config);
+    if (!result) throw new Error("invalid fixture enrollment");
+    return result;
+  }
+  return {
+    ...files, config, folder, metadata, enroll, auth, forwards: () => forwards,
+    close: async () => {
+      for (const conn of conns) conn.end();
+      for (const socket of channels) socket.destroy();
+      status?.close();
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    },
+  };
+}
+
+function connectRequest(port: number, host: string) {
+  const socket = net.connect(port, "127.0.0.1");
+  socket.on("error", () => {});
+  let text = "";
+  socket.on("data", (chunk: Buffer) => text += chunk.toString());
+  socket.write(`CONNECT ${host}:443 HTTP/1.1\r\n\r\n`);
+  return { socket, status: async () => { await until(() => text.includes("\r\n\r\n")); return text.split("\r\n", 1)[0]; } };
+}
+
+const fromJson = (output: string) => JSON.parse(output);
+
+async function runCli(path: string, words: string[]) {
+  const result = await cli(["--config", path, "--json", ...words]);
+  return { code: result.code, payload: fromJson(result.stdout) };
+}
+
+test("[domains C2] [domains C12] legacy and missing enrollment perform no domain writes or SSH", async () => {
+  const f = await sshFixture(() => { throw new Error("legacy used managed SSH"); });
+  try {
+    const before = readdirSync(f.dir).sort();
+    const expected = { ok: true, command: "domains", state: "setup_required", active: null, pending: null };
+    expect((await runCli(f.path, ["domains", "list"])).payload).toEqual(expected);
+    expect((await runCli(f.path, ["domains", "add", "wipo.int", "--expected-revision", "0"])).payload).toEqual(expected);
+    const status = (await runCli(f.path, ["status"])).payload;
+    expect(status).not.toHaveProperty("managedDomains");
+    expect(status.allowlist).toEqual(["instagram.com"]);
+    expect(readdirSync(f.dir).sort()).toEqual(before);
+    expect(f.auth).toEqual([]);
+  } finally { await f.close(); }
+});
+
+test("[domains C9] fixed role transport rejects wrong host pin, keys, oversize bodies/outputs and silence", async () => {
+  let mode = "accept";
+  let received = 0;
+  const f = await sshFixture((_role, verb, input, ch) => {
+    received++;
+    if (mode === "oversize") { ch.exit(0); ch.end(Buffer.alloc(96 * 1024 + 1)); }
+    else if (mode === "accept") reply(ch, ok({ verb, body: input }));
+  });
+  try {
+    const enrollment = f.enroll();
+    const editor = readDomainRole(enrollment, f.config, "editor")!;
+    const proxy = readDomainRole(enrollment, f.config, "proxy")!;
+    const client = domainRoleClient("editor", editor, 250);
+    expect(await domainRoleClient("editor", { ...editor, hostKey: "SHA256:" + "A".repeat(43) }, 250).inspect()).toEqual(error("unavailable"));
+    expect(f.auth).toEqual([]);
+    expect(await domainRoleClient("editor", { ...editor, key: proxy.key }, 250).inspect()).toEqual(error("unauthorized"));
+    expect(await client.begin("unused")).toEqual(error("unauthorized"));
+    expect(await client.propose("add", { version: 1, operationId: "unused", expectedRevision: 0, host: "a".repeat(5000) })).toEqual(error("limit"));
+    expect(received).toBe(0);
+    expect(await client.inspect()).toEqual(ok({ verb: "inspect", body: "" }));
+    mode = "oversize";
+    expect(await client.inspect()).toEqual(error("unavailable"));
+    mode = "silent";
+    expect(await client.inspect()).toEqual(error("unavailable"));
+    expect(received).toBe(3);
+    writeFileSync(join(f.folder, "proxy.key"), editor.key, { mode: 0o600 });
+    expect(readDomainRole(enrollment, f.config, "proxy")).toBeNull();
+  } finally { await f.close(); }
+});
+
+test("[domains C6] [domains C7] [domains C12] CLI and managed run reconcile one lost claim on one SSH forward and attest only after abort", async () => {
+  const activeEmpty = { revision: 1, domains: [] as string[] };
+  let proposed = 0;
+  let grants = 0;
+  let pending: PublisherOperation | null = null;
+  let archived: { operationId: string; revision: number; disposition: "applied" }[] = [];
+  let observed = INITIAL;
+  let baselineProved = false;
+  let fault: unknown;
+  let lookup: AbortSignal | undefined;
+  let receipt: ProxyPublicationReceipt | undefined;
+  let receiptAttempted = false;
+  let attested: DomainAttestation | undefined;
+  let forwardProof: ReturnType<typeof createForwardAttestation>;
+  const scope = { epoch: EPOCH, generation: GEN };
+  const f = await sshFixture((role, verb, input, ch) => {
+    try {
+      const live = forwardProof.current(scope);
+      if (verb === "attest") {
+        const body: DomainAttestation = JSON.parse(input);
+        const accepted = role === "proxy" && forwardProof.attest({ enrollment: ENROLL, ...scope }, body);
+        if (accepted) attested = body;
+        return reply(ch, accepted ? ok(null) : error("receipt_mismatch"));
+      }
+      if (verb === "inspect") {
+        const active = baselineProved && live?.revision === observed.revision && live.domainsDigest === hashBytes(JSON.stringify(observed.domains)) ? observed : null;
+        return reply(ch, ok({ epoch: EPOCH, proxyGeneration: GEN, active, activeForMs: active ? forwardProof.freshFor(scope) : 0, lastRevision: observed.revision,
+          state: pending ? pending.phase === "published" ? "activation_unknown" : "pending" : active ? "ready" : "activation_unknown",
+          pending: role === "proxy" ? pending : pending && { operationId: pending.operationId, operation: "remove", host: "wikipedia.org", phase: pending.phase },
+          history: archived,
+        }));
+      }
+      if (role === "editor" && verb === "remove") {
+        proposed++;
+        const request: ProposalBody = JSON.parse(input);
+        pending = { operationId: request.operationId, expectedRevision: 0, proxyGeneration: GEN, phase: "claimed",
+          intent: { kind: "remove", proposal: request },
+          target: { policy: { epoch: EPOCH, revision: 1, routes: [] }, domains: [], domainsDigest: hashBytes("[]") },
+        };
+        ch.exit(2); ch.end(); // Commit won, response is lost.
+        return;
+      }
+      if (role === "proxy" && verb === "begin" && pending?.phase === "claimed" && JSON.parse(input) === pending.operationId) {
+        grants++;
+        pending.phase = "activating";
+        return reply(ch, ok(pending));
+      }
+      if (role === "proxy" && verb === "receipt" && pending?.phase === "activating") {
+        receiptAttempted = true;
+        if (!lookup?.aborted) throw new Error("home acknowledged before lookup abort");
+        const candidate: ProxyPublicationReceipt = JSON.parse(input);
+        if (live?.revision !== 1) return reply(ch, error("not_ready"));
+        receipt = candidate;
+        pending.phase = "published";
+        return reply(ch, ok(pending));
+      }
+      reply(ch, error("conflict"));
+    } catch (err) { fault = err; reply(ch, error("unavailable")); }
+  });
+  forwardProof = createForwardAttestation(ENROLL, f.config.remotePort, () => 1);
+  const sockets: net.Socket[] = [];
+  let stop: (() => void) | undefined;
+  let run: Promise<number> | undefined;
+  try {
+    f.enroll();
+    const runIO = testIo({ connectTimeoutMs: 750, managedPollMs: 40, managedDial: async () => { throw new Error("must not dial"); },
+      managedResolve: (_host, signal) => {
+        lookup = signal;
+        return new Promise((_resolve, reject) => signal.addEventListener("abort", () => reject(signal.reason), { once: true }));
+      }, onSignal: (fn) => { stop = fn; },
+    });
+    run = main(["run", "--config", f.path, "--json"], runIO.io);
+    await until(() => f.forwards() === 1 && stop !== undefined);
+    expect((await runCli(f.path, ["domains", "list"])).payload.active).toBeNull();
+    const early = connectRequest(f.config.remotePort, "wikipedia.org");
+    sockets.push(early.socket);
+    expect(await early.status()).toBe(DENY);
+    expect(await forwardProof.refresh(scope)).toBe(true);
+    const acceptedBaseline = attested!;
+    const target = readDomainRole(readDomainEnrollment(f.path, f.config)!, f.config, "proxy")!;
+    expect(await domainRoleClient("proxy", target, 750).attest(acceptedBaseline)).toEqual(error("receipt_mismatch"));
+    baselineProved = true;
+    await until(() => readFileSync(join(f.folder, "live.json"), "utf8").includes("wikipedia.org"));
+    expect((await runCli(f.path, ["status"])).payload.managedDomains.active).toEqual(INITIAL);
+    expect((await runCli(f.path, ["domains", "remove", "wikipedia.org", "--expected-revision", "5"])).payload.error.code).toBe("conflict");
+    const held = connectRequest(f.config.remotePort, "wikipedia.org");
+    sockets.push(held.socket);
+    await until(() => !!lookup);
+    const removal = await runCli(f.path, ["domains", "remove", "WIKIPEDIA.ORG.", "--expected-revision", "0"]);
+    expect(removal.payload.state).toBe("activation_unknown");
+    expect(removal.payload.pending.phase).toBe("unconfirmed");
+    const id: string = removal.payload.pending.operationId;
+    expect((await runCli(f.path, ["domains", "retry", id])).payload.pending.operationId).toBe(id);
+    await until(() => receiptAttempted);
+    expect(lookup?.aborted).toBe(true);
+    expect(await forwardProof.refresh(scope)).toBe(true);
+    await until(() => !!receipt || !!fault);
+    if (fault) throw fault;
+    expect(receipt).toEqual({ enrollment: ENROLL, epoch: EPOCH, operationId: id, revision: 1, domainsDigest: hashBytes("[]"), proxyGeneration: GEN });
+    expect((await runCli(f.path, ["domains", "retry", id])).payload.active).toBeNull();
+    const revoked = connectRequest(f.config.remotePort, "wikipedia.org");
+    sockets.push(revoked.socket);
+    expect(await revoked.status()).toBe(DENY);
+    observed = activeEmpty;
+    pending = null;
+    archived = [{ operationId: id, revision: 1, disposition: "applied" }];
+    await until(() => readFileSync(join(f.folder, "live.json"), "utf8").includes('"domains":[]'));
+    const done = (await runCli(f.path, ["domains", "retry", id])).payload;
+    expect(done).toMatchObject({ state: "applied", active: activeEmpty, pending: null });
+    expect(proposed).toBe(1);
+    expect(grants).toBe(1);
+    expect(f.forwards()).toBe(1);
+  } finally {
+    for (const socket of sockets) socket.destroy();
+    stop?.();
+    await run;
+    await f.close();
+  }
+}, 15000);
+
+test("[domains C6] [domains C10] interrupted runtime neither replays a grant nor reopens its uncertain removal", async () => {
+  const f = await sshFixture(() => {});
+  const enrollment = f.enroll();
+  writeDomainLocal(enrollment, "journal", { version: 1, binding: enrollment.binding, enrollment: ENROLL, epoch: EPOCH,
+    active: INITIAL, applying: { revision: 1, domains: [] } });
+  const operationId = "1.0." + "a".repeat(32);
+  let issued = 0;
+  let receipts = 0;
+  let observed = 0;
+  const noop = async () => error("unavailable");
+  const managed = createManagedRun({ enrollment, pollMs: 10, client: {
+    inspect: async () => { observed++; return ok({ epoch: 1, proxyGeneration: GEN, active: INITIAL, activeForMs: 5000, lastRevision: 0,
+      state: "pending", pending: { operationId, phase: "activating", operation: "remove", host: "wikipedia.org" }, history: [] }); },
+    begin: async () => { issued++; return noop(); }, receipt: async () => { receipts++; return noop(); }, attest: noop, propose: noop,
+  }, resolve: async () => { throw new Error("uncertain route reached DNS"); }, dial: async () => pair()[0] });
+  try {
+    managed.onState("connected");
+    await until(() => observed >= 2);
+    const [client, stream] = pair();
+    managed.handle(stream);
+    const refused = new Promise<string>((resolve) => client.once("data", (b: Buffer) => resolve(b.toString())));
+    client.write("CONNECT wikipedia.org:443 HTTP/1.1\r\n\r\n");
+    expect(await refused).toContain(DENY);
+    expect(issued).toBe(0);
+    expect(receipts).toBe(0);
+  } finally { await managed.stop(); await f.close(); }
+});
+
+test("[domains C6] managed DNS cancels both outstanding DNS queries on abort", async () => {
+  const a = Promise.withResolvers<string[]>();
+  const aaaa = Promise.withResolvers<string[]>();
+  const abort = new AbortController();
+  let cancelled = 0;
+  const lookup = resolveManagedHost("wikipedia.org", abort.signal, {
+    resolve4: () => a.promise, resolve6: () => aaaa.promise,
+    cancel() { cancelled++; a.reject(new Error("cancelled A")); aaaa.reject(new Error("cancelled AAAA")); },
+  });
+  abort.abort(new Error("revoked"));
+  await expect(lookup).rejects.toThrow("revoked");
+  expect(cancelled).toBe(1);
+});
+
+test("[domains C11] [domains C12] active needs both matching bytes and unexpired local evidence", async () => {
+  const f = await sshFixture(() => {});
+  try {
+    const enrollment = f.enroll();
+    writeDomainLocal(enrollment, "state", { version: 1, binding: enrollment.binding, enrollment: ENROLL,
+      epoch: EPOCH, generation: GEN, pid: process.pid, at: 1000, expiresAt: 2000, active: INITIAL });
+    expect(readActiveHome(enrollment, process.pid, 1999)).toEqual(INITIAL);
+    expect(readActiveHome(enrollment, process.pid, 2000)).toBeNull();
+    let proposed = 0;
+    const noop = async () => error("unauthorized");
+    const client = {
+      inspect: async () => ok({ epoch: EPOCH, proxyGeneration: GEN, active: { revision: 0, domains: ["mozilla.org"] },
+        activeForMs: 5000, lastRevision: 0, state: "ready", pending: null, history: [] }),
+      propose: async () => { proposed++; return noop(); }, begin: noop, receipt: noop, attest: noop,
+    };
+    expect(await domainAction({ kind: "list" }, enrollment, client, () => INITIAL)).toMatchObject({
+      ok: true, view: { state: "activation_unknown", active: null },
+    });
+    expect(await domainAction({ kind: "add", host: "wipo.int", expected: "0" }, enrollment, client, () => INITIAL)).toMatchObject({
+      ok: false, error: { code: "not_ready" },
+    });
+    expect(proposed).toBe(0);
+  } finally { await f.close(); }
+});
+
+test("[domains C6] an aborted managed dial leaves no unreturned loopback socket", async () => {
+  const peers = new Set<net.Socket>();
+  const server = net.createServer((socket) => {
+    peers.add(socket);
+    socket.on("error", () => {});
+    socket.once("close", () => peers.delete(socket));
+  });
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const controller = new AbortController();
+  const pending = dialManagedAddress("127.0.0.1", (server.address() as net.AddressInfo).port, controller.signal);
+  controller.abort();
+  try {
+    await expect(pending).rejects.toThrow("managed dial closed");
+    await until(() => peers.size === 0);
+  } finally {
+    for (const peer of peers) peer.destroy();
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+  }
+});

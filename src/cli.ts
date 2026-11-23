@@ -7,6 +7,11 @@ import pkg from "../package.json" with { type: "json" };
 import { loadConfig, loadKey, resolveConfigPath } from "./config";
 import { DEFAULTS, EXIT } from "./defaults";
 import { runDoctor } from "./doctor";
+import { domainAction, type DomainAction } from "./domain-cli";
+import { managedKeyFingerprint, readDomainEnrollment, readDomainRole } from "./domain-enrollment";
+import { dialManagedAddress, resolveManagedHost } from "./domain-network";
+import { createManagedRun, readActiveHome, SETUP_REQUIRED, UNKNOWN_DOMAINS } from "./domain-runtime";
+import { domainRoleClient } from "./domain-wire";
 import { createLogger, sanitize } from "./log";
 import { createProxy, type Dialer, type Resolver } from "./proxy";
 import { claimRun, lockPath, pidAlive, readState, refreshRun, releaseRun, statePath } from "./state";
@@ -30,6 +35,9 @@ export interface Io {
   // Tests shorten run's heartbeat and the stale threshold; production leaves them at the defaults.
   heartbeatMs?: number;
   staleMs?: number;
+  managedResolve?: (host: string, signal: AbortSignal) => Promise<string[]>;
+  managedDial?: Dialer;
+  managedPollMs?: number;
 }
 
 const USAGE = `usage: social-tunnel <command> [options]
@@ -38,15 +46,17 @@ commands:
   run       hold the tunnel open until SIGINT or SIGTERM
   status    report the tunnel state
   doctor    check every hop and name the broken one
+  domains list | add <host> | remove <host> | retry <operation-id>
 
 options:
   --config <path>   config file (default: $SOCIAL_TUNNEL_CONFIG, then the platform config dir)
   --json            print one JSON object on stdout
   --domain <host>   doctor only: also check that <host> is on the allowlist
+  --expected-revision <uint>  required for domains add/remove
   --help, --version
 `;
 
-const VERBS = ["run", "status", "doctor"] as const;
+const VERBS = ["run", "status", "doctor", "domains"] as const;
 type Verb = (typeof VERBS)[number];
 
 interface Args {
@@ -54,6 +64,7 @@ interface Args {
   json: boolean;
   config?: string;
   domain?: string;
+  action?: DomainAction;
 }
 
 // Returns the parsed arguments, or "help" / "version", or null for anything unknown.
@@ -62,22 +73,34 @@ function parseArgs(argv: string[]): Args | "help" | "version" | null {
   let json = false;
   let config: string | undefined;
   let domain: string | undefined;
+  const operands: string[] = [];
+  let expected: string | undefined;
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i]!;
     if (arg === "--help" || arg === "-h") return "help";
     if (arg === "--version") return "version";
     if (arg === "--json") json = true;
-    else if (arg === "--config" || arg === "--domain") {
+    else if (arg === "--config" || arg === "--domain" || arg === "--expected-revision") {
       const value = argv[++i];
       // An empty value is what an unset shell variable leaves behind; never fall back to another config.
       if (value === undefined || value === "") return null;
       if (arg === "--config") config = value;
-      else domain = value;
+      else if (arg === "--domain") domain = value;
+      else if (expected === undefined) expected = value;
+      else return null;
     } else if (!verb && (VERBS as readonly string[]).includes(arg)) verb = arg as Verb;
+    else if (verb === "domains" && !arg.startsWith("-") && operands.length < 2) operands.push(arg);
     else return null;
   }
   if (!verb || (domain !== undefined && verb !== "doctor")) return null;
-  return { verb, json, config, domain };
+  if (verb !== "domains") return expected === undefined ? { verb, json, config, domain } : null;
+  const [kind, subject] = operands;
+  let action: DomainAction;
+  if (kind === "list" && subject === undefined && expected === undefined) action = { kind };
+  else if (kind === "retry" && subject && expected === undefined) action = { kind, id: subject };
+  else if ((kind === "add" || kind === "remove") && subject) action = { kind, host: subject, expected };
+  else return null;
+  return { verb, json, config, action };
 }
 
 export async function main(argv: string[], io: Io): Promise<number> {
@@ -122,9 +145,30 @@ export async function main(argv: string[], io: Io): Promise<number> {
     }
 
     const loaded = loadConfig(configPath, io.readFile, io.homedir);
+    if (args.action) {
+      const config = loaded.ok ? loaded.config : null;
+      const enrollment = config && readDomainEnrollment(configPath, config);
+      const editor = config && enrollment ? readDomainRole(enrollment, config, "editor") : null;
+      try {
+        const result = await domainAction(args.action, enrollment, editor && domainRoleClient("editor", editor, io.connectTimeoutMs), () => {
+          if (!config || !enrollment) return null;
+          const s = evaluateStatus(readState(statePath(configPath)), pidAlive, Date.now(), io.staleMs, config);
+          return s.state === "connected" ? readActiveHome(enrollment, s.pid) : null;
+        });
+        if (!result.ok) {
+          if (args.json) print({ ok: false, command: "domains", error: result.error });
+          else io.stderr(`error: ${result.error.message}\n`);
+          return result.exit;
+        }
+        if (args.json) print({ ok: true, command: "domains", ...result.view });
+        else io.stdout([result.view.state, ...(result.view.active?.domains ?? [])].join("\n") + "\n");
+        return EXIT.ok;
+      } finally { editor?.key.fill(0); }
+    }
     // The path it resolved tells a tray app "not set up" (no file there) from a broken config.
     if (!loaded.ok) return fail(EXIT.usage, "config_invalid", loaded.message, loaded.field, configPath);
     const config = loaded.config;
+    const enrollment = readDomainEnrollment(configPath, config);
 
     if (args.verb === "status") {
       const view = evaluateStatus(readState(statePath(configPath)), pidAlive, Date.now(), DEFAULTS.staleMs, config);
@@ -133,6 +177,10 @@ export async function main(argv: string[], io: Io): Promise<number> {
       if (args.json) {
         // user, hostKey, keyPath and allowlist are additive for the tray app (tray-app door 1);
         // the key path is shown, never the key.
+        const active = enrollment && view.state === "connected" ? readActiveHome(enrollment, view.pid) : null;
+        const managed = enrollment === undefined ? {} : { managedDomains:
+          !enrollment ? SETUP_REQUIRED : active ? { state: "ready", active, pending: null } : UNKNOWN_DOMAINS,
+        };
         print({
           ok: exit === EXIT.ok,
           command: "status",
@@ -143,6 +191,7 @@ export async function main(argv: string[], io: Io): Promise<number> {
           domains: config.domains.length,
           keyPath: config.keyPath,
           allowlist: config.domains,
+          ...managed,
         });
       } else {
         io.stdout(
@@ -169,6 +218,9 @@ export async function main(argv: string[], io: Io): Promise<number> {
     }
     const key = loadKey(config.keyPath, io, io.platform);
     if (!key.ok) return fail(EXIT.usage, key.code, key.message);
+    if (enrollment === null || (enrollment && managedKeyFingerprint(key.key) !== enrollment.tunnelKey)) {
+      return fail(EXIT.usage, "not_ready", "managed enrollment does not match this tunnel");
+    }
 
     // The state.json check above cannot see a run that started a moment ago and has not written yet.
     const lock = lockPath(configPath);
@@ -184,13 +236,24 @@ export async function main(argv: string[], io: Io): Promise<number> {
         `social-tunnel run (pid ${holder}) already owns ${lock}; one run per config directory`,
       );
     }
+    let managedRun: ReturnType<typeof createManagedRun> | undefined;
+    let roleKey: Buffer | undefined;
     try {
       const log = createLogger(io.stderr, args.json);
+      if (enrollment) {
+        const target = readDomainRole(enrollment, config, "proxy");
+        if (!target) return fail(EXIT.usage, "not_ready", "managed proxy credential is unavailable");
+        roleKey = target.key;
+        try {
+          managedRun = createManagedRun({ enrollment, client: domainRoleClient("proxy", target, io.connectTimeoutMs),
+            resolve: io.managedResolve ?? resolveManagedHost, dial: io.managedDial ?? dialManagedAddress, pollMs: io.managedPollMs });
+        } catch { return fail(EXIT.usage, "not_ready", "managed runtime cannot safely resume its journal"); }
+      }
       const tunnel = startTunnel({
         config,
         key: key.key,
         statePath: statePath(configPath),
-        handle: createProxy({
+        handle: managedRun?.handle ?? createProxy({
           domains: config.domains,
           resolve: io.resolve,
           dial: io.dial,
@@ -198,6 +261,7 @@ export async function main(argv: string[], io: Io): Promise<number> {
         }).handle,
         log,
         heartbeatMs: io.heartbeatMs,
+        onState: managedRun && (({ state }) => managedRun?.onState(state)),
         onHeartbeat: () => refreshRun(lock),
       });
       io.onSignal(() => void tunnel.stop());
@@ -206,6 +270,8 @@ export async function main(argv: string[], io: Io): Promise<number> {
       if (args.json) print({ ok: exit === EXIT.ok, command: "run", state: end.state, reason: end.reason });
       return exit;
     } finally {
+      await managedRun?.stop();
+      roleKey?.fill(0);
       releaseRun(lock);
     }
   } catch (err) {

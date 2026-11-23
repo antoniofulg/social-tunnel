@@ -54,7 +54,7 @@ export interface EnrolledChrome {
   // between reads. Null means the process/profile/forward is not exclusively owned.
   ownership(): number | null;
   // Arms only the two generated synthetic names at a protected refusal observer, with no payload access.
-  watchCanaries(positive: string, negative: string): { seen(host: string): boolean; close(): void };
+  watchCanaries(positive: string, negative: string): { seen(host: string): boolean | Promise<boolean>; close(): void };
 }
 
 export interface BrowserEvidence {
@@ -141,6 +141,7 @@ export function createDomainObserver(chrome: EnrolledChrome, now = () => perform
 
   async function prove(
     policy: PolicyRevision, expectedBytes: string, accept?: (proof: BrowserEvidence) => boolean,
+    watchCanaries = chrome.watchCanaries,
   ): Promise<BrowserEvidence | null> {
     const owner = ownership();
     if (busy || owner === null) return null;
@@ -175,9 +176,9 @@ export function createDomainObserver(chrome: EnrolledChrome, now = () => perform
       const witness = await tab();
       pages.push(witness);
       if (page.browserContextId !== witness.browserContextId) return null;
-      watch = chrome.watchCanaries(positive, negative);
-      if (await navigate(`https://${positive}/`, witness) !== "net::ERR_TUNNEL_CONNECTION_FAILED" || !watch.seen(positive)) return null;
-      if (await navigate(`https://${negative}/`, witness) !== "net::ERR_NAME_NOT_RESOLVED" || watch.seen(negative)) return null;
+      watch = watchCanaries(positive, negative);
+      if (await navigate(`https://${positive}/`, witness) !== "net::ERR_TUNNEL_CONNECTION_FAILED" || !(await watch.seen(positive))) return null;
+      if (await navigate(`https://${negative}/`, witness) !== "net::ERR_NAME_NOT_RESOLVED" || await watch.seen(negative)) return null;
       // Commit only against effective browser policy read *after* the paired visits.
       // The protected callback is synchronous so no other request can race the CAS.
       if (!(await effective(page))) return null;

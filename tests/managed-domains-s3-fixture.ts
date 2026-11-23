@@ -11,6 +11,7 @@ import { openDomainAuthority, type LiveProxyRevision } from "../server/domain-au
 import { createDomainObserver, type EnrolledChrome } from "../server/domain-observer";
 import { DOMAIN_POLICY_FILE, fileDomainPolicySink, hashBytes, renderDomainPolicy } from "../src/domain-policy";
 import type { PublisherOperation, ProxyPublicationReceipt } from "../src/domain-publisher";
+import { domainRoleClient, proofHost } from "../src/domain-wire";
 import { parseManagedDomainSnapshot } from "../src/managed-domains";
 import { createManagedProxy } from "../src/proxy";
 import { connectSsh, fingerprint } from "../src/tunnel";
@@ -139,7 +140,9 @@ function fixtureSsh(root: string, sockets: Record<Account, string>) {
       hostVerifier: (key: Buffer) => fingerprint(key) === pin, readyTimeout: 3000,
       authHandler: ["publickey"], agent: join(root, "fixture-unused-agent.sock") });
   });
-  return { sshd, connect, connectAgentTest, config };
+  const proxyClient = (user: Account) => domainRoleClient("proxy", { host: "127.0.0.1", port: sshPort,
+    user, hostKey: pin, key: actualKeys.get(user)! });
+  return { sshd, connect, connectAgentTest, proxyClient, config };
 }
 
 function expectDenied(fn: (callback: (error?: Error | null) => void) => unknown) {
@@ -171,7 +174,7 @@ export async function runS3Proof(mode: "ssh" | "chrome") {
     chownSync(directory, 0, group);
     directories[name] = directory;
   }
-  const { sshd, connect, connectAgentTest, config } = fixtureSsh(root, directories);
+  const { sshd, connect, connectAgentTest, proxyClient, config } = fixtureSsh(root, directories);
   const clients: Client[] = [];
   let chrome: ChildProcess | undefined;
   let sibling: ChildProcess | undefined;
@@ -185,10 +188,19 @@ export async function runS3Proof(mode: "ssh" | "chrome") {
     forward.on("close", () => (live = null));
     let watch: { names: Set<string>; seen: Set<string> } | undefined;
     let resolves = 0;
+    let sendProof = proxyClient("st_receipt");
+    let receiptEpoch = 1;
+    let suppressCanary = false;
     const proxy = createManagedProxy({
       resolve: async () => { resolves++; return ["1.1.1.1"]; },
       dial: async () => { throw new Error("no real upstream in isolated proof"); },
-      log: ({ host, status }) => { if (status === 403 && host && watch?.names.has(host)) watch.seen.add(host); },
+      log: ({ host, status }) => {
+        if (status !== 403 || !host) return;
+        if (watch?.names.has(host)) watch.seen.add(host);
+        if (mode === "chrome" && live && proofHost(host) && (!suppressCanary || host.includes(".live."))) {
+          void sendProof.attest({ ...live, host, enrollment: enroll, epoch: receiptEpoch });
+        }
+      },
     }, snapshot(0, initial));
     forward.on("tcp connection", (info, accept, reject) => info.destIP === "127.0.0.1" && info.destPort === proxyPort ? proxy.handle(accept() as Duplex) : reject());
     await new Promise<void>((resolve, reject) => forward.forwardIn("127.0.0.1", proxyPort, (err) => err ? reject(err) : resolve()));
@@ -198,7 +210,6 @@ export async function runS3Proof(mode: "ssh" | "chrome") {
     let ownership = 1;
     let clockOffset = 0;
     const policy = fileDomainPolicySink(policyDir, journal);
-    let suppressCanary = false;
     function enrolledBrowser(process: ChildProcess, generation: string, selected: () => boolean): EnrolledChrome {
       return {
         generation, input: process.stdio[3] as Writable, output: process.stdio[4] as Readable,
@@ -212,10 +223,15 @@ export async function runS3Proof(mode: "ssh" | "chrome") {
       };
     }
     const authority = openDomainAuthority({
-      enrollment: enroll, journalDir: journal, proxyPort, policy, liveProxy: () => live,
+      enrollment: enroll, journalDir: journal, proxyPort, policy,
+      ...(mode === "chrome" ? { forward: { epoch: 1, generation: "proxy-1" } } : { liveProxy: () => live }),
       chrome: enrolledBrowser(chrome, "isolated-browser-1", () => ownsEnrolledBrowser),
     }, () => performance.now() + clockOffset);
     controller = authority;
+    if (mode === "chrome") {
+      await authority.bind(roleIngress("st_receipt", "proxy", 1));
+      assert(await authority.refreshRuntime(), "protected forward challenge did not attest");
+    }
     assert(await authority.provision({ epoch: 1, revision: 0, domains: initial, proxyGeneration: "proxy-1" }), "mandatory baseline was not independently proven");
     assert(await authority.observe());
     // close() must see a binding that has started listening but has not registered its completion.
@@ -224,7 +240,7 @@ export async function runS3Proof(mode: "ssh" | "chrome") {
     await Promise.all([closingIngress.close(), assert.rejects(incompleteBind, /retired before bind/)]);
     assert(!lstatSync(join(directories.st_editor, "authority.sock"), { throwIfNoEntry: false }));
     await authority.bind(roleIngress("st_editor", "editor", 1));
-    await authority.bind(roleIngress("st_receipt", "proxy", 1));
+    if (mode === "ssh") await authority.bind(roleIngress("st_receipt", "proxy", 1));
     const editor = await connect("st_editor");
     const receiptClient = await connect("st_receipt");
     clients.push(editor, receiptClient);
@@ -268,13 +284,8 @@ export async function runS3Proof(mode: "ssh" | "chrome") {
       clients.push(...blockers);
       const held = await Promise.all(blockers.map((client) => exec(client, domainCommands.remove)));
       try {
-        // Through both role endpoints, continue until all four incomplete requests own admission slots.
-        let limited = false;
-        for (let i = 0; i < 8 && !limited; i++) {
-          limited = (await request(editor, "inspect")).code === "limit";
-          if (!limited) await sleep(20);
-        }
-        assert(limited, "shared role budget did not block inspect");
+        await until(() => authority.admittedCount() === 4, 2800);
+        assert.deepEqual(await request(editor, "inspect"), { ok: false, code: "limit" });
         assert.deepEqual(await request(receiptClient, "inspect"), { ok: false, code: "limit" });
         assert.equal(value(authority.inspectLocal()).pending, null);
       } finally { for (const channel of held) channel.close(); }
@@ -294,6 +305,7 @@ export async function runS3Proof(mode: "ssh" | "chrome") {
     }
     clockOffset += 31000;
     assert.equal((await inspect()).active, null);
+    assert(await authority.refreshRuntime());
     assert(await authority.observe(), "expired evidence needs fresh paired witnesses");
     const requestRemove = { version: 1, operationId: operationId(1, 0, 1), expectedRevision: 0, host: "wikipedia.org" };
     assert.equal(value<any>(await request(editor, "remove", requestRemove)).phase, "claimed");
@@ -302,6 +314,7 @@ export async function runS3Proof(mode: "ssh" | "chrome") {
     assert(!(await request(receiptClient, "begin", requestRemove.operationId)).ok);
     assert(!(await request(receiptClient, "receipt", ack(granted, 1))).ok);
     await apply(granted);
+    assert(await authority.refreshRuntime());
     assert(!(await request(editor, "receipt", ack(granted, 1))).ok);
     assert(!(await request(receiptClient, "receipt", { ...ack(granted, 1), proxyGeneration: "old" })).ok);
     assert.equal(value<PublisherOperation>(await request(receiptClient, "receipt", ack(granted, 1))).phase, "published");
@@ -320,6 +333,7 @@ export async function runS3Proof(mode: "ssh" | "chrome") {
     ownsEnrolledBrowser = true;
     assert.equal(await authority.observe(), false, "restoring a retired ownership token cannot prove readiness");
     ownership++;
+    assert(await authority.refreshRuntime());
     assert(await authority.observe(), "same real browser revision did not finalize");
     assert.deepEqual((await inspect()).active, { revision: 1, domains: ["mozilla.org"] });
     const finalized = value(authority.inspectLocal()).lastBrowserProof;
@@ -341,20 +355,28 @@ export async function runS3Proof(mode: "ssh" | "chrome") {
     await assert.rejects(request(editor, "inspect"));
     assert.equal(value(authority.inspectLocal()).recovery?.operationId, lost.operationId);
     const recoveryId = operationId(2, 1, 3);
+    receiptEpoch = 2;
+    live = { ...live!, generation: "proxy-2" };
+    sendProof = proxyClient("st_receipt_next");
+    assert(authority.prepareRecovery({ epoch: 2, generation: "proxy-2" }));
+    await authority.bind(roleIngress("st_receipt_next", "proxy", 2));
+    assert(await authority.refreshRuntime());
     const recovery = value(authority.authorizeRecovery({ epoch: 2, operationId: recoveryId, proxyGeneration: "proxy-2", domains: [], releaseDirect: [] }));
     assert.deepEqual(recovery.target.policy.routes, ["mozilla.org"]);
     await authority.bind(roleIngress("st_editor_next", "editor", 2));
-    await authority.bind(roleIngress("st_receipt_next", "proxy", 2));
     const freshEditor = await connect("st_editor_next");
     const freshReceipt = await connect("st_receipt_next");
     clients.push(freshEditor, freshReceipt);
     const currentHome = live!;
     live = { ...currentHome, domainsDigest: "1".repeat(64) };
+    assert(await authority.refreshRuntime());
     assert.deepEqual(await request(freshReceipt, "begin", recoveryId), { ok: false, code: "not_ready" });
     live = currentHome;
+    assert(await authority.refreshRuntime());
     const recoveryGrant = value<PublisherOperation>(await request(freshReceipt, "begin", recoveryId));
     assert.deepEqual(recoveryGrant.homePreimage, currentHome);
     await apply(recoveryGrant);
+    assert(await authority.refreshRuntime());
     assert((await request(freshReceipt, "receipt", ack(recoveryGrant, 2))).ok);
     const rogue = join(policyDir, "conflicting.json");
     writeFileSync(rogue, "{}", { flag: "wx" });
@@ -363,6 +385,7 @@ export async function runS3Proof(mode: "ssh" | "chrome") {
     cmd("/bin/rm", [rogue]);
     assert.equal(await authority.observe(), false);
     ownership++;
+    assert(await authority.refreshRuntime());
     assert(await authority.observe());
     const done = value(authority.inspectLocal());
     assert.deepEqual(done.lastProven.domains, []);

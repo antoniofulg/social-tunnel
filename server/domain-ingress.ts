@@ -3,9 +3,8 @@ import { createConnection, createServer, type Server, type Socket } from "node:n
 import { join } from "node:path";
 import { protectedDirectory } from "../src/domain-policy";
 import type { PublisherPrincipal } from "../src/domain-publisher";
+import { DOMAIN_COMMANDS, DOMAIN_REQUEST_LIMIT as REQUEST_LIMIT, DOMAIN_RESPONSE_LIMIT as RESPONSE_LIMIT, type DomainVerb } from "../src/domain-protocol";
 
-const REQUEST_LIMIT = 4096;
-const RESPONSE_LIMIT = 96 * 1024;
 const SESSION_MS = 3000;
 const CAP = 4;
 const REQUESTS_PER_MINUTE = 64;
@@ -13,12 +12,9 @@ const REPLY_BUSY = Buffer.from('{"ok":false,"code":"limit"}\n');
 const ACCEPTED = Buffer.from("+");
 
 type RemoteIdentity = Extract<PublisherPrincipal, { role: "editor" | "proxy" }>;
-export type RemoteOperation = "inspect" | "add" | "remove" | "begin" | "receipt";
-export const domainCommands = Object.freeze({
-  inspect: "domains-v1 inspect", add: "domains-v1 add", remove: "domains-v1 remove",
-  begin: "domains-v1 begin", receipt: "domains-v1 receipt",
-} satisfies Record<RemoteOperation, string>);
-const verbs: readonly RemoteOperation[] = ["inspect", "add", "remove", "begin", "receipt"];
+export type RemoteOperation = DomainVerb;
+export const domainCommands = DOMAIN_COMMANDS;
+const verbs: readonly DomainVerb[] = ["inspect", "add", "remove", "begin", "receipt", "attest"];
 
 export interface RoleIngress {
   readonly directory: string;
@@ -74,7 +70,8 @@ export function createDomainIngress(dispatch: (identity: RemoteIdentity, verb: R
       const input = Buffer.concat(chunks, bytes);
       const verb = verbs[input[0]!];
       const valid = verb && (verb === "inspect" ? bytes === 1 : bytes > 1);
-      const allowed = verb === "inspect" || (identity.role === "editor" ? verb === "add" || verb === "remove" : verb === "begin" || verb === "receipt");
+      const allowed = verb === "inspect" || (identity.role === "editor" ? verb === "add" || verb === "remove" :
+        verb === "begin" || verb === "receipt" || verb === "attest");
       let response: string;
       try {
         response = JSON.stringify(valid && allowed ? dispatch(identity, verb, input.subarray(1)) : { ok: false, code: "unauthorized" }) + "\n";
@@ -139,7 +136,7 @@ export function createDomainIngress(dispatch: (identity: RemoteIdentity, verb: R
     await Promise.all([...bindings].map(stop));
   }
 
-  return { bind, retireBefore, close };
+  return { bind, retireBefore, close, admittedCount: () => sockets.size };
 }
 
 // Runs as the authenticated sshd role, not as root. No request fields configure the
