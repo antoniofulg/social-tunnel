@@ -1,3 +1,4 @@
+import { Database } from "bun:sqlite";
 import { afterEach, expect, test } from "bun:test";
 import { mkdirSync, readFileSync, renameSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
@@ -153,6 +154,21 @@ test("[domains C9] a guarded publisher grants, publishes and finalizes only unde
   expect(value(p.inspect(f.admin)).lastProven.policy.revision).toBe(INIT);
   held = { scope, id: "exact-lease" };
   expect(value(p.finalize(observer, observed)).domains).toEqual(["wikipedia.org", "wipo.int"]);
+});
+
+test("[domains C10] the guarded recovery journal rejects a pre-origin format without writing", () => {
+  const f = fixture(["wikipedia.org"], () => "held");
+  const db = new Database(join(f.journalDir, "domains.sqlite"));
+  try {
+    const old = JSON.parse(db.query<{ body: string }, []>("SELECT body FROM control WHERE id = 1").get()!.body);
+    old.version = 2; // The unpublished format did not bind recovery to the original hold.
+    const body = JSON.stringify(old);
+    db.query("UPDATE control SET body = ?, digest = ? WHERE id = 1").run(body, hashBytes(body));
+  } finally { db.close(); }
+  const before = f.bytes();
+  expect(() => f.open()).toThrow("wrong journal binding");
+  expect(f.bytes()).toEqual(before);
+  expect(f.sink.read()).toBe(f.initial);
 });
 
 test("[domains C4] publisher rejects noncanonical or stale proposals and admits one durable winning projection", async () => {
@@ -452,6 +468,60 @@ test("[domains C10] losing the idle reservation during recovery sync cannot issu
   expect(f.bytes()).toEqual(beforeGrant);
   expect(value(p.inspectPolicy(f.admin))).toBe("interrupted");
   expect(value(p.inspect(f.admin)).pending?.phase).toBe("claimed");
+});
+
+test("[domains C10] repeated Disable and reopen keep the original idle hold bound to forward recovery", () => {
+  let expected: IdleReservationScope;
+  let recoveryScope: IdleReservationScope;
+  let replacement = false;
+  const f = fixture(["wikipedia.org"], (scope, origin) => {
+    if (!origin) return scope.operationId === expected?.operationId ? "original-hold" : null;
+    expect(origin).toEqual({ id: "original-hold", scope: expected });
+    expect(scope).toEqual(recoveryScope);
+    return replacement ? "other-hold" : origin.id;
+  });
+  let p = f.open();
+  const edit = value(p.propose(f.editor, "remove", wire("wikipedia.org")));
+  expected = { enrollment: ENROLLMENT, epoch: EPOCH, operationId: edit.operationId, revision: INIT + 1,
+    domainsDigest: edit.target.domainsDigest, policyPreimageDigest: hashBytes(f.initial) };
+  value(p.beginActivation(f.proxy, edit.operationId));
+  value(p.publish(f.proxy, receipt(edit)));
+  const preimage = f.sink.read();
+  let epoch = value(p.disable(f.admin, EPOCH));
+  p.close();
+  p = f.open();
+  function claim(n: number) {
+    const proxyGeneration = `proxy-${n}`;
+    const operation = value(p.authorizeRecovery(f.admin, {
+      epoch, operationId: id(n, epoch), proxyGeneration, domains: [], releaseDirect: [],
+    }));
+    recoveryScope = {
+      enrollment: ENROLLMENT, epoch, operationId: operation.operationId, revision: operation.target.policy.revision,
+      domainsDigest: operation.target.domainsDigest, policyPreimageDigest: hashBytes(preimage),
+    };
+    return { operation, proxy: f.session({ role: "proxy", epoch, generation: proxyGeneration }) };
+  }
+  const first = claim(2);
+  value(p.beginActivation(first.proxy, first.operation.operationId));
+  epoch = value(p.disable(f.admin, epoch));
+  p.close();
+  p = f.open();
+  const latest = claim(3);
+  replacement = true;
+  expect(p.beginActivation(latest.proxy, latest.operation.operationId)).toEqual(err("not_ready"));
+  expect(f.sink.read()).toBe(preimage);
+  expect(value(p.inspect(f.admin)).pending?.phase).toBe("claimed");
+  replacement = false;
+  value(p.beginActivation(latest.proxy, latest.operation.operationId));
+  value(p.publish(latest.proxy, receipt(latest.operation)));
+  const proof = {
+    ...receipt(latest.operation), browserGeneration: "new-browser", policyDigest: hashBytes(f.sink.read()),
+    positive: `${"a".repeat(32)}.e${epoch}.r${latest.operation.target.policy.revision}.pac.invalid`,
+    negative: `${"b".repeat(32)}.e${epoch - 1}.r${latest.operation.target.policy.revision}.pac.invalid`,
+  };
+  const observer = f.session({ role: "observer", epoch, generation: proof.browserGeneration });
+  value(p.finalize(observer, proof));
+  expect(value(p.inspect(f.admin))).toMatchObject({ recovery: null, pending: null, editingEnabled: true });
 });
 
 test("[domains C10] administrator recovery stays narrower, retains uncertain routes, and requires a fresh receipt", () => {

@@ -27,6 +27,8 @@ export interface IdleReservationScope {
   policyPreimageDigest: string;
 }
 
+type IdleReservationOrigin = Readonly<{ id: string; scope: Readonly<IdleReservationScope> }>;
+
 export interface PublisherOptions<Session> {
   journalDir: string;
   enrollment: string;
@@ -37,7 +39,8 @@ export interface PublisherOptions<Session> {
   identify: (session: Session) => PublisherPrincipal | null;
   // Protected local runner only. It must hold admissions until the grant can
   // no longer take effect, including across disconnect, abort and restart.
-  currentIdleReservation?: (scope: Readonly<IdleReservationScope>) => string | null;
+  // A recovery must prove its new scope while retaining the exact predecessor's hold.
+  currentIdleReservation?: (scope: Readonly<IdleReservationScope>, recoveryOf?: IdleReservationOrigin) => string | null;
 }
 
 export interface VerifiedPublisherBaseline {
@@ -95,7 +98,7 @@ type Archived = { operationId: string; revision: number; disposition: "cancelled
 type Recovery = { operationId: string; ceiling: readonly string[]; retainRoutes: readonly string[] };
 
 type JournalState = {
-  version: 1 | 2;
+  version: 1 | 3;
   enrollment: string;
   proxyPort: number;
   epoch: number;
@@ -107,6 +110,7 @@ type JournalState = {
   possiblyWritten: PolicyRevision | null;
   syncInterruptedRecovery?: true;
   idleReservation?: { id: string; policyPreimageDigest: string };
+  idleRecoveryOrigin?: IdleReservationOrigin;
   pending: PublisherOperation | null;
   recovery: Recovery | null;
   history: Archived[];
@@ -162,7 +166,7 @@ function target(epoch: number, domains: ManagedDomainSnapshot, routes = domains.
 function journal<Session>(options: PublisherOptions<Session>, initial?: JournalState) {
   const { journalDir, enrollment, proxyPort } = options;
   if (!tag(enrollment) || !Number.isInteger(proxyPort) || proxyPort < 1 || proxyPort > 65535) throw new Error("invalid publisher enrollment");
-  const version = options.currentIdleReservation === undefined ? 1 : 2;
+  const version = options.currentIdleReservation === undefined ? 1 : 3;
   const dir = protectedDirectory(journalDir, true);
   const path = join(journalDir, JOURNAL);
   if (initial) closeSync(openSync(path, constants.O_CREAT | constants.O_EXCL | constants.O_WRONLY | constants.O_NOFOLLOW, 0o600));
@@ -241,7 +245,7 @@ export function provisionDomainPublisher<Session>(options: PublisherOptions<Sess
   const lastProven = target(baseline.epoch, domains);
   if (options.policy.read() !== renderDomainPolicy(options.proxyPort, lastProven.policy)) throw new Error("publisher baseline policy differs");
   journal(options, {
-    version: options.currentIdleReservation === undefined ? 1 : 2,
+    version: options.currentIdleReservation === undefined ? 1 : 3,
     enrollment: options.enrollment, proxyPort: options.proxyPort, epoch: baseline.epoch,
     proxyGeneration: baseline.proxyGeneration, editingEnabled: true, allocatedRevision: domains.revision,
     lastProven, recordedPolicy: lastProven.policy, possiblyWritten: null, pending: null, recovery: null, history: [],
@@ -262,11 +266,20 @@ export function openDomainPublisher<Session>(options: PublisherOptions<Session>)
     return null;
   };
 
-  function reservationId(state: JournalState, operation: PublisherOperation, policyPreimageDigest: string) {
-    return currentIdleReservation?.({
-      enrollment: state.enrollment, epoch: state.epoch, operationId: operation.operationId,
+  function reservationScope(state: JournalState, operation: PublisherOperation, policyPreimageDigest: string): IdleReservationScope {
+    return {
+      enrollment: state.enrollment, epoch: operation.target.policy.epoch, operationId: operation.operationId,
       revision: operation.target.policy.revision, domainsDigest: operation.target.domainsDigest, policyPreimageDigest,
-    });
+    };
+  }
+
+  function reservationId(state: JournalState, operation: PublisherOperation, policyPreimageDigest: string) {
+    const origin = state.idleRecoveryOrigin;
+    if (state.recovery && !origin) return null;
+    const scope = reservationScope(state, operation, policyPreimageDigest);
+    if (!origin) return currentIdleReservation?.(scope);
+    const { id } = origin;
+    return currentIdleReservation?.(scope, { id, scope: { ...origin.scope } }) === id ? id : null;
   }
 
   function holdsReservation(state: JournalState, operation: PublisherOperation) {
@@ -383,7 +396,7 @@ export function openDomainPublisher<Session>(options: PublisherOptions<Session>)
       if (!selected) return fail("not_ready");
       const expected = rendered(selected);
       if (policy.read() !== expected) return fail("not_ready");
-      if (state.version === 2) {
+      if (state.version !== 1) {
         const policyPreimageDigest = hashBytes(expected);
         const reservation = reservationId(state, operation, policyPreimageDigest);
         if (!tag(reservation)) return fail("not_ready");
@@ -480,6 +493,7 @@ export function openDomainPublisher<Session>(options: PublisherOptions<Session>)
           if (archived) archived.disposition = "reconciled";
           else state.history.push({ operationId: recovery.operationId, revision: pending.target.policy.revision, disposition: "reconciled" });
           state.recovery = null;
+          delete state.idleRecoveryOrigin;
         }
         state.editingEnabled = true;
       }
@@ -507,6 +521,10 @@ export function openDomainPublisher<Session>(options: PublisherOptions<Session>)
           const held = state.recovery?.retainRoutes ?? state.lastProven.policy.routes;
           const mayHavePublished = operation.phase === "publishing" || operation.phase === "published";
           const retainRoutes = mayHavePublished ? [...new Set([...held, ...operation.target.policy.routes])].sort() : held;
+          const bound = state.idleReservation;
+          if (!state.recovery && bound) {
+            state.idleRecoveryOrigin = { id: bound.id, scope: reservationScope(state, operation, bound.policyPreimageDigest) };
+          }
           // An unacknowledged removal might already have revoked access; an add might never have applied.
           state.recovery = {
             operationId: state.recovery?.operationId ?? operation.operationId,
