@@ -1,7 +1,7 @@
 import { hashBytes, renderDomainPolicy } from "../src/domain-policy";
 import {
   openDomainPublisher, provisionDomainPublisher, type PublisherOptions, type PublisherPrincipal,
-  type PublisherView, type VerifiedPublisherBaseline,
+  type PublisherOperation, type PublisherView, type VerifiedPublisherBaseline,
   type ProxyPreimage,
 } from "../src/domain-publisher";
 import { createDomainIngress, type RemoteOperation, type RoleIngress } from "./domain-ingress";
@@ -12,6 +12,18 @@ import { domainTag } from "../src/domain-wire";
 type Options = Omit<PublisherOptions<object>, "identify">;
 type Target = PublisherView["lastProven"];
 export type LiveProxyRevision = ProxyPreimage;
+
+// Proxy activation uses the home snapshot, never the retained PAC selectors or
+// the administrator's release list. Only one target list crosses the wire.
+function proxyOperation(operation: PublisherOperation) {
+  const { intent, target, ...scope } = operation;
+  return {
+    ...scope,
+    intent: intent.kind === "recovery" ? { kind: intent.kind } : intent,
+    target: { domains: target.domains, domainsDigest: target.domainsDigest,
+      policy: { epoch: target.policy.epoch, revision: target.policy.revision } },
+  };
+}
 
 export type DomainEnrollment = Options & { chrome: EnrolledChrome; forward: ForwardScope };
 
@@ -62,7 +74,7 @@ export function openDomainAuthority(enrollment: DomainEnrollment, now = () => pe
       lastRevision: v.lastProven.policy.revision,
       state: v.recovery ? "recovery_required" : pending?.phase === "published" || !observer.alive() ? "activation_unknown"
         : pending ? "pending" : active ? "ready" : "activation_unknown",
-      pending: pending && (role === "proxy" ? pending : {
+      pending: pending && (role === "proxy" ? proxyOperation(pending) : {
         operationId: pending.operationId, phase: pending.phase, operation: pending.intent.kind,
         host: pending.intent.kind === "recovery" ? null : pending.intent.proposal.host,
       }),
@@ -106,10 +118,12 @@ export function openDomainAuthority(enrollment: DomainEnrollment, now = () => pe
       if (verb === "begin") {
         if (typeof input !== "string" || input.length > 68) return invalid;
         if (v.pending?.intent.kind === "recovery" ? !observer.alive() || !samePreimage(v.pending.homePreimage, v.epoch) : !ready(v)) return unavailable;
-        return publisher.beginActivation(ticket, input);
+        const result = publisher.beginActivation(ticket, input);
+        return result.ok ? { ok: true, value: proxyOperation(result.value) } : result;
       }
       if (!v.pending || !observer.alive() || !current(v.pending.target, v.proxyGeneration)) return unavailable;
-      return publisher.publish(ticket, input);
+      const result = publisher.publish(ticket, input);
+      return result.ok ? { ok: true, value: proxyOperation(result.value) } : result;
     } catch { return invalid; }
   };
   const ingress = createDomainIngress(dispatch);
@@ -195,7 +209,14 @@ export function openDomainAuthority(enrollment: DomainEnrollment, now = () => pe
       const checked = view();
       const v = checked?.ok ? checked.value : undefined;
       const scope = recoveryScope ?? (v ? { epoch: v.epoch, generation: v.proxyGeneration } : bootstrap);
-      return !!(scope && !closing && observer.alive() && await forward.refresh(scope));
+      if (!scope || closing || !observer.alive() || !(await forward.refresh(scope))) return false;
+      // Only the protected scheduler can renew the browser baseline. A durable
+      // ordinary claim made under still-valid evidence can wait here unchanged;
+      // the home runner and begin CAS still require a fresh matching baseline.
+      const renewed = view();
+      const claim = renewed?.ok ? renewed.value.pending : null;
+      return renewed?.ok && claim?.phase === "claimed" && claim.intent.kind !== "recovery" && !ready(renewed.value)
+        ? observe() : true;
     },
     prepareRecovery(scope: ForwardScope) {
       const checked = view();

@@ -11,7 +11,7 @@ function run(command: string, args: string[], capture = false): string {
   return result.stdout?.trim() ?? "";
 }
 
-export function linuxDomainProof(mode: "ssh" | "chrome") {
+export function linuxDomainProof(mode: "ssh" | "chrome" | "integrated") {
   const image = process.env.ST_DOMAIN_FIXTURE_IMAGE;
   const seccomp = process.env.ST_DOMAIN_FIXTURE_SECCOMP;
   assert(image && seccomp, "provide the pinned disposable fixture image and namespace sandbox seccomp profile");

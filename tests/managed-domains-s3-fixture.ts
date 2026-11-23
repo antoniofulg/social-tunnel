@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
+import { Database } from "bun:sqlite";
 import { spawn, spawnSync, type ChildProcess } from "node:child_process";
-import { chmodSync, chownSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
+import { chmodSync, chownSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, statSync, writeFileSync } from "node:fs";
 import { networkInterfaces } from "node:os";
 import { join } from "node:path";
 import { createConnection } from "node:net";
@@ -13,17 +14,24 @@ import type { EnrolledChrome } from "../server/domain-observer";
 import { DIRECT_WITNESS_HELPER, DIRECT_WITNESS_MAPPING, startDirectWitness } from "../server/domain-direct-witness";
 import { DOMAIN_POLICY_FILE, fileDomainPolicySink, hashBytes, renderDomainPolicy } from "../src/domain-policy";
 import { createProofOutbox } from "../src/domain-proof-outbox";
-import { DOMAIN_COMMAND_UNAVAILABLE } from "../src/domain-protocol";
+import { DOMAIN_COMMAND_UNAVAILABLE, DOMAIN_RESPONSE_LIMIT } from "../src/domain-protocol";
 import type { PublisherOperation, ProxyPublicationReceipt } from "../src/domain-publisher";
 import { domainRoleClient, proofHost } from "../src/domain-wire";
 import { parseManagedDomainSnapshot } from "../src/managed-domains";
 import { createManagedProxy } from "../src/proxy";
 import { connectSsh, fingerprint } from "../src/tunnel";
+import { main, type Io } from "../src/cli";
+import { loadConfig } from "../src/config";
+import { enrollmentBinding, managedKeyFingerprint } from "../src/domain-enrollment";
 
 const enroll = "isolated-fixture";
 const sshPort = 22183;
 const proxyPort = 18883;
 const initial = ["mozilla.org", "wikipedia.org"];
+const capacityRevision = 9007199254740960;
+const longHost = (i: number) => `${i.toString(16).padStart(3, "0")}${"a".repeat(60)}.${"b".repeat(63)}.${"c".repeat(63)}.${"d".repeat(57)}.org`;
+const capacityInitial = Array.from({ length: 127 }, (_, i) => longHost(i));
+const capacityAdd = longHost(127);
 const commandBin = "/usr/local/bin/st-domains-command";
 const roles = { st_editor: 41111, st_receipt: 41112, st_editor_next: 41113, st_receipt_next: 41114, st_forward: 41115 } as const;
 type Account = keyof typeof roles;
@@ -66,6 +74,7 @@ async function request(client: Client, name: RemoteOperation, body?: unknown) {
   channel.end(body === undefined ? undefined : JSON.stringify(body));
   const result = await reply;
   assert.equal(result.code, 0);
+  assert(Buffer.byteLength(result.stdout) <= DOMAIN_RESPONSE_LIMIT);
   return JSON.parse(result.stdout);
 }
 
@@ -149,8 +158,9 @@ function fixtureSsh(root: string, sockets: Record<Account, string>) {
     `MaxSessions 4\nMaxStartups 4:50:8\nSubsystem sftp internal-sftp\nLogLevel ERROR\n` + matches, { mode: 0o600 });
   cmd("/usr/sbin/sshd", ["-t", "-f", config]);
   const sshd = spawn("/usr/sbin/sshd", ["-D", "-e", "-f", config], { stdio: ["ignore", "ignore", "inherit"] });
-  const connect = (user: Account, account = user, key = pin) => connectSsh({ host: "127.0.0.1", port: sshPort, user,
-    hostKey: key, key: actualKeys.get(account)! }, { readyTimeoutMs: 3000 });
+  const target = (user: Account, account = user, key = pin) => ({ host: "127.0.0.1", port: sshPort, user,
+    hostKey: key, key: actualKeys.get(account)! });
+  const connect = (user: Account, account = user, key = pin) => connectSsh(target(user, account, key), { readyTimeoutMs: 3000 });
   const connectAgentTest = (user: Account) => new Promise<Client>((resolve, reject) => {
     const client = new Client();
     client.on("error", reject);
@@ -159,16 +169,15 @@ function fixtureSsh(root: string, sockets: Record<Account, string>) {
       hostVerifier: (key: Buffer) => fingerprint(key) === pin, readyTimeout: 3000,
       authHandler: ["publickey"], agent: join(root, "fixture-unused-agent.sock") });
   });
-  const proxyClient = (user: Account) => domainRoleClient("proxy", { host: "127.0.0.1", port: sshPort,
-    user, hostKey: pin, key: actualKeys.get(user)! });
-  return { sshd, connect, connectAgentTest, proxyClient, config };
+  const proxyClient = (user: Account) => domainRoleClient("proxy", target(user));
+  return { sshd, connect, connectAgentTest, proxyClient, target, config };
 }
 
 function expectDenied(fn: (callback: (error?: Error | null) => void) => unknown) {
   return new Promise<void>((resolve, reject) => fn((err) => err ? resolve() : reject(new Error("unexpected SSH grant"))));
 }
 
-export async function runS3Proof(mode: "ssh" | "chrome") {
+export async function runS3Proof(mode: "ssh" | "chrome" | "integrated") {
   assert.equal(process.platform, "linux");
   assert.equal(process.geteuid?.(), 0);
   assert.equal(process.env.ST_ISOLATED_FIXTURE, "c6fd921");
@@ -182,7 +191,8 @@ export async function runS3Proof(mode: "ssh" | "chrome") {
   const policyDir = "/etc/opt/chrome/policies/managed";
   mkdirSync(policyDir, { recursive: true, mode: 0o755 });
   const policyPath = join(policyDir, DOMAIN_POLICY_FILE);
-  writeFileSync(policyPath, renderDomainPolicy(proxyPort, { epoch: 1, revision: 0, routes: initial }), { mode: 0o644, flag: "wx" });
+  const baseline = mode === "integrated" ? { revision: capacityRevision, domains: capacityInitial } : { revision: 0, domains: initial };
+  writeFileSync(policyPath, renderDomainPolicy(proxyPort, { epoch: 1, revision: baseline.revision, routes: baseline.domains }), { mode: 0o644, flag: "wx" });
   const directories = {} as Record<Account, string>;
   const roleIngress = (name: Account, role: RoleIngress["identity"]["role"], epoch: number): RoleIngress => {
     const base = { enrollment: enroll, epoch };
@@ -194,13 +204,19 @@ export async function runS3Proof(mode: "ssh" | "chrome") {
     chownSync(directory, 0, group);
     directories[name] = directory;
   }
-  const { sshd, connect, connectAgentTest, proxyClient, config } = fixtureSsh(root, directories);
+  const { sshd, connect, connectAgentTest, proxyClient, target, config } = fixtureSsh(root, directories);
   const clients: Client[] = [];
   let chrome: ChildProcess | undefined;
   let sibling: ChildProcess | undefined;
   let controller: { close(): Promise<void> } | undefined;
   try {
     const sshdReady = () => readFileSync("/proc/net/tcp", "utf8").includes(`0100007F:${sshPort.toString(16).toUpperCase()}`);
+    if (mode === "integrated") {
+      await until(sshdReady);
+      chrome = fixtureChrome(root, "enrolled");
+      await integratedProof(root, journal, policyDir, chrome, target, connect);
+      return;
+    }
     await until(sshdReady);
     const forward = await connect("st_forward");
     clients.push(forward);
@@ -444,8 +460,135 @@ export async function runS3Proof(mode: "ssh" | "chrome") {
   }
 }
 
+async function integratedProof(
+  root: string, journal: string, policyDir: string, chrome: ChildProcess,
+  target: ReturnType<typeof fixtureSsh>["target"], connect: ReturnType<typeof fixtureSsh>["connect"],
+) {
+  const home = join(root, "home");
+  mkdirSync(home, { mode: 0o700 });
+  const path = join(home, "config.json");
+  const dir = `${path}.domains`;
+  const tunnel = target("st_forward");
+  const editor = target("st_editor");
+  const receipt = target("st_receipt");
+  mkdirSync(dir, { mode: 0o700 });
+  const keyPath = join(home, "tunnel.key");
+  for (const [file, key] of [[keyPath, tunnel.key], [join(dir, "editor.key"), editor.key], [join(dir, "proxy.key"), receipt.key]] as const) {
+    writeFileSync(file, key, { mode: 0o600, flag: "wx" });
+  }
+  writeFileSync(path, JSON.stringify({ version: 1, server: { host: tunnel.host, port: tunnel.port, user: tunnel.user, hostKey: tunnel.hostKey },
+    remotePort: proxyPort, domains: capacityInitial, keyPath }), { mode: 0o600, flag: "wx" });
+  const loaded = loadConfig(path, readFileSync, () => home);
+  assert(loaded.ok);
+  const epoch = 1;
+  const generation = "proxy-1";
+  writeFileSync(`${path}.domains.json`, JSON.stringify({ version: 1, enrollment: enroll, epoch, proxyGeneration: generation,
+    binding: enrollmentBinding(path, loaded.config), baseline: { revision: capacityRevision, domains: capacityInitial },
+    tunnelKey: managedKeyFingerprint(tunnel.key), editor: { user: editor.user, fingerprint: managedKeyFingerprint(editor.key) },
+    proxy: { user: receipt.user, fingerprint: managedKeyFingerprint(receipt.key) } }), { mode: 0o600, flag: "wx" });
+  let stop: (() => void) | undefined;
+  let clockOffset = 0;
+  let knownOwner = true;
+  const policy = fileDomainPolicySink(policyDir, journal);
+  const authority = openDomainAuthority({
+    enrollment: enroll, journalDir: journal, proxyPort, policy, forward: { epoch, generation },
+    chrome: { generation: "integrated-browser", input: chrome.stdio[3] as Writable, output: chrome.stdio[4] as Readable, directWitness,
+      ownership: () => knownOwner && chrome.exitCode === null && chrome.signalCode === null && ownsForward() &&
+        readdirSync(policyDir).filter((name) => name.endsWith(".json")).join() === DOMAIN_POLICY_FILE ? 1 : null },
+  }, () => performance.now() + clockOffset);
+  const io: Io = {
+    env: {}, platform: "linux", homedir: () => home, stdout: () => {}, stderr: () => {}, readFile: readFileSync, stat: statSync,
+    resolve: async () => { throw new Error("fixture must not resolve external names"); },
+    dial: async () => { throw new Error("fixture must not dial externally"); },
+    managedResolve: async () => { throw new Error("unexpected resolution during capacity proof"); },
+    managedDial: async () => { throw new Error("unexpected dial during capacity proof"); },
+    managedPollMs: 950, connectTimeoutMs: 3000, onSignal: (fn) => { stop = fn; },
+  };
+  async function cli(...args: string[]) {
+    let stdout = "";
+    const code = await main(["--json", "--config", path, ...args], { ...io, stdout: (s) => stdout += s });
+    return { code, value: JSON.parse(stdout) };
+  }
+  const run = main(["--json", "--config", path, "run"], io);
+  let editorSsh: Client | undefined;
+  let proxySsh: Client | undefined;
+  try {
+    await until(() => !!stop && ownsForward());
+    const role = (user: "st_receipt" | "st_editor") => ({ directory: join(root, user), group: roles[user] });
+    await authority.bind({ ...role("st_receipt"), identity: { role: "proxy", enrollment: enroll, epoch, generation } });
+    assert(await authority.refreshRuntime());
+    assert(await authority.provision({ epoch, revision: capacityRevision, domains: capacityInitial, proxyGeneration: generation }));
+    // Seed completed history only. The 127→128 claim and all new proofs use the real controller.
+    const db = new Database(join(journal, "domains.sqlite"), { create: false });
+    try {
+      db.transaction(() => {
+        const row = db.query<{ body: string }, []>("SELECT body FROM control WHERE id = 1").get()!;
+        const prior = JSON.parse(row.body);
+        prior.history = Array.from({ length: 32 }, (_, i) => {
+          const revision = capacityRevision - 31 + i;
+          return { operationId: operationId(epoch, revision - 1, i), revision, disposition: "applied" };
+        });
+        const next = JSON.stringify(prior);
+        db.query("UPDATE control SET body = ?, digest = ? WHERE id = 1").run(next, hashBytes(next));
+      }).immediate();
+    } finally { db.close(); }
+    assert(await authority.observe());
+    await authority.bind({ ...role("st_editor"), identity: { role: "editor", enrollment: enroll, epoch } });
+    editorSsh = await connect("st_editor");
+    proxySsh = await connect("st_receipt");
+    let status: Awaited<ReturnType<typeof cli>>;
+    for (const until = performance.now() + 5000;;) {
+      status = await cli("status", "--tray-scope");
+      if (status.value.managedDomains.active?.revision === capacityRevision) break;
+      assert(performance.now() < until, "managed run did not report a fresh baseline");
+      await sleep(30);
+    }
+    const scope = ["--expected-enrollment", status.value.trayEnrollment];
+    const proposal = await cli("domains", "add", capacityAdd, "--expected-revision", String(capacityRevision), ...scope);
+    assert.equal(proposal.code, 0);
+    const id = proposal.value.pending.operationId;
+    clockOffset += 31000;
+    const expired = value<any>(await request(proxySsh, "inspect"));
+    assert.equal(expired.active, null);
+    assert.equal(expired.pending.operationId, id);
+    assert.equal(expired.pending.phase, "claimed");
+    assert.deepEqual(await request(proxySsh, "begin", id), { ok: false, code: "not_ready" });
+    assert(await authority.refreshRuntime(), "protected refresh did not renew the same claim");
+    const editorRead = value<any>(await request(editorSsh, "inspect"));
+    const proxyRead = value<any>(await request(proxySsh, "inspect"));
+    assert.equal(editorRead.history.length, 32);
+    assert.equal(proxyRead.history.length, 32);
+    assert.equal(proxyRead.active.domains.length, 127);
+    assert.equal(proxyRead.pending.target.domains.length, 128);
+    assert(proxyRead.pending.target.domains.every((host: string) => host.length === 253));
+    assert.equal(proxyRead.pending.target.policy.routes, undefined);
+    assert.equal(editorRead.pending.operationId, id);
+    assert.equal(proxyRead.pending.operationId, id);
+    const deadline = performance.now() + 12000;
+    while (value(authority.inspectLocal()).pending?.phase !== "published") {
+      assert(performance.now() < deadline, "real managed run did not publish the admitted maximum");
+      await authority.refreshRuntime();
+      await sleep(150);
+    }
+    assert(await authority.observe());
+    const final = value(authority.inspectLocal());
+    assert.equal(final.lastProven.domains.length, 128);
+    assert.equal(final.history.length, 32);
+    assert.equal(final.history.at(-1)?.operationId, id);
+    assert.equal(final.history.at(-1)?.disposition, "applied");
+    console.log("[domains C7/C9] 127→128 × 253-byte names and 32 history: both role replies cross production caps; expired claim re-proved and applied by actual managed run");
+  } finally {
+    knownOwner = false;
+    stop?.();
+    await run;
+    editorSsh?.end();
+    proxySsh?.end();
+    await authority.close();
+  }
+}
+
 if (import.meta.main) {
   const mode = process.argv[2];
-  if (mode !== "ssh" && mode !== "chrome") throw new Error("invalid isolated proof selection");
+  if (mode !== "ssh" && mode !== "chrome" && mode !== "integrated") throw new Error("invalid isolated proof selection");
   await runS3Proof(mode);
 }
