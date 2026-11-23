@@ -39,6 +39,19 @@ export function dispatchLocalDisable(raw: unknown, authority: Pick<Authority, "d
   }
 }
 
+// This does not grant a hold. Only the existing root-local control socket dispatches it.
+export function dispatchLocalIdleWindow(
+  raw: unknown,
+  authority: Pick<Authority, "inspectIdleCandidateLocal" | "inspectCompletedIdleWindowLocal">,
+) {
+  if (exact(raw, "op")?.op === "idle-candidate") return authority.inspectIdleCandidateLocal();
+  const complete = exact(raw, "op enrollment id operationDigest");
+  if (complete?.op === "idle-completed") {
+    const { enrollment, id, operationDigest } = complete;
+    return authority.inspectCompletedIdleWindowLocal({ enrollment, id, operationDigest });
+  }
+}
+
 function safeSmall(path: string, max: number) {
   const fd = openSync(path, constants.O_RDONLY | constants.O_NONBLOCK | constants.O_NOFOLLOW);
   try {
@@ -371,6 +384,8 @@ async function serve(m: Manifest, platform: ReturnType<typeof guardedPlatform>) 
         return success({ epoch, proxyGeneration, journalEditingEnabled: editingEnabled, pending: pending && { operationId: pending.operationId, phase: pending.phase },
           recovery: recovery?.operationId ?? null, lastProven: lastProven.policy.revision, generation, ownership: own() });
       }
+      const idle = dispatchLocalIdleWindow(raw, a);
+      if (idle) return idle;
       if (exact(raw, "op")?.op === "bootstrap") {
         if (marker.read() !== "staged" || a.inspectLocal() || lstatSync(DB, { throwIfNoEntry: false })) return error("conflict");
         if (!(await refresh()) || stopping) return error("not_ready");

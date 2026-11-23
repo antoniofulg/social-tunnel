@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { PassThrough } from "node:stream";
 import { runInNewContext } from "node:vm";
 import { openDomainAuthority } from "../server/domain-authority";
-import { dispatchLocalDisable } from "../server/domain-linux-supervisor";
+import { dispatchLocalDisable, dispatchLocalIdleWindow } from "../server/domain-linux-supervisor";
 import {
   DOMAIN_POLICY_FILE, fileDomainPolicySink, hashBytes, renderDomainPolicy, type DomainPolicySink,
 } from "../src/domain-policy";
@@ -80,6 +80,7 @@ function openLocalAuthority(f: ReturnType<typeof fixture>, policy = f.sink) {
   const authority = openDomainAuthority({
     enrollment: ENROLLMENT, journalDir: f.journalDir, proxyPort: PORT, policy,
     forward: { epoch: EPOCH, generation: "proxy-1" },
+    currentIdleReservation: f.options.currentIdleReservation,
     browserRoster: () => ({ version: 0, browsers }), forwardOwnership: () => null,
   });
   authority.open();
@@ -104,7 +105,7 @@ function pac(bytes: string) {
   return (host: string) => find(`https://${host}/`, host);
 }
 
-test("[domains C9] a guarded publisher grants, publishes and finalizes only under the same durable idle reservation", () => {
+test("[domains C9] a guarded publisher grants, publishes and finalizes only under the same durable idle reservation", async () => {
   let held: { scope: IdleReservationScope; id: string } | undefined;
   let remainingChecks = Infinity;
   const f = fixture(["wikipedia.org"], scope => {
@@ -126,13 +127,21 @@ test("[domains C9] a guarded publisher grants, publishes and finalizes only unde
     enrollment: ENROLLMENT, epoch: EPOCH, operationId: edit.operationId, revision: INIT + 1,
     domainsDigest: edit.target.domainsDigest, policyPreimageDigest: hashBytes(f.initial),
   };
-  const binding = { id: "exact-lease", operationDigest: idleWindowDigest(scope) };
+  const binding = { enrollment: ENROLLMENT, id: "exact-lease", operationDigest: idleWindowDigest(scope) };
   expect(p.inspectIdleCandidate(f.editor)).toEqual(err("unauthorized"));
   expect(p.inspectIdleCandidate(f.admin)).toEqual({ ok: true, value: { scope, recoveryOf: null, operationDigest: binding.operationDigest } });
   expect(f.bytes()).toEqual(beforeGrant);
   writeFileSync(f.policyPath, f.initial.trimEnd());
   expect(p.inspectIdleCandidate(f.admin)).toEqual(err("not_ready"));
   writeFileSync(f.policyPath, f.initial);
+  const local = openLocalAuthority(f);
+  try {
+    expect(dispatchLocalIdleWindow({ op: "idle-candidate" }, local)).toEqual({
+      ok: true, value: { scope, recoveryOf: null, operationDigest: binding.operationDigest },
+    });
+    expect(dispatchLocalIdleWindow({ op: "idle-candidate", roster: ["any"] }, local)).toBeUndefined();
+    expect(dispatchLocalIdleWindow({ op: "idle-completed", ...binding }, local)).toEqual(err("not_ready"));
+  } finally { await local.close(); }
   expect(p.inspectCompletedIdleWindow(f.admin, binding)).toEqual(err("not_ready"));
   held = { id: "wrong-operation-lease", scope: { ...scope, operationId: id(9) } };
   expect(p.beginActivation(f.proxy, edit.operationId)).toEqual(err("not_ready"));
@@ -171,6 +180,7 @@ test("[domains C9] a guarded publisher grants, publishes and finalizes only unde
   expect(p.inspectCompletedIdleWindow(f.admin, { ...binding, id: "different-lease" })).toEqual(err("not_ready"));
   expect(p.inspectCompletedIdleWindow(f.admin, { ...binding, operationDigest: hashBytes(applied) })).toEqual(err("not_ready"));
   expect(p.inspectCompletedIdleWindow(f.admin, binding)).toEqual({ ok: true, value: null });
+  expect(p.inspectCompletedIdleWindow(f.admin, { ...binding, enrollment: "other" })).toEqual(err("not_ready"));
   writeFileSync(f.policyPath, f.initial);
   expect(p.inspectCompletedIdleWindow(f.admin, binding)).toEqual(err("not_ready"));
   writeFileSync(f.policyPath, applied);
@@ -517,7 +527,7 @@ test("[domains C10] repeated Disable and reopen keep the original idle hold boun
   const edit = value(p.propose(f.editor, "remove", wire("wikipedia.org")));
   expected = { enrollment: ENROLLMENT, epoch: EPOCH, operationId: edit.operationId, revision: INIT + 1,
     domainsDigest: edit.target.domainsDigest, policyPreimageDigest: hashBytes(f.initial) };
-  const original = { id: "original-hold", operationDigest: idleWindowDigest(expected) };
+  const original = { enrollment: ENROLLMENT, id: "original-hold", operationDigest: idleWindowDigest(expected) };
   value(p.beginActivation(f.proxy, edit.operationId));
   value(p.publish(f.proxy, receipt(edit)));
   const preimage = f.sink.read();

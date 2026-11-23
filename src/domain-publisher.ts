@@ -338,10 +338,11 @@ export function openDomainPublisher<Session>(options: PublisherOptions<Session>)
     return store.transact((state) => {
       const denied = authorize(state, session, "local_admin");
       if (denied) return denied;
-      if (!exact(binding, 2)) return fail("invalid_request");
-      const { id, operationDigest } = binding;
+      if (!exact(binding, 3)) return fail("invalid_request");
+      const { enrollment, id, operationDigest } = binding;
       if (!tag(id) || typeof operationDigest !== "string" || operationDigest.length !== 64 ||
           /[^0-9a-f]/.test(operationDigest)) return fail("invalid_request");
+      if (enrollment !== state.enrollment) return fail("not_ready");
       const completed = state.completedIdleWindow;
       if (state.version === 1 || state.recovery || (state.pending && state.pending.phase !== "claimed") ||
           completed?.id !== id || completed.operationDigest !== operationDigest) return fail("not_ready");
