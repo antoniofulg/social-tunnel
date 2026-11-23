@@ -3,12 +3,14 @@ import { spawn, spawnSync, type ChildProcess } from "node:child_process";
 import { chmodSync, chownSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { networkInterfaces } from "node:os";
 import { join } from "node:path";
+import { createConnection } from "node:net";
 import type { Duplex, Readable, Writable } from "node:stream";
 import { setTimeout as sleep } from "node:timers/promises";
 import { Client, utils, type ClientChannel, type ExecOptions } from "ssh2";
 import { createDomainIngress, domainCommands, type RemoteOperation, type RoleIngress } from "../server/domain-ingress";
 import { openDomainAuthority, type LiveProxyRevision } from "../server/domain-authority";
-import { createDomainObserver, type EnrolledChrome } from "../server/domain-observer";
+import type { EnrolledChrome } from "../server/domain-observer";
+import { DIRECT_WITNESS_HELPER, DIRECT_WITNESS_MAPPING, startDirectWitness } from "../server/domain-direct-witness";
 import { DOMAIN_POLICY_FILE, fileDomainPolicySink, hashBytes, renderDomainPolicy } from "../src/domain-policy";
 import { createProofOutbox } from "../src/domain-proof-outbox";
 import { DOMAIN_COMMAND_UNAVAILABLE } from "../src/domain-protocol";
@@ -26,6 +28,7 @@ const commandBin = "/usr/local/bin/st-domains-command";
 const roles = { st_editor: 41111, st_receipt: 41112, st_editor_next: 41113, st_receipt_next: 41114, st_forward: 41115 } as const;
 type Account = keyof typeof roles;
 
+const directWitness = { uid: 41116, gid: 41116, mapping: DIRECT_WITNESS_MAPPING } as const;
 function cmd(file: string, args: string[]): string {
   const result = spawnSync(file, args, { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], timeout: 12000 });
   if (result.status !== 0) throw new Error(`${file} failed (${result.status}): ${result.stderr.slice(0, 1000)}`);
@@ -91,10 +94,24 @@ function fixtureChrome(root: string, label: string, uid = 65534): ChildProcess {
     "/opt/google/chrome/chrome", "--headless", "--remote-debugging-pipe", "--disable-setuid-sandbox",
     "--no-first-run", "--no-default-browser-check", "--disable-background-networking", "--disable-component-update", "--disable-sync",
     "--disable-dev-shm-usage", "--renderer-process-limit=2", "--disable-gpu", `--user-data-dir=${profile}/profile`,
-    "--host-resolver-rules=MAP *.pac.invalid ^NOTFOUND, MAP * ^NOTFOUND, EXCLUDE 127.0.0.1", "about:blank"], {
+    `--host-resolver-rules=${DIRECT_WITNESS_MAPPING}, MAP * ^NOTFOUND, EXCLUDE 127.0.0.1`, "about:blank"], {
     env: { HOME: profile, XDG_CONFIG_HOME: `${profile}/config`, XDG_CACHE_HOME: `${profile}/cache`, PATH: "/usr/bin:/bin" },
     stdio: ["ignore", "ignore", "ignore", "pipe", "pipe"],
   });
+}
+
+async function forwardReply(request: string) {
+  const socket = createConnection({ host: "127.0.0.1", port: proxyPort });
+  socket.setTimeout(2500, () => socket.destroy(new Error("fixture forward timeout")));
+  let reply = "";
+  try {
+    socket.write(request);
+    for await (const chunk of socket) {
+      reply += chunk.toString("latin1");
+      assert(reply.length <= 1024);
+    }
+    return reply;
+  } finally { socket.destroy(); }
 }
 
 function fixtureSsh(root: string, sockets: Record<Account, string>) {
@@ -156,6 +173,7 @@ export async function runS3Proof(mode: "ssh" | "chrome") {
   assert.equal(process.geteuid?.(), 0);
   assert.equal(process.env.ST_ISOLATED_FIXTURE, "c6fd921");
   assert.deepEqual(Object.keys(networkInterfaces()), ["lo"]);
+  chmodSync(DIRECT_WITNESS_HELPER, 0o755);
   const root = mkdtempSync("/run/st-domains-");
   chmodSync(root, 0o755);
   mkdirSync("/var/empty", { recursive: true, mode: 0o755 });
@@ -188,7 +206,6 @@ export async function runS3Proof(mode: "ssh" | "chrome") {
     clients.push(forward);
     let live: LiveProxyRevision | null = { generation: "proxy-1", revision: 0, domainsDigest: hashBytes(JSON.stringify(initial)) };
     forward.on("close", () => (live = null));
-    let watch: { names: Set<string>; seen: Set<string> } | undefined;
     let resolves = 0;
     let sendProof = proxyClient("st_receipt");
     const proofs = createProofOutbox((proof) => sendProof.attest(proof));
@@ -199,8 +216,7 @@ export async function runS3Proof(mode: "ssh" | "chrome") {
       dial: async () => { throw new Error("no real upstream in isolated proof"); },
       log: ({ host, status }) => {
         if (status !== 403 || !host) return;
-        if (watch?.names.has(host)) { watch.seen.add(host); return; }
-        if (mode === "chrome" && live && proofHost(host) && (!suppressCanary || host.includes(".live."))) {
+        if (live && proofHost(host) && (!suppressCanary || host.includes(".live."))) {
           proofs.observe({ ...live, host, enrollment: enroll, epoch: receiptEpoch });
         }
       },
@@ -218,28 +234,17 @@ export async function runS3Proof(mode: "ssh" | "chrome") {
         generation, input: process.stdio[3] as Writable, output: process.stdio[4] as Readable,
         ownership: () => selected() && process.exitCode === null && process.signalCode === null && ownsForward() &&
           readdirSync(policyDir).filter((entry) => entry.endsWith(".json")).join() === DOMAIN_POLICY_FILE ? ownership : null,
-        watchCanaries(positive, negative) {
-          const probe = { names: new Set([positive, negative]), seen: new Set<string>() };
-          watch = probe;
-          return {
-            positiveSeen: () => !suppressCanary && probe.seen.has(positive),
-            negativeClear: () => !probe.seen.has(negative),
-            valid: () => !probe.seen.has(negative),
-            close: () => { watch = undefined; },
-          };
-        },
+        directWitness,
       };
     }
     const authority = openDomainAuthority({
       enrollment: enroll, journalDir: journal, proxyPort, policy,
-      ...(mode === "chrome" ? { forward: { epoch: 1, generation: "proxy-1" } } : { liveProxy: () => live }),
+      forward: { epoch: 1, generation: "proxy-1" },
       chrome: enrolledBrowser(chrome, "isolated-browser-1", () => ownsEnrolledBrowser),
     }, () => performance.now() + clockOffset);
     controller = authority;
-    if (mode === "chrome") {
-      await authority.bind(roleIngress("st_receipt", "proxy", 1));
-      assert(await authority.refreshRuntime(), "protected forward challenge did not attest");
-    }
+    await authority.bind(roleIngress("st_receipt", "proxy", 1));
+    assert(await authority.refreshRuntime(), "protected forward challenge did not attest");
     assert(await authority.provision({ epoch: 1, revision: 0, domains: initial, proxyGeneration: "proxy-1" }), "mandatory baseline was not independently proven");
     assert(await authority.observe());
     // close() must see a binding that has started listening but has not registered its completion.
@@ -248,7 +253,6 @@ export async function runS3Proof(mode: "ssh" | "chrome") {
     await Promise.all([closingIngress.close(), assert.rejects(incompleteBind, /retired before bind/)]);
     assert(!lstatSync(join(directories.st_editor, "authority.sock"), { throwIfNoEntry: false }));
     await authority.bind(roleIngress("st_editor", "editor", 1));
-    if (mode === "ssh") await authority.bind(roleIngress("st_receipt", "proxy", 1));
     const editor = await connect("st_editor");
     const receiptClient = await connect("st_receipt");
     clients.push(editor, receiptClient);
@@ -310,6 +314,19 @@ export async function runS3Proof(mode: "ssh" | "chrome") {
       return;
     }
 
+    // The actual owned SSH forward cannot act as a relay to the affirmative sink,
+    // even with the exact synthetic URL or a delayed CONNECT to its ephemeral port.
+    const probeHost = `${"b".repeat(32)}.e0.r0.pac.invalid`;
+    const probePath = `/${"d".repeat(32)}`;
+    const direct = await startDirectWitness(directWitness, probeHost, probePath);
+    try {
+      assert.notEqual(direct.port, proxyPort);
+      assert.match(await forwardReply(`GET http://${probeHost}:${direct.port}${probePath} HTTP/1.1\r\nHost: ${probeHost}:${direct.port}\r\n\r\n`), /^HTTP\/1.1 405 /);
+      assert.match(await forwardReply(`CONNECT ${probeHost}:${direct.port} HTTP/1.1\r\n\r\n`), /^HTTP\/1.1 403 /);
+      assert.match(await forwardReply(`CONNECT ${probeHost}:443 HTTP/1.1\r\n\r\n`), /^HTTP\/1.1 403 /);
+    } finally { direct.close(); }
+    assert.equal(await direct.seen, null);
+
     function ack(grant: PublisherOperation, epoch: number): ProxyPublicationReceipt {
       return { enrollment: enroll, epoch, operationId: grant.operationId, revision: grant.target.policy.revision,
         domainsDigest: grant.target.domainsDigest, proxyGeneration: grant.proxyGeneration };
@@ -342,8 +359,7 @@ export async function runS3Proof(mode: "ssh" | "chrome") {
     suppressCanary = false;
     ownsEnrolledBrowser = false;
     sibling = fixtureChrome(root, "sibling", 65533);
-    const unrelated = createDomainObserver(enrolledBrowser(sibling, "isolated-browser-2", () => true));
-    assert.equal((await unrelated.prove(granted.target.policy, policy.read()))?.generation, "isolated-browser-2.1");
+    assert.equal(sibling.exitCode, null);
     assert.equal(await authority.observe(), false, "a live sibling on the same disk policy cannot finalize for the enrolled instance");
     assert.equal(value(authority.inspectLocal()).lastProven.policy.revision, 0);
     sibling.kill();
@@ -418,7 +434,7 @@ export async function runS3Proof(mode: "ssh" | "chrome") {
     await until(() => !ownsForward());
     assert.equal(await authority.observe(), false);
     assert.equal((await inspect(freshEditor)).state, "activation_unknown");
-    console.log("[domains C7/C8/C9/C10/C11] protected Chrome reload and paired route witnesses on the real disposable SSH forward; epoch fencing and proved recovery");
+    console.log("[domains C7/C8/C9/C10/C11] pinned Chrome: authenticated positive over the real SSH forward, affirmative direct GET at the unprivileged loopback sink, wrong forwarding denied, epoch fencing and recovery");
   } finally {
     await controller?.close();
     chrome?.kill();

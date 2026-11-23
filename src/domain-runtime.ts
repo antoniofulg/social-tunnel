@@ -187,8 +187,7 @@ export function createManagedRun(options: ManagedRunOptions) {
   const proxy = createManagedProxy({
     resolve: options.resolve, dial: options.dial, trafficReady: () => allow && !stopping,
     log: ({ status, host }) => {
-      if (status !== 403 || !proofHost(host) || !connected || stopping) return;
-      if (settling) { canaries.uncertain(); return; }
+      if (status !== 403 || !proofHost(host) || !connected || stopping || settling) return;
       canaries.observe({ enrollment: enrollment.enrollment, epoch: enrollment.epoch, generation: enrollment.proxyGeneration,
         revision: active.revision, domainsDigest: digest(active), host });
     },

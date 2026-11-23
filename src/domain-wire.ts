@@ -97,7 +97,7 @@ export const domainUInt = (value: unknown): value is number => typeof value === 
 export const domainTag = (value: unknown): value is string => typeof value === "string" && /^[A-Za-z0-9_-]{1,64}$/.test(value);
 export const domainDigest = (value: unknown): value is string => typeof value === "string" && /^[0-9a-f]{64}$/.test(value);
 export const operationIdFormat = (id: unknown): id is string => typeof id === "string" && /^\d{1,16}\.\d{1,16}\.[0-9a-f]{32}$/.test(id);
-export const proofHost = (host: unknown): host is string => typeof host === "string" && /^[0-9a-f]{32}\.(?:live|barrier|e\d{1,16}\.r\d{1,16})\.pac\.invalid$/.test(host);
+export const proofHost = (host: unknown): host is string => typeof host === "string" && /^[0-9a-f]{32}\.(?:live|e\d{1,16}\.r\d{1,16})\.pac\.invalid$/.test(host);
 export function wireObject(value: unknown): Record<string, unknown> | null {
   return value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : null;
 }

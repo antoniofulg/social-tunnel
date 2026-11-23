@@ -22,6 +22,7 @@ export function createForwardAttestation(enrollment: string, port: number, owner
   const probes = new Map<string, Probe>();
   let live: { owner: number; scope: ForwardScope; snapshot: ProxyPreimage; expires: number } | undefined;
   let refreshing = false;
+  let fenceGeneration = 0;
 
   function current(scope: ForwardScope): ProxyPreimage | null {
     if (!live || live.owner !== ownership() || now() >= live.expires) { live = undefined; return null; }
@@ -44,7 +45,7 @@ export function createForwardAttestation(enrollment: string, port: number, owner
     };
     const timer = setTimeout(close, NONCE_MS);
     probes.set(host, probe);
-    return { promise, close, owner, expires: probe.expires, armed: () => probes.get(host) === probe };
+    return { promise, close, owner, expires: probe.expires };
   }
 
   function attest(identity: { enrollment: string; epoch: number; generation: string }, value: unknown): boolean {
@@ -82,46 +83,35 @@ export function createForwardAttestation(enrollment: string, port: number, owner
   async function refresh(scope: ForwardScope): Promise<boolean> {
     if (refreshing || ownership() === null) return false;
     refreshing = true;
+    const started = fenceGeneration;
     const host = `${randomBytes(16).toString("hex")}.live.pac.invalid`;
     let probe: ReturnType<typeof arm> | undefined;
     try {
       probe = arm(host, scope);
       const [refused, snapshot] = await Promise.all([connectCanary(host), probe.promise]);
-      if (!refused || !snapshot || ownership() !== probe.owner) { live = undefined; return false; }
+      if (!refused || !snapshot || started !== fenceGeneration || ownership() !== probe.owner || now() >= probe.expires) {
+        live = undefined;
+        return false;
+      }
       live = { owner: probe.owner, scope, snapshot, expires: now() + LIVE_MS };
       return true;
     } catch { live = undefined; return false; }
     finally { probe?.close(); refreshing = false; }
   }
 
-  function watch(positive: string, negative: string, scope: ForwardScope, expected: ProxyPreimage) {
-    const currentProbe = arm(positive, scope, expected);
-    let wrongProbe;
-    try { wrongProbe = arm(negative, scope, expected); }
-    catch (error) { currentProbe.close(); throw error; }
-    let ordered = false;
-    // A consumed or invalidated negative probe can never certify absence.
-    const valid = () => ordered && wrongProbe.armed() && ownership() === wrongProbe.owner && now() < wrongProbe.expires;
+  function watch(positive: string, scope: ForwardScope, expected: ProxyPreimage) {
+    const probe = arm(positive, scope, expected);
+    const started = fenceGeneration;
+    let seen = false;
     return {
-      positiveSeen: async () => (await currentProbe.promise) !== null,
-      async negativeClear() {
-        if (!wrongProbe.armed() || ownership() !== wrongProbe.owner || now() >= wrongProbe.expires) return false;
-        const host = `${randomBytes(16).toString("hex")}.barrier.pac.invalid`;
-        const barrier = arm(host, scope, expected);
-        try {
-          // After the observed browser navigation terminated, drain the same home
-          // receipt FIFO through a fresh marker on the verified forward.
-          const [refused, confirmed] = await Promise.all([connectCanary(host), barrier.promise]);
-          ordered = refused && confirmed !== null && barrier.owner === wrongProbe.owner;
-          return valid();
-        } finally { barrier.close(); }
-      },
-      valid,
-      close() { currentProbe.close(); wrongProbe.close(); },
+      positiveSeen: async () => seen = (await probe.promise) !== null,
+      valid: () => seen && started === fenceGeneration && ownership() === probe.owner && now() < probe.expires,
+      close: probe.close,
     };
   }
 
   function fence() {
+    fenceGeneration++;
     live = undefined;
     for (const probe of probes.values()) probe.resolve(null);
     probes.clear();

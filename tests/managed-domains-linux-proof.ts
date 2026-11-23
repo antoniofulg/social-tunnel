@@ -32,6 +32,7 @@ export function linuxDomainProof(mode: "ssh" | "chrome") {
     assert.match(imageId, /^sha256:[0-9a-f]{64}$/);
     bg(process.execPath, "build", "--compile", "--target=bun-linux-arm64", "server/domain-command.ts", "--outfile", join(dir, "command"));
     bg(process.execPath, "build", "--compile", "--target=bun-linux-arm64", "tests/managed-domains-s3-fixture.ts", "--outfile", join(dir, "fixture"));
+    bg(process.execPath, "build", "--compile", "--target=bun-linux-arm64", "server/domain-direct-witness.ts", "--outfile", join(dir, "direct-witness"));
     docker(["create", "--name", name, "--label", `social-tunnel.proof=${id}`, "--platform", "linux/arm64", "--network", "none",
       "--cpus", "2", "--memory", "1400m", "--pids-limit", "448", "--init", "--security-opt", "no-new-privileges=true",
       "--security-opt", `seccomp=${seccomp}`, "-e", "ST_ISOLATED_FIXTURE=c6fd921", imageId,
@@ -41,6 +42,7 @@ export function linuxDomainProof(mode: "ssh" | "chrome") {
     assert.equal(actual, "none 2000000000 false 0 0");
     docker(["cp", join(dir, "command"), `${name}:/usr/local/bin/st-domains-command`]);
     docker(["cp", join(dir, "fixture"), `${name}:/usr/local/bin/st-domains-fixture`]);
+    docker(["cp", join(dir, "direct-witness"), `${name}:/usr/local/bin/st-domains-direct-witness`]);
     bg("env", "-u", "DOCKER_HOST", "-u", "DOCKER_CONTEXT", "docker", "--context", "kiri", "start", "-a", name);
     assert.equal(docker(["inspect", name, "--format", "{{.State.ExitCode}} {{.State.OOMKilled}}"], true), "0 false");
   } finally {

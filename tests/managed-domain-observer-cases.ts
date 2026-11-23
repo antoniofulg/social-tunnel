@@ -1,67 +1,132 @@
 import { expect, test } from "bun:test";
+import { request } from "node:http";
+import { createConnection, createServer } from "node:net";
 import { PassThrough } from "node:stream";
-import { createServer } from "node:net";
-import { createDomainObserver, type EnrolledChrome } from "../server/domain-observer";
+import { DIRECT_WITNESS_MAPPING, listenDirectWitness, type DirectWitness } from "../server/domain-direct-witness";
+import { createDomainObserver } from "../server/domain-observer";
 import { createForwardAttestation } from "../server/forward-attestation";
-import { createProofOutbox } from "../src/domain-proof-outbox";
-import type { DomainAttestation } from "../src/domain-wire";
 import { renderDomainPolicy } from "../src/domain-policy";
+import { parseManagedDomainSnapshot } from "../src/managed-domains";
+import { createManagedProxy, withTimeout } from "../src/proxy";
 
 const policy = { epoch: 1, revision: 12, routes: ["wikipedia.org"] };
 const bytes = renderDomainPolicy(8888, policy);
+const settings = { uid: 41116, gid: 41116, mapping: DIRECT_WITNESS_MAPPING } as const;
+const loopback = "127.0.0.1";
+const host = `${"a".repeat(32)}.e0.r12.pac.invalid`;
+const path = `/${"b".repeat(32)}`;
+const wrongPath = `/${"c".repeat(32)}`;
 
-function cdpFixture(fault: "late_policy" | "expired" | null, watch?: EnrolledChrome["watchCanaries"]) {
+function visit(url: URL, overrides: { host?: string; path?: string; port?: number } = {}) {
+  const { promise, resolve } = Promise.withResolvers<string | null>();
+  const req = request({ hostname: loopback, port: overrides.port ?? url.port, path: overrides.path ?? url.pathname,
+    headers: { Host: overrides.host ?? url.host }, agent: false }, (res) => {
+    let body = "";
+    res.on("data", (data) => { body += data; });
+    res.on("end", () => resolve(res.statusCode === 200 ? body : null));
+    res.on("error", () => resolve(null));
+  });
+  req.on("error", () => resolve(null));
+  req.setTimeout(1000, () => req.destroy());
+  req.end();
+  return promise;
+}
+
+test("[domains C8] the direct sink grants one exact local origin GET and rejects wrong host, nonce and replay", async () => {
+  const sink = await listenDirectWitness(host, path);
+  const url = new URL(`http://${host}:${sink.port}${path}`);
+  try {
+    expect(await visit(url, { host: `wrong.pac.invalid:${sink.port}` })).toBeNull();
+    expect(await visit(url, { path: wrongPath })).toBeNull();
+    const receipt = await visit(url);
+    expect(receipt).toMatch(/^[0-9a-f]{32}$/);
+    expect(await sink.seen).toBe(receipt);
+    expect(await visit(url)).toBeNull();
+  } finally { sink.close(); }
+  const expired = await listenDirectWitness(host, path, 10);
+  expect(await expired.seen).toBeNull();
+  expect(await visit(url, { port: expired.port })).toBeNull();
+});
+
+type Fault = "late_policy" | "expired" | "wrong_context" | "late_context" | "old_receipt" | "wrong_sink" | "late_connect" | "not_enrolled";
+
+function cdpFixture(fault?: Fault, oldReceipt?: string) {
   const input = new PassThrough();
   const output = new PassThrough();
   const expected = JSON.parse(bytes).ProxySettings;
+  const { promise: navigated, resolve: negativeNavigation } = Promise.withResolvers<{ url: URL; sink: DirectWitness }>();
+  let sink: DirectWitness;
+  let body: string | null = null;
   let now = 0;
   let generation = 1;
+  let targets = 0;
   let reads = 0;
   let visits = 0;
-  input.on("data", (data: Buffer) => {
-    const { id, method, params } = JSON.parse(data.toString().slice(0, -1));
+  input.on("data", (data: Buffer) => void (async () => {
+    const { id, method, params, sessionId } = JSON.parse(data.toString().slice(0, -1));
     let result: object;
-    if (method === "Target.createTarget") result = { targetId: `t${id}` };
-    else if (method === "Target.getTargetInfo") result = { targetInfo: { type: "page", browserContextId: "enrolled" } };
-    else if (method === "Target.attachToTarget") result = { sessionId: `s${id}` };
+    let negative: URL | undefined;
+    if (method === "Target.createTarget") result = { targetId: `target-${++targets}` };
+    else if (method === "Target.getTargetInfo") {
+      const wrong = params.targetId === "target-2" && (fault === "wrong_context" || (fault === "late_context" && visits === 2));
+      result = { targetInfo: { targetId: params.targetId, type: "page", browserContextId: wrong ? "sibling" : "enrolled" } };
+    } else if (method === "Target.attachToTarget") result = { sessionId: `session-${params.targetId}` };
     else if (method === "Target.closeTarget") result = { success: true };
     else if (method === "Page.navigate") {
       if (params.url.startsWith("chrome:")) result = {};
+      else if (++visits === 1) result = { errorText: "net::ERR_TUNNEL_CONNECTION_FAILED" };
       else {
-        visits++;
-        if (fault === "expired" && visits === 2) now = 31000;
-        result = { errorText: visits === 1 ? "net::ERR_TUNNEL_CONNECTION_FAILED" : "net::ERR_NAME_NOT_RESOLVED" };
+        negative = new URL(params.url);
+        if (fault === "wrong_sink") {
+          const other = await listenDirectWitness(negative.hostname, negative.pathname);
+          try { body = await visit(negative, { port: other.port, host: `${negative.hostname}:${other.port}` }); }
+          finally { other.close(); sink.close(); }
+        } else if (fault !== "late_connect") {
+          body = await visit(negative);
+          if (fault === "old_receipt") body = oldReceipt ?? null;
+        }
+        if (fault === "expired") now = 31000;
+        result = {}; // Even simulated navigation success earns nothing without exact sink evidence.
       }
     } else if (method === "Runtime.evaluate") {
-      if (!params.expression.includes("const matches = rows")) result = { result: { value: true } };
+      if (params.awaitPromise) result = { result: { value: body } };
+      else if (!params.expression.includes("const matches = rows")) result = { result: { value: true } };
       else {
         reads++;
         const value = fault === "late_policy" && visits === 2 ? { ...expected, ProxyPacMandatory: false } : expected;
         result = { result: { value: { valid: true, disabled: false, value } } };
       }
     } else throw new Error("unexpected proof command");
-    output.write(JSON.stringify({ id, result }) + "\0");
-  });
+    output.write(JSON.stringify({ id, sessionId, result }) + "\0");
+    if (negative) negativeNavigation({ url: negative, sink });
+  })().catch(() => output.end()));
   const observer = createDomainObserver({ generation: "fixture", input, output, ownership: () => generation,
-    watchCanaries: watch ?? (() => ({ positiveSeen: () => true, negativeClear: () => true, valid: () => true, close() {} })),
-  }, () => now);
+    directWitness: fault === "not_enrolled" ? undefined : settings,
+  }, () => now, async (_enrollment, name, challenge) => sink = await listenDirectWitness(name, challenge));
+  const watch = () => ({ positiveSeen: async () => true, valid: () => true, close() {} });
   return {
-    observer, reads: () => reads, visits: () => visits,
-    nextOwnership() { generation++; }, close() { input.end(); output.end(); },
+    observer, watch, reads: () => reads, visits: () => visits, navigated, receipt: () => body,
+    nextOwnership() { generation++; }, close() { sink?.close(); input.end(); output.end(); },
   };
 }
 
-test("[domains C11] paired browser visits do not commit after effective policy drift or proof expiry", async () => {
-  for (const fault of ["late_policy", "expired", null] as const) {
-    const f = cdpFixture(fault);
+test("[domains C11] affirmative visits need current policy, exact browser context, fresh sink receipt and provisioned source", async () => {
+  let priorReceipt: string | null = null;
+  for (const fault of [undefined, "late_policy", "expired", "wrong_context", "late_context", "old_receipt", "wrong_sink", "not_enrolled"] as const) {
+    const f = cdpFixture(fault, priorReceipt ?? undefined);
     let accepted = 0;
     try {
-      const proof = await f.observer.prove(policy, bytes, () => { accepted++; return true; });
-      expect(f.visits()).toBe(2);
-      expect(f.reads()).toBe(2);
+      const proof = await f.observer.prove(policy, bytes, () => { accepted++; return true; }, f.watch);
       expect(accepted).toBe(fault ? 0 : 1);
-      if (fault) expect(proof).toBeNull();
-      else {
+      if (fault) {
+        expect(proof).toBeNull();
+        if (fault === "not_enrolled") expect(f.visits()).toBe(0);
+        if (fault === "late_policy" || fault === "expired") expect(f.reads()).toBe(2);
+      } else {
+        priorReceipt = f.receipt();
+        expect(priorReceipt).toMatch(/^[0-9a-f]{32}$/);
+        expect(f.visits()).toBe(2);
+        expect(f.reads()).toBe(2);
         expect(f.observer.valid(proof!)).toBe(true);
         f.nextOwnership();
         expect(f.observer.valid(proof!)).toBe(false);
@@ -70,81 +135,50 @@ test("[domains C11] paired browser visits do not commit after effective policy d
   }
 });
 
-test("[domains C8] delayed wrong-canary evidence drains ahead of the marker and prevents finalization", async () => {
-  const scope = { epoch: 1, generation: "managed" };
-  const identity = { enrollment: "fixture", ...scope };
-  const proxy = { generation: scope.generation, revision: 12, domainsDigest: "a".repeat(64) };
-  const release = Promise.withResolvers<void>();
-  const markerReached = Promise.withResolvers<void>();
-  let negative = "";
-  let markerSent = false;
-  const server = createServer((socket) => {
-    socket.once("data", (chunk) => {
-      const host = chunk.toString("ascii").match(/^CONNECT ([a-f0-9]{32}\.barrier\.pac\.invalid):443 HTTP\/1\.1\r\n\r\n$/)?.[1];
-      if (!host) return socket.destroy();
-      outbox.observe({ ...identity, ...proxy, host });
-      markerReached.resolve();
-      socket.end("HTTP/1.1 403 Forbidden\r\nContent-Length: 0\r\n\r\n");
-    });
-  });
-  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+test("[domains C8] a wrong CONNECT entering home after the browser reports navigation cannot certify a direct route", async () => {
+  const identity = { enrollment: "fixture", epoch: 1, generation: "proxy" };
+  const revision = { generation: identity.generation, revision: 12, domainsDigest: "a".repeat(64) };
+  const snapshot = parseManagedDomainSnapshot(12, policy.routes);
+  if (!snapshot.ok) throw new Error("invalid fixture snapshot");
+  let lateReceipt: boolean | undefined;
+  let resolveCount = 0;
+  const proxy = createManagedProxy({
+    resolve: async () => { resolveCount++; return []; },
+    dial: async () => { throw new Error("unexpected upstream"); },
+    log: ({ status, host }) => { if (status === 403 && host) lateReceipt = attestation.attest(identity, { ...identity, ...revision, host }); },
+  }, snapshot.snapshot);
+  const server = createServer(proxy.handle);
+  await new Promise<void>((resolve) => server.listen(0, loopback, resolve));
   const address = server.address();
   if (!address || typeof address === "string") throw new Error("fixture did not bind");
-  const forward = createForwardAttestation(identity.enrollment, address.port, () => 1);
-  const outbox = createProofOutbox(async (proof: DomainAttestation) => {
-    if (proof.host === negative) await release.promise;
-    if (proof.host.includes(".barrier.")) markerSent = true;
-    return forward.attest(identity, proof) ? { ok: true, value: null } : { ok: false, code: "receipt_mismatch" };
-  });
-  const f = cdpFixture(null, (positive, wrong) => {
-    const watched = forward.watch(positive, wrong, scope, proxy);
-    negative = wrong;
-    outbox.observe({ ...identity, ...proxy, host: positive });
-    return {
-      ...watched,
-      negativeClear() {
-        outbox.observe({ ...identity, ...proxy, host: wrong });
-        return watched.negativeClear();
-      },
-    };
-  });
+  const attestation = createForwardAttestation(identity.enrollment, address.port, () => 1);
+  const f = cdpFixture("late_connect");
   let finalized = false;
   try {
-    const proving = f.observer.prove(policy, bytes, () => (finalized = true));
-    await markerReached.promise;
-    expect(markerSent).toBe(false);
+    const proof = f.observer.prove(policy, bytes, () => (finalized = true), (positive) => {
+      const watch = attestation.watch(positive, identity, revision);
+      expect(attestation.attest(identity, { ...identity, ...revision, host: positive })).toBe(true);
+      return watch;
+    });
+    const { url, sink } = await withTimeout(f.navigated, 1500);
+    // Only now does the late forwarded request enter the actual home proxy, not the outbox.
+    const socket = createConnection({ host: loopback, port: address.port });
+    socket.setTimeout(1000, () => socket.destroy());
+    let reply = "";
+    try {
+      socket.write(`CONNECT ${url.hostname}:${url.port} HTTP/1.1\r\n\r\n`);
+      for await (const data of socket) reply += data.toString("latin1");
+    } finally { socket.destroy(); }
+    expect(reply).toStartWith("HTTP/1.1 403 Forbidden");
+    expect(lateReceipt).toBe(false);
+    expect(resolveCount).toBe(0);
     expect(finalized).toBe(false);
-    release.resolve();
-    expect(await proving).toBeNull();
-    expect(markerSent).toBe(true);
+    sink.close();
+    expect(await proof).toBeNull();
     expect(finalized).toBe(false);
   } finally {
-    release.resolve();
-    forward.fence();
     f.close();
+    attestation.fence();
     await new Promise<void>((resolve) => server.close(() => resolve()));
   }
-});
-
-test("[domains C11] a lost witness acknowledgement cannot be crossed by an otherwise valid marker", async () => {
-  let now = 0;
-  const pending = Promise.withResolvers<{ ok: false; code: "unavailable" }>();
-  const names: string[] = [];
-  const outbox = createProofOutbox((proof) => {
-    names.push(proof.host);
-    return proof.host.includes(".barrier.") ? Promise.resolve({ ok: true, value: null }) : pending.promise;
-  }, () => now);
-  const proof = { epoch: 1, enrollment: "fixture", generation: "proxy", revision: 12, domainsDigest: "a".repeat(64) };
-  const wrong = `${"1".repeat(32)}.e0.r12.pac.invalid`;
-  const marker = `${"2".repeat(32)}.barrier.pac.invalid`;
-  outbox.observe({ ...proof, host: wrong });
-  outbox.observe({ ...proof, host: wrong });
-  outbox.observe({ ...proof, host: marker });
-  pending.resolve({ ok: false, code: "unavailable" });
-  await outbox.settled();
-  expect(names).toEqual([wrong]);
-  now = 10001;
-  outbox.observe({ ...proof, host: `${"3".repeat(32)}.barrier.pac.invalid` });
-  await outbox.settled();
-  expect(names).toEqual([wrong, `${"3".repeat(32)}.barrier.pac.invalid`]);
 });

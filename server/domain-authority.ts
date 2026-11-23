@@ -13,10 +13,7 @@ type Options = Omit<PublisherOptions<object>, "identify">;
 type Target = PublisherView["lastProven"];
 export type LiveProxyRevision = ProxyPreimage;
 
-export type DomainEnrollment = Options & { chrome: EnrolledChrome } & (
-  | { forward: ForwardScope }
-  | { liveProxy(): LiveProxyRevision | null }
-);
+export type DomainEnrollment = Options & { chrome: EnrolledChrome; forward: ForwardScope };
 
 const utf8 = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true });
 const unavailable = Object.freeze({ ok: false as const, code: "not_ready" as const });
@@ -24,8 +21,8 @@ const invalid = Object.freeze({ ok: false as const, code: "invalid_request" as c
 
 export function openDomainAuthority(enrollment: DomainEnrollment, now = () => performance.now()) {
   const { chrome, policy, proxyPort } = enrollment;
-  const forward = "forward" in enrollment ? createForwardAttestation(enrollment.enrollment, proxyPort, () => chrome.ownership(), now) : undefined;
-  const bootstrap = "forward" in enrollment ? Object.freeze({ ...enrollment.forward }) : undefined;
+  const forward = createForwardAttestation(enrollment.enrollment, proxyPort, () => chrome.ownership(), now);
+  const bootstrap = Object.freeze({ ...enrollment.forward });
   let recoveryScope: ForwardScope | undefined;
   const observer = createDomainObserver(chrome, now);
   const admin = Object.freeze({});
@@ -36,7 +33,7 @@ export function openDomainAuthority(enrollment: DomainEnrollment, now = () => pe
   let publisher: ReturnType<typeof openDomainPublisher<object>> | undefined;
   let closing = false;
   const view = () => publisher?.inspect(admin);
-  const readLive = (scope: ForwardScope) => forward ? forward.current(scope) : "liveProxy" in enrollment ? enrollment.liveProxy() : null;
+  const readLive = forward.current;
   const current = (expected: Target, proxyGeneration: string) => {
     const live = readLive({ epoch: expected.policy.epoch, generation: proxyGeneration });
     return live?.generation === proxyGeneration && live.revision === expected.policy.revision && live.domainsDigest === expected.domainsDigest;
@@ -56,7 +53,7 @@ export function openDomainAuthority(enrollment: DomainEnrollment, now = () => pe
   }
   const wireInspect = (v: PublisherView, role: RoleIngress["identity"]["role"]) => {
     const scope = { epoch: v.epoch, generation: v.proxyGeneration };
-    const lifetime = ready(v) && proven ? Math.floor(Math.min(proven.evidence.expiresAt - now(), forward?.freshFor(scope) ?? 6500)) : 0;
+    const lifetime = ready(v) && proven ? Math.floor(Math.min(proven.evidence.expiresAt - now(), forward.freshFor(scope))) : 0;
     const active = lifetime > 0 ? { revision: v.lastProven.policy.revision, domains: v.lastProven.domains } : null;
     const pending = v.pending;
     return {
@@ -82,7 +79,7 @@ export function openDomainAuthority(enrollment: DomainEnrollment, now = () => pe
       const checked = view();
       const v = checked?.ok ? checked.value : undefined;
       const scope = recoveryScope ?? (v ? { epoch: v.epoch, generation: v.proxyGeneration } : bootstrap);
-      if (closing || !forward || !scope || identity.role !== "proxy" || identity.epoch !== scope.epoch ||
+      if (closing || identity.role !== "proxy" || identity.epoch !== scope.epoch ||
           identity.generation !== scope.generation || !observer.alive()) return unavailable;
       try {
         return forward.attest(identity, JSON.parse(utf8.decode(body))) ? { ok: true, value: null } :
@@ -123,16 +120,18 @@ export function openDomainAuthority(enrollment: DomainEnrollment, now = () => pe
   }
 
   function watch(scope: ForwardScope, expected: ProxyPreimage) {
-    return forward && ((positive: string, negative: string) => forward.watch(positive, negative, scope, expected));
+    return (positive: string) => forward.watch(positive, scope, expected);
   }
 
   async function provision(baseline: VerifiedPublisherBaseline): Promise<boolean> {
     if (closing || publisher) return false;
     const scope = { epoch: baseline.epoch, generation: baseline.proxyGeneration };
-    if (forward && (!bootstrap || bootstrap.epoch !== scope.epoch || bootstrap.generation !== scope.generation)) return false;
+    if (bootstrap.epoch !== scope.epoch || bootstrap.generation !== scope.generation) return false;
     const base = { generation: baseline.proxyGeneration, revision: baseline.revision, domainsDigest: hashBytes(JSON.stringify([...baseline.domains].sort())) };
-    const expected = policy.read();
-    const evidence = await observer.prove({ epoch: baseline.epoch, revision: baseline.revision, routes: baseline.domains }, expected, (proof) => {
+    const target = { epoch: baseline.epoch, revision: baseline.revision, routes: [...baseline.domains].sort() };
+    const expected = renderDomainPolicy(proxyPort, target);
+    if (policy.read() !== expected || !readLive(scope)) return false;
+    const evidence = await observer.prove(target, expected, (proof) => {
       const live = readLive(scope);
       if (closing || publisher || !observer.valid(proof) || live?.generation !== base.generation ||
           live.revision !== base.revision || live.domainsDigest !== base.domainsDigest || policy.read() !== expected) return false;
@@ -196,11 +195,11 @@ export function openDomainAuthority(enrollment: DomainEnrollment, now = () => pe
       const checked = view();
       const v = checked?.ok ? checked.value : undefined;
       const scope = recoveryScope ?? (v ? { epoch: v.epoch, generation: v.proxyGeneration } : bootstrap);
-      return !!(scope && forward && !closing && observer.alive() && await forward.refresh(scope));
+      return !!(scope && !closing && observer.alive() && await forward.refresh(scope));
     },
     prepareRecovery(scope: ForwardScope) {
       const checked = view();
-      if (closing || !forward || !checked?.ok || checked.value.editingEnabled || checked.value.pending ||
+      if (closing || !checked?.ok || checked.value.editingEnabled || checked.value.pending ||
           scope.epoch !== checked.value.epoch || !domainTag(scope.generation)) return false;
       if (recoveryScope) return recoveryScope.epoch === scope.epoch && recoveryScope.generation === scope.generation;
       recoveryScope = Object.freeze({ ...scope });
@@ -211,14 +210,14 @@ export function openDomainAuthority(enrollment: DomainEnrollment, now = () => pe
       if (result?.ok) {
         proven = undefined;
         recoveryScope = undefined;
-        forward?.fence();
+        forward.fence();
         await ingress.retireBefore(result.value);
       }
       return result;
     },
     authorizeRecovery(request: Parameters<NonNullable<typeof publisher>["authorizeRecovery"]>[1]) {
       const scope = { epoch: request.epoch, generation: request.proxyGeneration };
-      if (forward && (recoveryScope?.epoch !== scope.epoch || recoveryScope.generation !== scope.generation)) return unavailable;
+      if (recoveryScope?.epoch !== scope.epoch || recoveryScope.generation !== scope.generation) return unavailable;
       const preimage = readLive(scope);
       if (!preimage || !observer.alive()) return unavailable;
       const result = publisher?.authorizeRecovery(admin, request, preimage);
@@ -227,7 +226,7 @@ export function openDomainAuthority(enrollment: DomainEnrollment, now = () => pe
     },
     async close() {
       closing = true;
-      forward?.fence();
+      forward.fence();
       await ingress.close();
       publisher?.close();
       publisher = undefined;

@@ -5,23 +5,19 @@ export function createProofOutbox(send: (proof: DomainAttestation) => Promise<Wi
   const accepted = new Map<string, number>();
   let sending: string | undefined;
   let pending: Promise<void> | undefined;
-  let uncertainUntil = 0;
-  // Longer than any canary lease. A missing earlier receipt must not turn into clean absence.
-  const uncertain = () => { uncertainUntil = now() + 10000; };
   function drain() {
     if (pending || !queue.length) return;
     pending = (async () => {
       while (queue.length) {
         const proof = queue.shift()!;
-        if (proof.host.endsWith(".barrier.pac.invalid") && now() < uncertainUntil) continue;
         sending = proof.host;
         try {
           if ((await send(proof)).ok) {
             // Chrome may retry CONNECT with the exact same one-use witness name.
             if (accepted.size >= 16) accepted.delete(accepted.keys().next().value!);
             accepted.set(proof.host, now() + 10000);
-          } else uncertain();
-        } catch { uncertain(); }
+          }
+        } catch { /* Missing affirmative proof fails closed at the authority. */ }
         finally { sending = undefined; }
       }
     })().finally(() => { pending = undefined; drain(); });
@@ -30,15 +26,11 @@ export function createProofOutbox(send: (proof: DomainAttestation) => Promise<Wi
     observe(proof: DomainAttestation) {
       if (sending === proof.host || queue.some(({ host }) => host === proof.host) ||
           (accepted.get(proof.host) ?? 0) > now()) return;
-      if (queue.length >= 3) { uncertain(); return; }
+      if (queue.length >= 3) return;
       queue.push(proof);
       drain();
     },
-    uncertain,
-    clear() {
-      if (pending || queue.length) uncertain();
-      queue.length = 0;
-    },
+    clear() { queue.length = 0; },
     settled: () => pending,
   };
 }
