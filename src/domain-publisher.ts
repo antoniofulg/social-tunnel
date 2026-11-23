@@ -145,10 +145,14 @@ function journal<Session>(options: PublisherOptions<Session>, initial?: JournalS
   const db = new Database(path, { create: false, strict: true });
   try {
     db.run("PRAGMA busy_timeout = 500");
-    db.run("PRAGMA synchronous = FULL");
+    // In DELETE mode, EXTRA also syncs the directory after unlinking the rollback journal.
+    db.run("PRAGMA synchronous = EXTRA");
     db.run("PRAGMA trusted_schema = OFF");
     if (db.query<{ journal_mode: string }, []>("PRAGMA journal_mode").get()?.journal_mode !== "delete") {
       throw new Error("unsupported managed journal mode");
+    }
+    if (db.query<{ synchronous: number }, []>("PRAGMA synchronous").get()?.synchronous !== 3) {
+      throw new Error("managed journal requires EXTRA synchronization");
     }
     const put = (state: JournalState) => {
       const body = JSON.stringify(state);
