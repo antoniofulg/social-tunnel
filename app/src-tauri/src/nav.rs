@@ -16,7 +16,7 @@ pub fn new_window<R: Runtime>(_url: Url) -> tauri::webview::NewWindowResponse<R>
     tauri::webview::NewWindowResponse::Deny
 }
 
-/// The one Settings window, from `tauri.conf.json` (640×520, fixed, transparent over the OS
+/// The one Settings window, from `tauri.conf.json` (640×560, fixed, transparent over the OS
 /// material), with the navigation and new-window policy attached.
 /// `view` becomes the URL fragment the page reads its first view from.
 pub fn settings_window<'a, R: Runtime, M: tauri::Manager<R>>(manager: &'a M, view: &str) -> tauri::WebviewWindowBuilder<'a, R, M> {

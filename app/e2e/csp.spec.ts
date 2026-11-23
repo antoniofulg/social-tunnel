@@ -53,6 +53,16 @@ async function open(page: Page, snap: Snapshot | null, hash = "") {
 const violations = (page: Page) => page.evaluate(() => (window as unknown as { __violations: string[] }).__violations);
 const styled = (page: Page) => page.evaluate(() => document.querySelectorAll("[style]").length);
 
+test("[tray-app C55] healthy Status fits the native Settings content area without scrolling", async ({ page }) => {
+  // Use the measured 32 pt title-bar allowance from the native Settings fixture.
+  await page.setViewportSize({ width: 640, height: 528 });
+  await open(page, snapshot());
+  await expect(page.getByText("All checks OK.")).toBeVisible();
+  await expect(page.getByRole("button", { name: "Check Again" })).toBeInViewport({ ratio: 1 });
+  const overflow = await page.getByRole("tabpanel").evaluate((panel) => panel.scrollHeight - panel.clientHeight);
+  expect(overflow).toBe(0);
+});
+
 for (const scheme of ["light", "dark"] as const) {
   test.describe(`${scheme} appearance`, () => {
     test.use({ colorScheme: scheme });

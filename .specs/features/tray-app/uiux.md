@@ -5,13 +5,13 @@
 - **Approved source/frame:** `docs/design/concept-c/tray-{idle,connected,reconnecting,disconnected,blocked}.svg` and `tray-reconnecting-animated.svg` (tray marks); concept A dropdown `menuA()` in `docs/design/_src/parts.mjs` as rendered in `docs/design/concept-a/index.html` (menu rows and words); concept B `settings-domains` window in `docs/design/concept-b/index.html` (route strip over tabs); concept A arch (`ARCH` in `docs/design/_src/lib.mjs`) for the app icon; `docs/design/README.md` States, Tokens and shared decisions
 - **Revision/frozen export:** the files above at commit `4359f13`
 - **Intent:** binding implementation, with the departures below; the user chose this mix (C mark, A native menu, B route in Settings, A arch icon) on 2026-11-22
-- **Route and mapping:** tray mark per state ↔ 18×18 pt menu bar; native menu per state ↔ its OS-drawn size; Settings window ↔ 640×520 pt; Set Up view ↔ 640×520 pt
+- **Route and mapping:** tray mark per state ↔ 18×18 pt menu bar; native menu per state ↔ its OS-drawn size; Settings and Set Up share the native 640×560 pt window
 - **Captures:** builder saves under `.specs/features/tray-app/captures/` (ignored): `ref-<screen>-<state>-<theme>.png` from the concept page, `full-…` and `view-…` from the running app (`screencapture -l <window id>` for Settings, `screencapture -R` around the menu bar item and open menu)
 - **Scale/environment:** source scale 2 (concept pages captured at DPR 2); runtime macOS 27 (Darwin 27.2) WKWebView; scale 2; fixtures: in-process test server and temp configs per state, plus this Mac's live LaunchAgent tunnel for Connected; fonts: system UI and `ui-monospace`; themes light and dark
 - **Tokens:** design README Tokens table, light and dark, mapped 1:1 to CSS custom properties in `app/src/styles.css` (`--text`, `--text-2`, `--text-3`, `--window`, `--solid`, `--tile`, `--well`, `--hairline`, `--ok`, `--warn`, `--down`, `--busy`, `--skip`); accent follows the system (`AccentColor`); radii from concept A (control 6, box 8, window 11)
 - **Composition:** Settings: route strip (four stops, mark + name + word) on top, segmented tabs below, tab body, no footer; Status tab: hop list, then the failing hop's detail, fix and `Copy Fix`, then `Check Again` right-aligned
 - **Visual requirements:** 13 px controls and rows, 12 px hints, 11 px section labels, 15 px titles weight 600; monospace only for hosts, ports, fingerprints, paths and commands; 4 px spacing base, 22 px window gutter; no pointer target under 24×24 px; colour always with a glyph and a word
-- **Layout/responsive constraints:** fixed 640×520 pt window; long fix text wraps inside the Status tab and scrolls; route strip never wraps
+- **Layout/responsive constraints:** fixed 640×560 pt window; healthy Status including `Check Again` fits without scrolling; long fix text wraps inside the Status tab and scrolls; route strip never wraps
 - **Expected differences/tolerances:** listed below; native menu metrics, fonts and disabled-row dimming are the OS's
 
 | Region/property | Source requirement | Implementation difference | Necessity and authority | Preserved requirement / verification |
@@ -29,6 +29,7 @@
 | Window chrome | mock traffic lights | real macOS title bar | OS | title `social-tunnel` |
 | Setup | three-step assistant | read-only Set Up view with README steps | setup assistant out of scope | AC 68 |
 | `Check Again` placement (resolved in S3 build, coordinator decision 2026-11-22) | B places it beside the route summary | one `Check Again` at the end of the Status tab, right-aligned | Composition above; one button per C61 | AC 61 |
+| Settings height | 520 pt | 560 pt; 640 pt width unchanged | user follow-up: fit normal Status without scrolling | retain spacing, material and overflow for long fixes |
 
 ## Screens
 
@@ -54,7 +55,7 @@
 - **Story:** read every check and its full fix (S3)
 - **Entry points:** menu `Settings…` (⌘,)
 - **States:** loading (no snapshot) · all OK · failing hop (port refused) · server key changed · status unreadable · checking
-- **Viewports:** 640×520 pt, light and dark, Reduce Transparency off and on
+- **Viewports:** 640×560 pt, light and dark, Reduce Transparency off and on
 
 ### Settings - `Server`, `Domains`, `General` tabs and the Set Up view
 
@@ -62,7 +63,7 @@
 - **Story:** see where the tunnel goes and what it carries; start from nothing (S3)
 - **Entry points:** tabs; `Review Server Key…` opens Server; `Set Up…` opens the Set Up view
 - **States:** Server: populated, key changed with fix · Domains: populated · General: login on, login off · Set Up: config path shown
-- **Viewports:** 640×520 pt, light and dark
+- **Viewports:** 640×560 pt, light and dark
 
 ## Components
 

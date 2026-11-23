@@ -86,6 +86,7 @@ changes and live in `Surface` and `Landing`.
 | 13. Settings window from config (added in S3 build) | `tauri.conf.json` `app.windows[]` entry `label: "settings"`, 640×520, `resizable: false`, `transparent: true`, `windowEffects: {effects:["sidebar"], state:"followsWindowActiveState"}`, `create: false`; Rust builds it with `WebviewWindowBuilder::from_config` plus the navigation and new-window policy; the view travels as the URL fragment on create and as event `settings-view` when focused | Builder-only window in Rust: the vibrancy and size would live where C71's config check cannot read them. View as an IPC command: a fifth command beside door 5's four |
 | 14. Login item label and test backend (added in S4 build) | `tauri_plugin_autostart::Builder::new().app_name("tech.antoniofulg.social-tunnel.tray").macos_launcher(LaunchAgent)`: plist `~/Library/LaunchAgents/tech.antoniofulg.social-tunnel.tray.plist`, `Label` the same; dev dependencies `auto-launch` 0.6 (the plugin's backend) and `sha2` for the C79 test; `LSUIElement` from `app/src-tauri/Info.plist` merged by `tauri build` | Default app name `social-tunnel` (productName): a label one rename away from the user's `tech.antoniofulg.social-tunnel`, and changing it later orphans the login item |
 | 15. Explicit macOS login program (S4 remediation) | Use the pinned `auto-launch` LaunchAgent backend directly on macOS and pass it the same validated canonical installed executable used for the enable decision. The tray label and isolated test policy in Landing 14 remain unchanged. | The Tauri wrapper's cached path is private and can disagree with a path resolved at toggle time after a launcher alias changes. |
+| 16. Settings default height (user follow-up) | Keep width 640 pt and raise the fixed height from 520 to 560 pt so healthy Status fits without scrolling; retain overflow for longer content. | Removing scroll or shrinking rows would hide longer diagnostics or reduce readability. |
 
 - Nothing else in this change is hard to reverse
 
@@ -186,7 +187,7 @@ tabs, all read-only except Open at login.
 
 **Acceptance Criteria**
 
-55. WHEN the user chooses Settings… THEN the app SHALL show one Settings window of 640×520 pt on the Status tab, focusing it when already open, never a second window
+55. WHEN the user chooses Settings… THEN the app SHALL show one Settings window of 640×560 pt on the Status tab, focusing it when already open, never a second window; healthy Status with the standard seven check rows and `Check Again` SHALL fit without scrolling
 56. WHEN the user closes the Settings window THEN the app SHALL keep running with its tray icon
 57. The Settings window SHALL show the route strip `This Mac`, `Server`, `Tunnel port`, `Domains` above the tabs `Status`, `Server`, `Domains`, `General`, in that order
 58. WHEN a tab has focus and the user presses Left or Right Arrow THEN the Settings window SHALL move focus and selection to the previous or next tab, wrapping at the ends
@@ -274,7 +275,7 @@ toggle Open at Login twice, quit, and compare the LaunchAgent pid and plist hash
 | When Reconnecting turns Disconnected (design open question 4) | after 60 s of downtime | The backoff tries at 1, 2, 4, 8 and 16 s (31 s) and then waits 30 s, so 60 s is about five failed tries | y - user delegated |
 | How long a doctor result stays current | until status `state`, `reason` or exit changes, at most 10 minutes; lock-down alarms re-check every 10 minutes | A result from before a status change describes another situation; 10 minutes bounds both a stale alarm and doctor's SSH probes | y - user delegated |
 | Settings accent colour | system accent colour (concept A) | Native menu and macOS controls already follow it; design open question 9 | y - user delegated |
-| Settings window size | 640×520 pt, not resizable | Fits the route strip and the longest fix text (lock-down, about 500 characters) wrapped | y - user delegated |
+| Settings window size | 640×560 pt, not resizable | Fits the standard healthy Status view without scrolling; long fixes still wrap and scroll | y - user approved |
 | Settings copy for the Check button | `Check Again` (concept B) in Settings; `Run Check` in the menu (decided) | Keeps both sources' words where they appear | y - user delegated |
 | Child stderr | read and discarded; the app keeps no log in v0.2 | `Logs` is out of scope; nothing new to redact (invariant 5) | y - user delegated |
 
@@ -332,3 +333,4 @@ toggle Open at Login twice, quit, and compare the LaunchAgent pid and plist hash
 - S2/S3 build additions (2026-11-22): Landing 12-13 and the `settings-view` / `Snapshot.checking` Surface rows added during build under the user's standing delegation; `Check Again` placement resolved by the coordinator (one button, end of the Status tab); the user did not read them
 - S4 build amendments (2026-11-22): Landing 14 added; checks.md `## Amendments` records that C55/C56 run against a fake window object (the mock runtime SIGSEGVs on macOS off the main thread) with C56's real close confirmed in the S4 on-screen smoke, and that C78's smoke step and C79 drive the real LaunchAgent backend under a temporary HOME because the coordinator's brief forbids switching Open at Login on for this Mac. Approved under the user's standing delegation of 2026-11-22; the user did not read them
 - User-approved S4 changes: “APprove both” in the OMP coordinator chat approved (1) replacing the macOS autostart wrapper with its same LaunchAgent backend using an explicit installed program, and (2) native tray/Settings proof using an isolated local fixture. This supersedes the wrapper requirement in AC 78 on macOS, not the label, installed path, read-back or plist isolation requirements. Isolated proof is not the original live LaunchAgent smoke under AC 82. No live Open at Login toggle, second tunnel, VPS interaction or changes to the existing tunnel are authorized.
+- User-approved Settings follow-up: increase the default height just enough for the normal Status view to fit without scrolling. Keep other layout, translucent material, and diagnostic overflow unchanged; no separate pacing fix requested.
