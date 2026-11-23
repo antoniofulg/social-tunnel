@@ -9,6 +9,7 @@ import { startTunnel, type Tunnel } from "../src/tunnel";
 import { until } from "./helpers";
 import { harness, OK, pair, PUBLIC } from "./proxy-harness";
 import { setup } from "./ssh-server";
+import "./managed-domain-publisher-cases";
 
 const OK_HEAD = `${OK}\r\n\r\n`;
 const FORBIDDEN = "HTTP/1.1 403 Forbidden";
