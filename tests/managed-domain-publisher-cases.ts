@@ -10,7 +10,7 @@ import {
   DOMAIN_POLICY_FILE, fileDomainPolicySink, hashBytes, renderDomainPolicy, type DomainPolicySink,
 } from "../src/domain-policy";
 import {
-  openDomainPublisher, provisionDomainPublisher,
+  idleWindowDigest, openDomainPublisher, provisionDomainPublisher,
   type IdleReservationScope, type PublisherOperation, type PublisherOptions, type PublisherPrincipal, type PublisherResult, type ProxyPublicationReceipt,
 } from "../src/domain-publisher";
 import { tmp } from "./helpers";
@@ -126,6 +126,8 @@ test("[domains C9] a guarded publisher grants, publishes and finalizes only unde
     enrollment: ENROLLMENT, epoch: EPOCH, operationId: edit.operationId, revision: INIT + 1,
     domainsDigest: edit.target.domainsDigest, policyPreimageDigest: hashBytes(f.initial),
   };
+  const binding = { id: "exact-lease", operationDigest: idleWindowDigest(scope) };
+  expect(p.inspectCompletedIdleWindow(f.admin, binding)).toEqual(err("not_ready"));
   held = { id: "wrong-operation-lease", scope: { ...scope, operationId: id(9) } };
   expect(p.beginActivation(f.proxy, edit.operationId)).toEqual(err("not_ready"));
   held = { id: "old-pac-lease", scope: { ...scope, policyPreimageDigest: "0".repeat(64) } };
@@ -150,26 +152,45 @@ test("[domains C9] a guarded publisher grants, publishes and finalizes only unde
   };
   const observer = f.session({ role: "observer", epoch: EPOCH, generation: observed.browserGeneration });
   held = undefined;
+  expect(p.inspectCompletedIdleWindow(f.admin, binding)).toEqual(err("not_ready"));
   expect(p.finalize(observer, observed)).toEqual(err("not_ready"));
   expect(value(p.inspect(f.admin)).lastProven.policy.revision).toBe(INIT);
   held = { scope, id: "exact-lease" };
   expect(value(p.finalize(observer, observed)).domains).toEqual(["wikipedia.org", "wipo.int"]);
+  const applied = f.sink.read();
+  p.close();
+  p = f.open();
+  expect(p.inspectCompletedIdleWindow(f.editor, binding)).toEqual(err("unauthorized"));
+  expect(p.inspectCompletedIdleWindow(f.admin, { ...binding, id: "different-lease" })).toEqual(err("not_ready"));
+  expect(p.inspectCompletedIdleWindow(f.admin, { ...binding, operationDigest: hashBytes(applied) })).toEqual(err("not_ready"));
+  expect(p.inspectCompletedIdleWindow(f.admin, binding)).toEqual({ ok: true, value: null });
+  writeFileSync(f.policyPath, f.initial);
+  expect(p.inspectCompletedIdleWindow(f.admin, binding)).toEqual(err("not_ready"));
+  writeFileSync(f.policyPath, applied);
+  const next = value(p.propose(f.editor, "remove", wire("wipo.int", id(2, EPOCH, INIT + 1), INIT + 1)));
+  held = { id: binding.id, scope: { ...scope, operationId: next.operationId, revision: INIT + 2,
+    domainsDigest: next.target.domainsDigest, policyPreimageDigest: hashBytes(applied) } };
+  expect(p.beginActivation(f.proxy, next.operationId)).toEqual(err("not_ready"));
+  held = { ...held, id: "next-lease" };
+  value(p.beginActivation(f.proxy, next.operationId));
+  expect(p.inspectCompletedIdleWindow(f.admin, binding)).toEqual(err("not_ready"));
 });
 
-test("[domains C10] the guarded recovery journal rejects a pre-origin format without writing", () => {
-  const f = fixture(["wikipedia.org"], () => "held");
-  const db = new Database(join(f.journalDir, "domains.sqlite"));
-  try {
-    const old = JSON.parse(db.query<{ body: string }, []>("SELECT body FROM control WHERE id = 1").get()!.body);
-    old.version = 2; // The unpublished format did not bind recovery to the original hold.
-    const body = JSON.stringify(old);
-    db.query("UPDATE control SET body = ?, digest = ? WHERE id = 1").run(body, hashBytes(body));
-  } finally { db.close(); }
-  const before = f.bytes();
-  expect(() => f.open()).toThrow("wrong journal binding");
-  expect(f.bytes()).toEqual(before);
-  expect(f.sink.read()).toBe(f.initial);
-});
+for (const version of [2, 3]) {
+  test(`[domains C10] the guarded journal rejects unpublished format ${version} without writing`, () => {
+    const f = fixture(["wikipedia.org"], () => "held");
+    const db = new Database(join(f.journalDir, "domains.sqlite"));
+    try {
+      const old = JSON.parse(db.query<{ body: string }, []>("SELECT body FROM control WHERE id = 1").get()!.body);
+      const body = JSON.stringify({ ...old, version });
+      db.query("UPDATE control SET body = ?, digest = ? WHERE id = 1").run(body, hashBytes(body));
+    } finally { db.close(); }
+    const before = f.bytes();
+    expect(() => f.open()).toThrow("wrong journal binding");
+    expect(f.bytes()).toEqual(before);
+    expect(f.sink.read()).toBe(f.initial);
+  });
+}
 
 test("[domains C4] publisher rejects noncanonical or stale proposals and admits one durable winning projection", async () => {
   const f = fixture();
@@ -484,10 +505,12 @@ test("[domains C10] repeated Disable and reopen keep the original idle hold boun
   const edit = value(p.propose(f.editor, "remove", wire("wikipedia.org")));
   expected = { enrollment: ENROLLMENT, epoch: EPOCH, operationId: edit.operationId, revision: INIT + 1,
     domainsDigest: edit.target.domainsDigest, policyPreimageDigest: hashBytes(f.initial) };
+  const original = { id: "original-hold", operationDigest: idleWindowDigest(expected) };
   value(p.beginActivation(f.proxy, edit.operationId));
   value(p.publish(f.proxy, receipt(edit)));
   const preimage = f.sink.read();
   let epoch = value(p.disable(f.admin, EPOCH));
+  expect(p.inspectCompletedIdleWindow(f.admin, original)).toEqual(err("not_ready"));
   p.close();
   p = f.open();
   function claim(n: number) {
@@ -499,7 +522,7 @@ test("[domains C10] repeated Disable and reopen keep the original idle hold boun
       enrollment: ENROLLMENT, epoch, operationId: operation.operationId, revision: operation.target.policy.revision,
       domainsDigest: operation.target.domainsDigest, policyPreimageDigest: hashBytes(preimage),
     };
-    return { operation, proxy: f.session({ role: "proxy", epoch, generation: proxyGeneration }) };
+    return { operation, scope: recoveryScope, proxy: f.session({ role: "proxy", epoch, generation: proxyGeneration }) };
   }
   const first = claim(2);
   value(p.beginActivation(first.proxy, first.operation.operationId));
@@ -521,6 +544,11 @@ test("[domains C10] repeated Disable and reopen keep the original idle hold boun
   };
   const observer = f.session({ role: "observer", epoch, generation: proof.browserGeneration });
   value(p.finalize(observer, proof));
+  p.close();
+  p = f.open();
+  expect(p.inspectCompletedIdleWindow(f.admin, original)).toEqual({ ok: true, value: null });
+  expect(p.inspectCompletedIdleWindow(f.admin, { ...original, operationDigest: idleWindowDigest(latest.scope) }))
+    .toEqual(err("not_ready"));
   expect(value(p.inspect(f.admin))).toMatchObject({ recovery: null, pending: null, editingEnabled: true });
 });
 

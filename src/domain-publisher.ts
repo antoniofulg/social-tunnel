@@ -28,6 +28,12 @@ export interface IdleReservationScope {
 }
 
 type IdleReservationOrigin = Readonly<{ id: string; scope: Readonly<IdleReservationScope> }>;
+type IdleWindowBinding = Readonly<{ id: string; operationDigest: string }>;
+
+export function idleWindowDigest(scope: Readonly<IdleReservationScope>): string {
+  const { enrollment, epoch, operationId, revision, domainsDigest, policyPreimageDigest } = scope;
+  return hashBytes(JSON.stringify(["domains-idle-window-v1", enrollment, epoch, operationId, revision, domainsDigest, policyPreimageDigest]));
+}
 
 export interface PublisherOptions<Session> {
   journalDir: string;
@@ -98,7 +104,7 @@ type Archived = { operationId: string; revision: number; disposition: "cancelled
 type Recovery = { operationId: string; ceiling: readonly string[]; retainRoutes: readonly string[] };
 
 type JournalState = {
-  version: 1 | 3;
+  version: 1 | 4;
   enrollment: string;
   proxyPort: number;
   epoch: number;
@@ -111,6 +117,7 @@ type JournalState = {
   syncInterruptedRecovery?: true;
   idleReservation?: { id: string; policyPreimageDigest: string };
   idleRecoveryOrigin?: IdleReservationOrigin;
+  completedIdleWindow?: IdleWindowBinding & { policyDigest: string };
   pending: PublisherOperation | null;
   recovery: Recovery | null;
   history: Archived[];
@@ -166,7 +173,7 @@ function target(epoch: number, domains: ManagedDomainSnapshot, routes = domains.
 function journal<Session>(options: PublisherOptions<Session>, initial?: JournalState) {
   const { journalDir, enrollment, proxyPort } = options;
   if (!tag(enrollment) || !Number.isInteger(proxyPort) || proxyPort < 1 || proxyPort > 65535) throw new Error("invalid publisher enrollment");
-  const version = options.currentIdleReservation === undefined ? 1 : 3;
+  const version = options.currentIdleReservation === undefined ? 1 : 4;
   const dir = protectedDirectory(journalDir, true);
   const path = join(journalDir, JOURNAL);
   if (initial) closeSync(openSync(path, constants.O_CREAT | constants.O_EXCL | constants.O_WRONLY | constants.O_NOFOLLOW, 0o600));
@@ -245,7 +252,7 @@ export function provisionDomainPublisher<Session>(options: PublisherOptions<Sess
   const lastProven = target(baseline.epoch, domains);
   if (options.policy.read() !== renderDomainPolicy(options.proxyPort, lastProven.policy)) throw new Error("publisher baseline policy differs");
   journal(options, {
-    version: options.currentIdleReservation === undefined ? 1 : 3,
+    version: options.currentIdleReservation === undefined ? 1 : 4,
     enrollment: options.enrollment, proxyPort: options.proxyPort, epoch: baseline.epoch,
     proxyGeneration: baseline.proxyGeneration, editingEnabled: true, allocatedRevision: domains.revision,
     lastProven, recordedPolicy: lastProven.policy, possiblyWritten: null, pending: null, recovery: null, history: [],
@@ -301,6 +308,23 @@ export function openDomainPublisher<Session>(options: PublisherOptions<Session>)
       if (denied) return denied;
       const image = policyImage(state, policy.read());
       return image ? ok(image) : fail("not_ready");
+    });
+  }
+
+  function inspectCompletedIdleWindow(session: Session, binding: unknown): PublisherResult<null> {
+    return store.transact((state) => {
+      const denied = authorize(state, session, "local_admin");
+      if (denied) return denied;
+      if (!exact(binding, 2)) return fail("invalid_request");
+      const { id, operationDigest } = binding;
+      if (!tag(id) || typeof operationDigest !== "string" || operationDigest.length !== 64 ||
+          /[^0-9a-f]/.test(operationDigest)) return fail("invalid_request");
+      const completed = state.completedIdleWindow;
+      if (state.version === 1 || state.recovery || (state.pending && state.pending.phase !== "claimed") ||
+          completed?.id !== id || completed.operationDigest !== operationDigest) return fail("not_ready");
+      const bytes = policy.read();
+      return completed.policyDigest === hashBytes(bytes) && policyImage(state, bytes) === "recorded"
+        ? ok(null) : fail("not_ready");
     });
   }
 
@@ -399,7 +423,7 @@ export function openDomainPublisher<Session>(options: PublisherOptions<Session>)
       if (state.version !== 1) {
         const policyPreimageDigest = hashBytes(expected);
         const reservation = reservationId(state, operation, policyPreimageDigest);
-        if (!tag(reservation)) return fail("not_ready");
+        if (!tag(reservation) || reservation === state.completedIdleWindow?.id) return fail("not_ready");
         state.idleReservation = { id: reservation, policyPreimageDigest };
       }
       if (sync) {
@@ -412,6 +436,7 @@ export function openDomainPublisher<Session>(options: PublisherOptions<Session>)
       }
       if (recovery) state.possiblyWritten = null;
       operation.phase = "activating";
+      delete state.completedIdleWindow;
       save();
       return ok(operation);
     });
@@ -486,6 +511,16 @@ export function openDomainPublisher<Session>(options: PublisherOptions<Session>)
       const expected = rendered(pending.target.policy);
       if (hashBytes(expected) !== proof.policyDigest || policy.read() !== expected) return fail("not_ready");
       if (!holdsReservation(state, pending)) return fail("not_ready");
+      if (state.version !== 1) {
+        const held = state.idleReservation;
+        if (!held) return fail("not_ready");
+        const origin = state.idleRecoveryOrigin;
+        state.completedIdleWindow = {
+          id: held.id,
+          operationDigest: idleWindowDigest(origin?.scope ?? reservationScope(state, pending, held.policyPreimageDigest)),
+          policyDigest: proof.policyDigest,
+        };
+      }
       if (pending.intent.kind === "recovery") {
         const recovery = state.recovery;
         if (recovery) {
@@ -589,5 +624,6 @@ export function openDomainPublisher<Session>(options: PublisherOptions<Session>)
     });
   }
 
-  return { inspect, inspectPolicy, propose, reconcile, beginActivation, publish, finalize, disable, authorizeRecovery, close: store.close };
+  return { inspect, inspectPolicy, inspectCompletedIdleWindow, propose, reconcile, beginActivation, publish, finalize, disable,
+    authorizeRecovery, close: store.close };
 }

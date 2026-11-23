@@ -202,6 +202,8 @@ export function openDomainAuthority(enrollment: DomainEnrollment, now = () => pe
   return {
     open, provision, observe, inspectLocal: view,
     inspectPolicyLocal: () => publisher?.inspectPolicy(admin),
+    inspectCompletedIdleWindowLocal: (binding: unknown) => !closing && publisher
+      ? publisher.inspectCompletedIdleWindow(admin, binding) : unavailable,
     admittedCount: ingress.admittedCount,
     bind(role: RoleIngress) {
       const checked = view();
