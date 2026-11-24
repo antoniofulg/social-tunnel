@@ -77,12 +77,17 @@ function account(raw: unknown): Account {
 
 function invoke(program: string, args: string[], maxBuffer = 16384) {
   const result = spawnSync(program, args, { env: SSH_ENV, timeout: 3000, maxBuffer, encoding: "utf8" });
-  if (result.status !== 0) throw new Error(`protected check failed: ${program}`);
+  if (result.status !== 0) {
+    const cause = result.error?.message ?? (result.stderr.trim().split("\n").at(-1) || `status ${result.status ?? result.signal}`);
+    throw new Error(`protected check failed: ${program}: ${cause.replace(/[^ -~]/g, "?").slice(0, 160)}`);
+  }
   return result.stdout.trimEnd();
 }
 
+export const readManifestText = () => UTF8.decode(protectedFile(`${ROOT}/enrollment.json`, 49152, true));
+
 export function loadManifest() {
-  const o = exact(JSON.parse(UTF8.decode(protectedFile(`${ROOT}/enrollment.json`, 49152, true))),
+  const o = exact(JSON.parse(readManifestText()),
     "version enrollment proxyPort sshPort chromeSha256 sshdSha256 profile witness forward probe epochs baseline");
   if (!o || o.version !== 1 || !domainTag(o.enrollment) || !portInRange(o.proxyPort) || !portInRange(o.sshPort) ||
       o.sshPort === o.proxyPort || !domainDigest(o.chromeSha256) || !domainDigest(o.sshdSha256) ||
@@ -163,10 +168,12 @@ export function inspectBindHooks(m: Manifest, forwardCgroup: string, ipv4Tag: st
     if (!/^[0-9a-f]{16}$/.test(tag)) throw new Error("expected reviewed BPF tag");
     const matching = records.filter((row) => row?.attach_type === family || row?.attach_type === `cgroup_${family}`);
     const attach = matching[0];
-    // Root, non-overridable attachment. No descendant can replace this hook.
+    // Root attachment. In multi mode every descendant program also runs and any deny wins, so a slice
+    // with its own bind policy cannot escape the guard; with no flag, such a slice replaces it.
     if (matching.length !== 1 || !attach || !domainUInt(attach.id) || attach.id === 0 ||
-        !(attach.attach_flags === "" || Array.isArray(attach.attach_flags) && attach.attach_flags.length === 0)) {
-      throw new Error(`missing non-overridable ${family} attachment at cgroup root`);
+        !(attach.attach_flags === "" || attach.attach_flags === "multi" || Array.isArray(attach.attach_flags) &&
+          (attach.attach_flags.length === 0 || attach.attach_flags.length === 1 && attach.attach_flags[0] === "multi"))) {
+      throw new Error(`missing root ${family} attachment`);
     }
     const info = JSON.parse(invoke(tool, ["-j", "prog", "show", "id", String(attach.id)]));
     const record = wireObject(Array.isArray(info) && info.length === 1 ? info[0] : info);
@@ -264,19 +271,31 @@ function stamp(file: string) {
   return `${s.dev}:${s.ino}:${s.ctimeNs}`;
 }
 
-function pinExecutable(file: string, expected: string) {
-  executable(file);
-  const identity = stamp(file);
+function sha256File(file: string) {
   const hash = createHash("sha256");
   const fd = openSync(file, constants.O_RDONLY | constants.O_NOFOLLOW);
   try {
     const buf = Buffer.allocUnsafe(128 * 1024);
     for (let n; (n = readSync(fd, buf, 0, buf.length, null)) > 0;) hash.update(buf.subarray(0, n));
   } finally { closeSync(fd); }
+  return hash.digest("hex");
+}
+
+// Root-local repin after a vetted package update; both executables must still be root-owned.
+export function installedPins() {
+  executable(CHROME);
+  executable(SSHD);
+  return { chromeSha256: sha256File(CHROME), sshdSha256: sha256File(SSHD) };
+}
+
+function pinExecutable(file: string, expected: string) {
+  executable(file);
+  const identity = stamp(file);
+  const actual = sha256File(file);
   const check = () => {
     if (stamp(file) !== identity) throw new Error("pinned executable changed");
   };
-  if (hash.digest("hex") !== expected) throw new Error("pinned executable differs");
+  if (actual !== expected) throw new Error("pinned executable differs");
   check();
   return check;
 }

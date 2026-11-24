@@ -1,0 +1,13 @@
+[Unit]
+Description=Provision the social-tunnel bind guard and start the protected services
+After=network-online.target
+Wants=network-online.target
+Before=social-tunnel-domains-sshd.service social-tunnel-domains.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/st-domains-reprovision
+TimeoutStartSec=90
+
+[Install]
+WantedBy=multi-user.target

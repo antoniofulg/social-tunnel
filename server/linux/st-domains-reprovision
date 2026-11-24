@@ -1,0 +1,69 @@
+#!/bin/bash
+# Root-only. Recreates the per-boot bind guard and attestation, re-pins Chrome/OpenSSH after a
+# package update, and starts the protected services. Fails closed: on error the services stay down.
+#   st-domains-reprovision            boot or manual run
+#   st-domains-reprovision --if-changed   apt hook: act only when Chrome or OpenSSH changed
+set -euo pipefail
+export LC_ALL=C PATH=/usr/sbin:/usr/bin:/sbin:/bin
+umask 077
+U=social-tunnel-domains-sshd.service
+A=social-tunnel-domains.service
+CG=/sys/fs/cgroup
+LEAF=/system.slice/$U
+PIN=/sys/fs/bpf/st-domains
+SUP=/usr/local/bin/st-domains-supervisor
+TEMPLATE=/usr/local/lib/social-tunnel-domains/guard-template.o
+SENTINEL=2125274799 # 0x7ead1eaf, the cgroup literal compiled into the template
+WORK=/run/social-tunnel-domains-provision
+[[ $EUID == 0 && $(stat -fc %T "$CG") == cgroup2fs ]]
+
+if [[ ${1:-} == --if-changed ]]; then
+  manifest=$(python3 -c 'import json; m=json.load(open("/etc/social-tunnel-domains/enrollment.json")); print(m["chromeSha256"], m["sshdSha256"])')
+  current="$(sha256sum /opt/google/chrome/chrome | cut -d' ' -f1) $(sha256sum /usr/sbin/sshd | cut -d' ' -f1)"
+  [[ $manifest == "$current" ]] && exit 0
+  echo "social-tunnel-domains: Chrome or OpenSSH changed; re-provisioning" >&2
+fi
+
+systemctl stop "$A" "$U"
+for family in 4 6; do
+  for id in $(bpftool -j cgroup show "$CG" | python3 -c "import json,sys; print(' '.join(str(r['id']) for r in json.load(sys.stdin) if r['attach_type'] in ('cgroup_inet${family}_bind','inet${family}_bind') and r.get('name')=='st_bind${family}'))"); do
+    bpftool cgroup detach "$CG" "bind$family" id "$id"
+  done
+done
+rm -rf "$PIN" "$WORK"
+mkdir -m700 "$WORK"
+[[ -d $CG$LEAF ]] || mkdir "$CG$LEAF"
+test -z "$(cat "$CG$LEAF/cgroup.procs")"
+leaf=$(stat -c %i "$CG$LEAF")
+(( leaf > 0 && leaf < 2147483648 ))
+python3 - "$TEMPLATE" "$WORK/guard.o" "$SENTINEL" "$leaf" <<'PY'
+import struct, sys
+data = open(sys.argv[1], 'rb').read()
+old, new = struct.pack('<i', int(sys.argv[3])), struct.pack('<i', int(sys.argv[4]))
+assert data.count(old) == 1, 'template must contain the cgroup literal exactly once'
+open(sys.argv[2], 'wb').write(data.replace(old, new))
+PY
+mkdir -m700 "$PIN"
+bpftool prog loadall "$WORK/guard.o" "$PIN"
+read -r port uid < <(python3 -c 'import json; m=json.load(open("/etc/social-tunnel-domains/enrollment.json")); print(m["proxyPort"], m["forward"]["uid"])')
+net_port=$(printf '0x%x' $(( ((port & 0xff) << 8) | (port >> 8) )))
+x4=$(bpftool prog dump xlated pinned "$PIN/st_bind4")
+x6=$(bpftool prog dump xlated pinned "$PIN/st_bind6")
+for want in "!= 0x6 goto" "!= $net_port goto" "!= 0x100007f goto" "!= $(printf '0x%x' "$uid") goto" "if r1 == $(printf '0x%x' "$leaf") goto"; do
+  grep -qF -- "$want" <<<"$x4" || { echo "unexpected st_bind4 literal: $want" >&2; exit 1; }
+done
+for want in "!= 0x6 goto" "!= $net_port goto"; do grep -qF -- "$want" <<<"$x6" || { echo "unexpected st_bind6" >&2; exit 1; }; done
+tag() { bpftool -j prog show pinned "$PIN/$1" | python3 -c 'import json,sys; r=json.load(sys.stdin); r=r[0] if isinstance(r,list) else r; assert not r.get("map_ids"); print(r["tag"])'; }
+t4=$(tag st_bind4); t6=$(tag st_bind6)
+# multi: descendant bind programs (agent slices) cannot replace the guard; every deny still applies.
+bpftool cgroup attach "$CG" bind4 pinned "$PIN/st_bind4" multi
+bpftool cgroup attach "$CG" bind6 pinned "$PIN/st_bind6" multi
+"$SUP" repin
+"$SUP" attest-bind "$LEAF" "$t4" "$t6"
+systemctl start "$A"
+for _ in $(seq 1 150); do
+  [[ -S /run/social-tunnel-domains/admin/control.sock && -f /run/social-tunnel-domains/sshd/launch.json ]] && break
+  sleep .2
+done
+systemctl is-active --quiet "$U" && systemctl is-active --quiet "$A"
+echo "social-tunnel-domains: provisioned leaf $leaf"

@@ -5,8 +5,6 @@ BindsTo=social-tunnel-domains-sshd.service
 
 [Service]
 Type=simple
-User=root
-Group=root
 UMask=0077
 ExecStart=/usr/local/bin/st-domains-supervisor serve
 NoNewPrivileges=yes

@@ -9,7 +9,8 @@ import { setTimeout as sleep } from "node:timers/promises";
 import { openDomainAuthority } from "./domain-authority";
 import { DIRECT_WITNESS_MAPPING } from "./domain-direct-witness";
 import { ADMIN_SOCKET, CHROME, JOURNAL, POLICY, PROFILE, ROOT, SETPRIV, SSH_LAUNCH, SSH_RUN, SSH_SNAPSHOT, STAGING,
-  dropped, exact, guardedPlatform, guardedSshd, inspectBindHooks, inspectLegacyPolicy, loadManifest, policyScope, proc, readSshConfig, roleDirectory,
+  dropped, exact, guardedPlatform, guardedSshd, inspectBindHooks, inspectLegacyPolicy, installedPins, loadManifest, policyScope, proc,
+  readManifestText, readSshConfig, roleDirectory,
   type Epoch, type Manifest } from "./domain-linux-platform";
 import { DOMAIN_POLICY_FILE, fileDomainPolicySink, hashBytes, protectedDirectory, renderDomainPolicy, syncDirectory } from "../src/domain-policy";
 import { domainUInt, operationIdFormat } from "../src/domain-wire";
@@ -118,6 +119,26 @@ function stage(m: Manifest) {
       syncDirectory(POLICY);
     } finally { rmSync(temp, { force: true }); syncDirectory(STAGING); }
     lifecycle(m).write("staged", true);
+  } finally { unlock(); }
+}
+
+// Root-local, services stopped: re-pin Chrome and OpenSSH after a package update. Identities stay bound.
+function repin() {
+  const unlock = locked();
+  try {
+    const before = loadManifest();
+    const pins = installedPins();
+    if (pins.chromeSha256 === before.chromeSha256 && pins.sshdSha256 === before.sshdSha256) return console.log("pins unchanged");
+    const stage = lstatSync(MARKER, { throwIfNoEntry: false }) ? lifecycle(before).read() : null;
+    const manifest = `${ROOT}/enrollment.json`;
+    const temp = `${ROOT}/.enrollment-${randomBytes(16).toString("hex")}`;
+    try {
+      createSynced(temp, JSON.stringify({ ...JSON.parse(readManifestText()), ...pins }), 0o600);
+      renameSync(temp, manifest);
+      syncDirectory(ROOT);
+    } finally { rmSync(temp, { force: true }); }
+    if (stage) lifecycle(loadManifest()).write(stage);
+    console.log("pins updated");
   } finally { unlock(); }
 }
 
@@ -531,6 +552,8 @@ if (import.meta.main) {
         const m = loadManifest();
         const platform = guardedPlatform(m, op === "stage");
         if (op === "stage") stage(m); else await serve(m, platform);
+      } else if (op === "repin" && !arg) {
+        repin();
       } else if ((op === "status" || op === "bootstrap") && !arg) await sendAdmin({ op });
       else if ((op === "disable" || op === "prepare") && arg && /^\d{1,16}$/.test(arg) && domainUInt(Number(arg))) await sendAdmin({ op, epoch: Number(arg) });
       else if ((op === "recover" || op === "legacy-preflight" || op === "idle-cancel-unstarted") && !arg) {
@@ -554,7 +577,7 @@ if (import.meta.main) {
           if (!req) throw new Error("invalid recovery request");
           await sendAdmin({ ...req, op });
         }
-      } else throw new Error("use legacy-preflight (domain array stdin), attest-bind <cgroup> <ipv4-tag> <ipv6-tag>, stage, serve, serve-sshd, status, bootstrap, disable <epoch>, prepare <epoch>, recover (JSON stdin), or idle-cancel-unstarted (JSON stdin)");
+      } else throw new Error("use legacy-preflight (domain array stdin), attest-bind <cgroup> <ipv4-tag> <ipv6-tag>, stage, repin, serve, serve-sshd, status, bootstrap, disable <epoch>, prepare <epoch>, recover (JSON stdin), or idle-cancel-unstarted (JSON stdin)");
     }
   } catch (e) { console.error(e instanceof Error ? e.message : "managed supervisor unavailable"); process.exitCode = 1; }
 }
