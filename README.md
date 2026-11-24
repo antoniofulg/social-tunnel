@@ -83,7 +83,7 @@ The full threat model is in [docs/security/threat-model.md](docs/security/threat
 
 ### Home computer (macOS)
 
-Download `Social-Tunnel-macos-arm64.zip` from [Releases](https://github.com/antoniofulg/social-tunnel/releases), unzip it, and move **Social Tunnel.app** to `~/Applications`. The build is not signed: on first launch, right-click the app and choose **Open**. Turn on **Open at Login** in the menu bar menu.
+Download the `Social-Tunnel-<version>-macos-arm64.zip` from the [latest release](https://github.com/antoniofulg/social-tunnel/releases/latest), unzip it, and move **Social Tunnel.app** to `~/Applications`. The build is not signed: on first launch, right-click the app and choose **Open**. Turn on **Open at Login** in the menu bar menu.
 
 From source, with [Bun](https://bun.sh) 1.4 or newer (macOS or Linux):
 
