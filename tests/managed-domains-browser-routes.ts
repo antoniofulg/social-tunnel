@@ -7,11 +7,13 @@ import { join } from "node:path";
 import type { Readable, Writable } from "node:stream";
 import { withTimeout } from "../src/proxy";
 
-export async function fixtureOrigins(root: string, changed: string, retained: string) {
+export async function fixtureOrigins(root: string, changed: string, retained: string, ...additional: string[]) {
+  const hosts = new Set([changed, retained, ...additional]);
   const certFile = join(root, "tls-cert.pem");
   const keyFile = join(root, "tls-key.pem");
   const openssl = spawnSync("/usr/bin/openssl", ["req", "-x509", "-newkey", "ec", "-pkeyopt", "ec_paramgen_curve:P-256",
-    "-nodes", "-subj", "/CN=managed-domains-fixture", "-days", "1", "-addext", `subjectAltName=DNS:${changed},DNS:${retained}`,
+    "-nodes", "-subj", "/CN=managed-domains-fixture", "-days", "1", "-addext",
+    `subjectAltName=${[...hosts].map(host => `DNS:${host}`).join(",")}`,
     "-keyout", keyFile, "-out", certFile], { timeout: 5000 });
   assert.equal(openssl.status, 0, openssl.stderr?.toString());
   const cert = readFileSync(certFile);
@@ -21,7 +23,7 @@ export async function fixtureOrigins(root: string, changed: string, retained: st
   function origin(route: "DIRECT" | "PROXY") {
     return createServer({ key, cert }, (req, res) => {
       const host = req.headers.host;
-      if (req.method !== "GET" || (host !== changed && host !== retained) || !/^\/visit-[0-9a-f]{32}$/.test(req.url ?? "")) {
+      if (req.method !== "GET" || !host || !hosts.has(host) || !/^\/visit-[0-9a-f]{32}$/.test(req.url ?? "")) {
         res.writeHead(404, { Connection: "close" }).end();
         return;
       }
