@@ -4,6 +4,13 @@ Let AI agents on a server reach social platforms through your home internet.
 
 Instagram, Facebook, Threads, LinkedIn and TikTok often block or challenge logins from datacenter IPs, so an AI agent driving a browser on a VPS cannot use those accounts. `social-tunnel` routes **only the domains you choose** from the server's browser through a computer at home, over an SSH reverse tunnel. Everything else keeps going out directly from the server.
 
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/images/status-dark.png">
+  <img alt="Social Tunnel settings: every hop from this Mac to the server's domains is OK" src="docs/images/status-light.png" width="640">
+</picture>
+
+## How it works
+
 ```
  VPS                                              home computer
  ┌───────────────────────────────┐                ┌──────────────────────────────────┐
@@ -15,58 +22,80 @@ Instagram, Facebook, Threads, LinkedIn and TikTok often block or challenge login
  └───────────────────────────────┘                └──────────────────────────────────┘
 ```
 
-## How it works
-
-There is **one program, and it runs only on your home computer**. The server needs no social-tunnel code: it already has `sshd`, and it only needs a locked-down SSH user, one `sshd` rule and a Chrome policy.
-
 1. On the home computer, `social-tunnel run` opens an SSH connection to the server as a dedicated tunnel user and asks the server to listen on `127.0.0.1:8888`.
-2. On the server, Chrome uses a PAC script that sends only the chosen domains to `127.0.0.1:8888`. Everything else goes out directly, as before.
-3. Each connection to that port travels through the tunnel to the home computer. The built-in proxy accepts only `CONNECT <allowlisted host>:443`, resolves the name at home, refuses any private or home-network address, and relays the encrypted bytes. It never sees inside HTTPS.
+2. On the server, Chrome uses a mandatory PAC that sends only the chosen domains to `127.0.0.1:8888`. Everything else goes out directly, as before.
+3. Each connection on that port travels through the tunnel to the home computer. The built-in proxy accepts only `CONNECT <allowlisted host>:443`, resolves the name at home, refuses any private or home-network address, and relays the encrypted bytes. It never sees inside HTTPS.
 
-The SSH client and the proxy are built in, so the home computer needs neither `ssh` nor tinyproxy.
+The SSH client and the proxy are built in: the home computer needs neither `ssh` nor tinyproxy.
+
+## The app
+
+A macOS menu bar app keeps the tunnel running and shows where it breaks. **Settings** checks every hop from this Mac to the server and names the first broken one with a fix.
+
+With the [protected server package](server/linux/README.md) installed, the **Domains** tab edits the list that the server's Chrome sends home. An edit applies immediately, after you confirm, because it can interrupt what the agents are doing in their browsers. The app reports a change as applied only after the server's own Chrome proves the new route.
+
+<table>
+  <tr>
+    <td>
+      <picture>
+        <source media="(prefers-color-scheme: dark)" srcset="docs/images/domains-dark.png">
+        <img alt="Domains tab listing the twelve domains that use the home internet" src="docs/images/domains-light.png">
+      </picture>
+    </td>
+    <td>
+      <picture>
+        <source media="(prefers-color-scheme: dark)" srcset="docs/images/domains-confirm-dark.png">
+        <img alt="Confirmation before adding reddit.com, warning that agents may be interrupted" src="docs/images/domains-confirm-light.png">
+      </picture>
+    </td>
+  </tr>
+</table>
 
 ## Safety rules
 
-The home-side rules (allowlist, home network, no open port, pinned key, key handling, bounds) hold in code and are covered by tests. Two depend on the server, which you set up by hand until `setup` ships: failing closed needs the PAC from step 2, and narrow server access needs the account from step 2, which `doctor` checks.
+The home-side rules hold in code and are covered by tests. Failing closed and narrow server access depend on the server setup, which `doctor` checks.
 
 - **Allowlist only.** The proxy refuses every host not on the list (`403`), every port other than 443, every IP literal and every plain-HTTP request (`405`). Lookalike names such as `evilinstagram.com` do not match `instagram.com`.
-- **Never the home network.** If an allowlisted name resolves to a loopback, private, link-local, CGNAT, multicast or reserved address, or into a network the home computer is on, the proxy refuses it and connects nowhere. It connects to the exact address it checked, so a second DNS answer cannot redirect it.
-- **No open port at home.** The proxy runs inside the tunnel process and opens no listening socket. The tunnel is the only way in.
-- **Fails closed.** The PAC sends the chosen domains to the tunnel with no direct fallback. If the tunnel is down, those sites fail instead of switching to the datacenter IP, so accounts never flip between IPs.
-- **Pinned server key.** The server's host key is pinned by its `SHA256:` fingerprint. A different key stops the connection before authenticating. There is no trust-on-first-use.
-- **Narrow server access.** The tunnel user has no shell and may only listen on one loopback port. `social-tunnel doctor` checks this: it fails if that user can run a shell, run a command, use `sftp`, open a local forward or listen on another port.
-- **You log in yourself.** The tool never asks for, stores or logs platform passwords, 2FA codes or cookies. The SSH private key stays on the home computer, must be readable only by you, and never appears in output or logs.
-- **Bounded.** At most 256 relays at once; slow or idle connections are closed (10 s to send a request, 10 s for the DNS lookup and 10 s for the connect, each, 10 s for the server to take a refusal, 300 s idle).
+- **Never the home network.** If an allowlisted name resolves to a loopback, private, link-local, CGNAT, multicast or reserved address, or into a network the home computer is on, the proxy refuses it. It connects to the exact address it checked, so a second DNS answer cannot redirect it.
+- **No open port at home.** The proxy runs inside the tunnel process and opens no listening socket.
+- **Fails closed.** The PAC sends the chosen domains to the tunnel with no direct fallback. If the tunnel is down, those sites fail instead of switching to the datacenter IP.
+- **Pinned server key.** The server's host key is pinned by its `SHA256:` fingerprint. There is no trust-on-first-use.
+- **Narrow server access.** The tunnel user has no shell and may only listen on one loopback port. With the protected package, a kernel guard also stops every other process on the server, agents included, from taking that port.
+- **You log in yourself.** The tool never asks for, stores or logs platform passwords, 2FA codes or cookies. The SSH private key stays on the home computer, readable only by you.
 
 The full threat model is in [docs/security/threat-model.md](docs/security/threat-model.md).
 
 ## Status
 
-**v0.1 in progress.** The core works and is verified: `run`, `status` and `doctor`, with `--json` output and stable exit codes. Until `setup` and `install` ship, the server side and the start-at-login service are set up by hand, as shown below.
+**v0.2.** In daily use against one VPS with four agent environments.
 
 | Piece | State |
 | --- | --- |
 | `run`, `status`, `doctor` | Done |
-| `setup` (key, server side, PAC, default domains) | Next |
-| `install` / `uninstall` (start at login) | Planned |
-| `domains add/remove/list`, `logs` | Planned |
-| Single binaries, npm and Homebrew | Planned |
-| Tray app (v0.2) | Concepts in [docs/design](docs/design/index.html) |
+| macOS menu bar app | Done; unsigned, Apple Silicon |
+| Domain editing (app and `domains` CLI) | Done; needs the protected server package |
+| Protected server package (Linux) | Done; installed by hand as root |
+| `setup` (key, server side, PAC) and `install` | Planned |
+| Signed builds, npm and Homebrew | Planned |
 | MCP server | Later |
 
-## Requirements
+## Install
 
-- **Home computer:** macOS or Linux (Windows is planned), [Bun](https://bun.sh) 1.4 or newer while running from source. It must stay on and online while agents use the accounts.
-- **Server:** a Linux VPS with OpenSSH, root access once for the setup, and Google Chrome for the agents.
+### Home computer (macOS)
 
-## Quick start (from source)
+Download `Social-Tunnel-macos-arm64.zip` from [Releases](https://github.com/antoniofulg/social-tunnel/releases), unzip it, and move **Social Tunnel.app** to `~/Applications`. The build is not signed: on first launch, right-click the app and choose **Open**. Turn on **Open at Login** in the menu bar menu.
+
+From source, with [Bun](https://bun.sh) 1.4 or newer (macOS or Linux):
 
 ```sh
-git clone <this repo> social-tunnel && cd social-tunnel
+git clone https://github.com/antoniofulg/social-tunnel && cd social-tunnel
 bun install
+bun src/cli.ts --help
 ```
 
-### 1. Create a dedicated key on the home computer
+`cd app && bunx tauri build --bundles app` builds the app; `app/scripts/install-local.sh` installs it.
+
+### Tunnel key
 
 ```sh
 ssh-keygen -t ed25519 -N "" -C social-tunnel -f ~/.ssh/social_tunnel
@@ -75,82 +104,16 @@ chmod 600 ~/.ssh/social_tunnel
 
 Use a key only for this. `doctor` warns if you point it at your personal `~/.ssh/id_*` key.
 
-### 2. Prepare the server (once, as root)
+### Server
 
-Create a user with no shell:
+Pick one:
 
-```sh
-useradd --create-home --shell /usr/sbin/nologin sotunnel
-install -d -m 755 -o root -g root ~sotunnel/.ssh
-```
+- **Basic tunnel**: a tunnel user, one `sshd` rule and a Chrome policy you edit by hand. See [docs/server-setup.md](docs/server-setup.md).
+- **Managed domains**: the protected package, which adds editing from the app and the kernel port guard. See [server/linux/README.md](server/linux/README.md). The Linux binaries are on the release page.
 
-Add the public key to `~sotunnel/.ssh/authorized_keys`, limited to one remote listen and nothing else:
+### Config
 
-```
-restrict,port-forwarding,permitlisten="127.0.0.1:8888",command="/usr/sbin/nologin" ssh-ed25519 AAAA... social-tunnel
-```
-
-Keep the folder and the file root-owned (`chown root:root`, `chmod 644` on the file) so the tunnel user cannot edit its own key restrictions. It still owns its home folder, but with no shell and no `sftp` it has no way to swap the root-owned `.ssh` folder for another. `sshd` accepts root-owned key files.
-
-Append to `/etc/ssh/sshd_config`, then reload `sshd`:
-
-```
-Match User sotunnel
-    AllowTcpForwarding remote
-    PermitListen 127.0.0.1:8888
-    PermitOpen none
-    AllowStreamLocalForwarding no
-    GatewayPorts no
-    PermitTTY no
-    X11Forwarding no
-    AllowAgentForwarding no
-    ForceCommand /usr/sbin/nologin
-    ClientAliveInterval 30
-    ClientAliveCountMax 3
-```
-
-The keepalive frees the port within about 90 seconds after the home computer drops off, so the tunnel can come back.
-
-Point the agents' Chrome at a PAC through a managed policy, for example `/etc/opt/chrome/policies/managed/social-tunnel.json`:
-
-```json
-{
-  "ProxySettings": {
-    "ProxyMode": "pac_script",
-    "ProxyPacUrl": "data:application/x-ns-proxy-autoconfig;base64,<base64 of the PAC below>",
-    "ProxyPacMandatory": true
-  }
-}
-```
-
-```js
-function FindProxyForURL(url, host) {
-  var domains = ["instagram.com", "facebook.com", "threads.net", "linkedin.com", "tiktok.com"];
-  host = host.toLowerCase();
-  for (var i = 0; i < domains.length; i++) {
-    if (host === domains[i] || dnsDomainIs(host, "." + domains[i])) return "PROXY 127.0.0.1:8888";
-  }
-  return "DIRECT";
-}
-```
-
-`ProxyPacMandatory` keeps Chrome from going direct when the PAC cannot be used. Restart Chrome, or reload `chrome://policy`, to apply it. If your platform firewalls the agents from local ports, allow `tcp/8888` (on agentes.chat: `agentes-runner services allow tcp/8888`).
-
-Get the server's host key fingerprint from a trusted network, and check it against the server's own `ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub`:
-
-```sh
-ssh-keyscan -p 22 -t ed25519 your.server | ssh-keygen -lf -
-```
-
-### 3. Write the config on the home computer
-
-| OS | Default path |
-| --- | --- |
-| macOS | `~/Library/Application Support/social-tunnel/config.json` |
-| Linux | `$XDG_CONFIG_HOME/social-tunnel/config.json`, else `~/.config/social-tunnel/config.json` |
-| Windows | `%APPDATA%\social-tunnel\config.json` |
-
-`--config <path>` or `SOCIAL_TUNNEL_CONFIG` overrides it.
+`~/Library/Application Support/social-tunnel/config.json` on macOS, `~/.config/social-tunnel/config.json` on Linux. `--config <path>` or `SOCIAL_TUNNEL_CONFIG` overrides it.
 
 ```json
 {
@@ -171,94 +134,51 @@ ssh-keyscan -p 22 -t ed25519 your.server | ssh-keygen -lf -
 | --- | --- |
 | `server.host`, `server.port`, `server.user` | Where the tunnel user logs in |
 | `server.hostKey` | The server's host key, `SHA256:` plus 43 base64 characters |
-| `remotePort` | Loopback port the server listens on for the tunnel; default `8888` |
+| `remotePort` | Loopback port the server listens on; default `8888` |
 | `keyPath` | Private key file; `~` and paths relative to the config file work |
-| `domains` | The allowlist. A domain also covers its subdomains (`instagram.com` covers `www.instagram.com`). Bare hostnames only: no scheme, port, path, wildcard or IP |
+| `domains` | The allowlist. A domain covers its subdomains. Bare hostnames only |
 
 Unknown fields are rejected, so a typo or a pasted secret never goes unnoticed. The config holds no secrets.
 
-### 4. Check every hop, then run
+Then run `social-tunnel doctor`, start the app (or `social-tunnel run`), and log in to each platform yourself in the agent's browser on the server.
 
-```sh
-bun src/cli.ts doctor
-bun src/cli.ts run
-```
-
-`run` stays in the foreground until Ctrl-C or SIGTERM. Until `install` ships, keep it running with your own launchd agent, systemd user unit or terminal multiplexer.
-
-Then log in to each platform yourself, in the agent's browser on the server.
-
-## Commands
+## CLI
 
 | Command | Does |
 | --- | --- |
-| `social-tunnel run` | Holds the tunnel open, reconnects on its own and records every state change |
-| `social-tunnel status` | Reports the tunnel state from the running `run` |
-| `social-tunnel doctor` | Tests every hop in order and names the first broken one with a fix |
-| `social-tunnel doctor --domain <host>` | Also checks that `<host>` is on the allowlist |
+| `social-tunnel run` | Holds the tunnel open and reconnects on its own. The app runs this for you |
+| `social-tunnel status` | Reports the tunnel state |
+| `social-tunnel doctor [--domain <host>]` | Tests every hop in order and names the first broken one with a fix |
+| `social-tunnel domains list` | Shows the domains the server's Chrome currently sends home |
+| `social-tunnel domains add <host> --expected-revision <n>` | Proposes adding a domain; applies immediately |
+| `social-tunnel domains remove <host> --expected-revision <n>` | Proposes removing a domain; applies immediately |
+| `social-tunnel domains retry <operation-id>` | Checks an earlier edit until it is applied |
 
-Options: `--json` (one JSON object on stdout), `--config <path>`, `--help`, `--version`. No command ever prompts or reads stdin.
+Every command accepts `--json` (one JSON object on stdout) and returns without input. Exit codes are stable: `0` OK, `1` internal error, `2` usage, config or invalid input (such as a bad hostname), `10` tunnel or authority unavailable, `11` server refused the tunnel port, `12` domain not on the allowlist, `13` host key mismatch, `14` tunnel user too permissive.
 
-For the bundled tray sidecar, `status --json --tray-scope` supplies an internal enrollment token. The tray requires that token on `domains --json --expected-enrollment <token>` calls. If the selected configuration or managed enrollment changed, the CLI returns `conflict` (exit `10`) instead of proposing or reconciling against the replacement. Standalone commands do not require the token.
-
-### Tunnel states
-
-| State | Meaning |
+| Tunnel state | Meaning |
 | --- | --- |
 | `connecting` | First connection in progress |
 | `connected` | Tunnel up; chosen domains go through home |
-| `disconnected` | Connection lost, or the server refused the key (`auth_failed`); `retryAt` says when the next try starts |
+| `disconnected` | Connection lost or key refused; `retryAt` says when it tries again |
 | `reconnecting` | Trying again (1, 2, 4, 8, 16, then every 30 s) |
-| `blocked` | The server refused the port (`port_blocked`, retried every 30 s) or presented a different host key (`host_key_mismatch`, stops) |
-| `stopped` | No `run` is active, it stopped reporting (`stale`), or the running one serves another server or port than this config (`config_changed`: restart `run`) |
-
-### Exit codes
-
-Stable, so scripts and agents can branch on them:
-
-| Code | Meaning |
-| --- | --- |
-| `0` | OK |
-| `1` | Internal error |
-| `2` | Usage or config error, a key that is missing, not a private key or readable by others, or `run` already active |
-| `10` | Tunnel down, server unreachable, SSH login refused, or no home internet |
-| `11` | Server refused the tunnel port |
-| `12` | Domain not on the allowlist (`doctor --domain`) |
-| `13` | Server host key does not match the pinned key |
-| `14` | Server's tunnel user is too permissive (shell, command, `sftp` or other forwards work) |
-
-### `doctor` hops
-
-`config` → `domain` (with `--domain`) → `key` → `server_reachable` → `ssh_auth` → `forward` → `lockdown` → `egress`. It stops at the first failure and marks the rest `skipped`. Each hop reports `{hop, ok, skipped, detail, fix}`.
-
-### JSON output
-
-```sh
-$ social-tunnel status --json
-{"ok":true,"command":"status","configPath":"/Users/me/Library/Application Support/social-tunnel/config.json","state":"connected","reason":null,"since":"2026-11-21T18:04:12.000Z","retryAt":null,"pid":4242,"server":{"host":"your.server","port":22},"remotePort":8888,"domains":5}
-```
+| `blocked` | The server refused the port (retried every 30 s) or presented a different host key (stops) |
+| `stopped` | No `run` is active, or it serves another server than this config |
 
 ## For AI agents
 
-- Drive it with `--json` and branch on the exit code. Every command returns without input.
-- `status` and `doctor` run on the **home** computer. An agent on the server cannot call them. There it sees only whether its requests succeed: a chosen site that fails to load means the tunnel is down, by design.
-- Never type platform passwords or 2FA codes for the user. They log in themselves in the agent's browser.
-- A `SKILL.md` that teaches coding agents to drive the CLI ships with v0.1.
+[`skills/social-tunnel/SKILL.md`](skills/social-tunnel/SKILL.md) teaches a coding agent to check the tunnel and edit domains with the CLI. The CLI runs on the **home** computer. An agent on the server sees only whether its requests succeed: a chosen site that fails to load means the tunnel is down, by design.
 
 ## Troubleshooting
 
 | Symptom | Check |
 | --- | --- |
-| `status` exits 10 | Is `run` running at home, and online? `doctor` names the broken hop |
-| `blocked` / `port_blocked` (exit 11) | Something else holds the port on the server, often a stale tunnel. It frees within about 90 s with the keepalive above; otherwise check `PermitListen` and `permitlisten` |
+| `status` exits 10 | Is the app or `run` running at home, and online? `doctor` names the broken hop |
+| `blocked` / exit 11 | Something else holds the port on the server, often a stale tunnel. It frees within about 90 s |
 | Exit 13 | The server's host key changed. Verify the new fingerprint out of band before updating `server.hostKey` |
-| Exit 14 | Tighten the tunnel user: `restrict`, `command=`, `ForceCommand` and `PermitOpen none` as above |
-| Sites fail in Chrome but `status` is `connected` | Check `chrome://policy` on the server, restart Chrome, and check the platform firewall allows the port |
-| A platform loads but login breaks | It may use another domain for login. Add it to `domains` and to the PAC |
-
-## Default domains
-
-`setup` will start with `instagram.com`, `facebook.com`, `threads.net`, `linkedin.com` and `tiktok.com`. Subdomains are included. Image and video CDNs (`cdninstagram.com`, `fbcdn.net`, `tiktokcdn.com`) can keep loading directly from the server; add one only if logging in needs it.
+| Exit 14 | Tighten the tunnel user: `restrict`, `command=`, `ForceCommand` and `PermitOpen none` |
+| Sites fail in Chrome but `status` is `connected` | Check `chrome://policy` on the server and restart the agent's Chrome |
+| A platform loads but login breaks | It may use another domain for login or media. Add it |
 
 ## Limits
 
@@ -270,18 +190,12 @@ $ social-tunnel status --json
 
 ```sh
 bun install
-env -u CLAUDECODE taskpolicy -b nice -n 10 bun test   # macOS; plain `bun test` elsewhere
+bun test
 bun run typecheck
 ```
 
-Tests need no internet and no `sshd`: they run an in-process SSH server and inject DNS and network fakes. Contributor and agent rules are in [AGENTS.md](AGENTS.md); the feature specs, checks and verification records are under [.specs/](.specs/).
-
-The managed-domain Chrome proof uses a disposable, network-isolated Linux fixture with a real SSH reverse forward. Managed enrollment requires a protected supervisor to own the regular Chrome profile and private CDP pipe, verify exclusive policy and forward ownership, and give only that profile the resolver rule `MAP *.pac.invalid 127.0.0.1`. The supervisor runs a root-owned, non-setuid helper compiled from `server/domain-direct-witness.ts` at `/usr/local/bin/st-domains-direct-witness` under a dedicated unprivileged UID/GID. The helper binds a fresh IPv4 loopback port per challenge and accepts only the exact one-use synthetic origin request. Missing ownership, mapping or direct evidence leaves activation unknown. This is an enrollment prerequisite, not a live setup procedure.
-
-The [protected Linux package](server/linux/README.md) documents the dedicated supervisor and root-local provisioning boundary, including the required host IPv4/IPv6 bind guard. The disposable startup rejection proof does not qualify a Linux host for use.
-
-On macOS, `tauri build --bundles app` from `app/` builds `Social Tunnel.app`; `app/scripts/install-local.sh` installs it to `~/Applications/Social Tunnel.app`. When upgrading a local `social-tunnel.app` build, disable its tray **Open at Login** if enabled, quit the tray, then move the old bundle out of `~/Applications` before installing. Do not remove or disable the separate tunnel LaunchAgent.
+Tests need no internet and no `sshd`: they run an in-process SSH server and inject DNS and network fakes. Contributor and agent rules are in [AGENTS.md](AGENTS.md); feature specs, checks and verification records are under [.specs/](.specs/).
 
 ## License
 
-TBD (MIT suggested).
+[MIT](LICENSE)
