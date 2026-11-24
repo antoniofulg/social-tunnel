@@ -22,7 +22,7 @@ const ERRORS = {
 } as const;
 type ErrorCode = keyof typeof ERRORS;
 type DomainFault = { code: ErrorCode; field: boolean };
-type Confirmation = { host: string; revision: number };
+type Confirmation = { operation: DomainEdit["operation"]; host: string; revision: number };
 
 function fault(reason: unknown, field: boolean): DomainFault {
   const code = typeof reason === "object" && reason !== null && "code" in reason ? reason.code : null;
@@ -132,8 +132,8 @@ export function DomainsTab({ snapshot, visible = true }: { snapshot: Snapshot | 
   const editBase = verified ?? queueBase;
   const editable = visible && !!editBase && !pending && working === null;
   const activeConfirmation = confirmation && editBase?.revision === confirmation.revision &&
-    editBase.domains.includes(confirmation.host) ? confirmation : null;
-  const parent = activeConfirmation && editBase?.domains.find((host) => activeConfirmation.host.endsWith(`.${host}`));
+    editBase.domains.includes(confirmation.host) === (confirmation.operation === "remove") ? confirmation : null;
+  const parent = activeConfirmation?.operation === "remove" && editBase?.domains.find((host) => activeConfirmation.host.endsWith(`.${host}`));
   const configured = current.state === "setup_required" ? snapshot?.status?.allowlist ?? [] : [];
   const rows = editBase?.domains ?? (current.state === "setup_required" ? configured : lastVerified?.domains) ?? [];
   const listLabel = verified ? "Domains that use home internet" :
@@ -226,12 +226,15 @@ export function DomainsTab({ snapshot, visible = true }: { snapshot: Snapshot | 
 
   function add(event: SubmitEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (editable && editBase && input && !activeConfirmation) void edit("add", input, editBase.revision);
+    if (!editable || !editBase || !input || activeConfirmation) return;
+    opener.current = null;
+    setError(null);
+    setConfirmation({ operation: "add", host: input, revision: editBase.revision });
   }
 
   function cancelConfirmation() {
     setConfirmation(null);
-    opener.current?.focus();
+    (opener.current ?? inputRef.current)?.focus();
   }
 
   return (
@@ -262,7 +265,7 @@ export function DomainsTab({ snapshot, visible = true }: { snapshot: Snapshot | 
                   if (!editable || activeConfirmation) return;
                   opener.current = event.currentTarget;
                   setError(null);
-                  setConfirmation({ host, revision: editBase.revision });
+                  setConfirmation({ operation: "remove", host, revision: editBase.revision });
                 }}
                 className="grid size-6 shrink-0 place-items-center rounded-full text-text-2 hover:bg-hover aria-disabled:cursor-default aria-disabled:text-text-3">
                 <svg viewBox="0 0 10 10" aria-hidden="true" className="size-2.5">
@@ -276,17 +279,23 @@ export function DomainsTab({ snapshot, visible = true }: { snapshot: Snapshot | 
       {verified && rows.length === 0 && <p className="m-0 mb-3 text-text-2">No domains use the tunnel.</p>}
       {queueBase && rows.length === 0 && <p className="m-0 mb-3 text-text-2">No configured domains.</p>}
       {activeConfirmation && (
-        <div ref={confirmRef} role="group" aria-labelledby="domain-remove-title" onKeyDown={(event) => {
+        <div ref={confirmRef} role="group" aria-labelledby="domain-confirm-title" onKeyDown={(event) => {
           if (event.key === "Escape") { event.stopPropagation(); cancelConfirmation(); }
         }} className="mb-3 rounded-box bg-warn-bg px-3 py-2.5">
-          <p id="domain-remove-title" className="m-0 break-all font-semibold">Remove {activeConfirmation.host}?</p>
+          <p id="domain-confirm-title" className="m-0 break-all font-semibold">
+            {activeConfirmation.operation === "add" ? "Add" : "Remove"} {activeConfirmation.host}?
+          </p>
           <p className="mt-1 mb-0 text-xs text-text-2">
-            {parent ? <>After removal, the enrolled browser will still select the tunnel because <code className="break-all">{parent}</code> matches this domain. The home proxy may still block the connection.</>
+            {activeConfirmation.operation === "add" ? "New connections to this domain will use your home internet."
+              : parent ? <>After removal, the enrolled browser will still select the tunnel because <code className="break-all">{parent}</code> matches this domain. The home proxy may still block the connection.</>
               : "Once applied, new connections to this domain may go directly from the server."}
           </p>
+          <p className="mt-1 mb-0 text-xs text-text-2">This applies now and may interrupt what the agents are doing in their browsers.</p>
           <div className="mt-2 flex justify-end gap-2">
             <Button small onClick={cancelConfirmation}>Cancel</Button>
-            <Button small disabled={!editable} onClick={() => void edit("remove", activeConfirmation.host, activeConfirmation.revision)}>Remove</Button>
+            <Button small disabled={!editable} onClick={() => void edit(activeConfirmation.operation, activeConfirmation.host, activeConfirmation.revision)}>
+              {activeConfirmation.operation === "add" ? "Add" : "Remove"}
+            </Button>
           </div>
         </div>
       )}
