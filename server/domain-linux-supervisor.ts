@@ -12,6 +12,7 @@ import { ADMIN_SOCKET, CHROME, JOURNAL, POLICY, PROFILE, ROOT, SETPRIV, SSH_LAUN
   dropped, exact, guardedPlatform, guardedSshd, inspectBindHooks, inspectLegacyPolicy, installedPins, loadManifest, policyScope, proc,
   readManifestText, readSshConfig, roleDirectory,
   type Epoch, type Manifest } from "./domain-linux-platform";
+import { createDomainRecovery, OBSERVER_RESTART_EXIT, type ChromeObserverFailure } from "./domain-recovery";
 import { DOMAIN_POLICY_FILE, fileDomainPolicySink, hashBytes, protectedDirectory, renderDomainPolicy, syncDirectory } from "../src/domain-policy";
 import { domainUInt, operationIdFormat } from "../src/domain-wire";
 import { parseManagedDomainSnapshot } from "../src/managed-domains";
@@ -270,6 +271,7 @@ async function serve(m: Manifest, platform: ReturnType<typeof guardedPlatform>) 
   const ending = Promise.withResolvers<void>();
   let stopping = false;
   let failed = false;
+  let restart = false;
   const stop = (e?: unknown) => {
     if (e) { failed = true; console.error(e instanceof Error ? e.message : "protected supervisor stopped"); }
     stopping = true;
@@ -309,12 +311,18 @@ async function serve(m: Manifest, platform: ReturnType<typeof guardedPlatform>) 
     if (!exists && policy.read() !== renderDomainPolicy(m.proxyPort, { epoch: m.baseline.epoch, revision: m.baseline.revision, routes: m.baseline.domains })) {
       throw new Error("mandatory baseline differs");
     }
+    let chromeFailure: ChromeObserverFailure | undefined;
+    const observerFailed = (reason: ChromeObserverFailure) => {
+      if (stopping || chromeFailure) return;
+      chromeFailure = reason;
+      console.error(`Chrome observer stopped: ${reason}`);
+    };
     const browser = child = launchChrome(m);
     childExit = new Promise((resolve) => { browser.once("exit", resolve); browser.once("error", resolve); });
     void childExit.then(() => { if (!stopping) stop(new Error("owned Chrome exited")); });
     const input = browser.stdio[3] as Writable;
     const output = browser.stdio[4] as Readable;
-    const lostPipe = () => { if (!stopping) stop(new Error("owned Chrome pipe lost")); };
+    const lostPipe = () => observerFailed("cdp_pipe_lost");
     input.once("error", lostPipe);
     output.once("end", lostPipe);
     output.once("error", lostPipe);
@@ -344,7 +352,10 @@ async function serve(m: Manifest, platform: ReturnType<typeof guardedPlatform>) 
         return next === null ? null : ownership;
       } catch (e) { stop(e); return null; }
     };
-    const browsers = [{ generation, input, output, ownership: own, directWitness: { ...m.witness, mapping: DIRECT_WITNESS_MAPPING } }] as const;
+    const browsers = [{
+      generation, input, output, ownership: own, directWitness: { ...m.witness, mapping: DIRECT_WITNESS_MAPPING },
+      onObserverFailure: observerFailed,
+    }] as const;
     const a = authority = openDomainAuthority({ enrollment: m.enrollment, journalDir: JOURNAL, proxyPort: m.proxyPort, policy,
       forward: { epoch: m.baseline.epoch, generation: m.baseline.proxyGeneration },
       browserRoster: () => ({ version: 0, browsers }), forwardOwnership: own,
@@ -456,13 +467,23 @@ async function serve(m: Manifest, platform: ReturnType<typeof guardedPlatform>) 
       try { return await response; } finally { currentAdmin = undefined; }
     });
     await ipc.start();
+    const recover = createDomainRecovery((reason) => console.error(`Managed route unavailable; not restarting: ${reason}`));
     loops.push(serialLoop(async () => {
       if (performance.now() >= guardUntil) lose();
       platform.probe();
       guardUntil = performance.now() + 2 * GUARD_MS;
       own();
     }, GUARD_MS, stop));
-    loops.push(serialLoop(async () => { if (own() !== null && receipt) await refresh(); }, FORWARD_MS, stop));
+    loops.push(serialLoop(async () => {
+      if (own() !== null && receipt) await refresh();
+      if (stopping) return;
+      const owner = own();
+      const reason = recover(currentAdmin ? null : a.idleProofHealth(), owner, chromeFailure);
+      if (!reason) return;
+      console.error(`Restarting protected supervisor: ${reason}`);
+      restart = true;
+      stop();
+    }, FORWARD_MS, stop));
     loops.push(serialLoop(async () => {
       if (own() === null || currentAdmin || refreshing || performance.now() - lastObserveAttempt < OBSERVE_RETRY_MS) return;
       const v = a.inspectLocal();
@@ -493,6 +514,7 @@ async function serve(m: Manifest, platform: ReturnType<typeof guardedPlatform>) 
     process.off("SIGTERM", signal);
   }
   if (failed) throw new Error("protected supervisor failed closed");
+  return restart ? OBSERVER_RESTART_EXIT : 0;
 }
 
 async function probeBinding(port: number) {
@@ -551,7 +573,7 @@ if (import.meta.main) {
       } else if ((op === "stage" || op === "serve") && !arg) {
         const m = loadManifest();
         const platform = guardedPlatform(m, op === "stage");
-        if (op === "stage") stage(m); else await serve(m, platform);
+        if (op === "stage") stage(m); else process.exitCode = await serve(m, platform);
       } else if (op === "repin" && !arg) {
         repin();
       } else if ((op === "status" || op === "bootstrap") && !arg) await sendAdmin({ op });

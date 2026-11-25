@@ -4,6 +4,7 @@ import { setTimeout as sleep } from "node:timers/promises";
 import { hashBytes, type PolicyRevision } from "../src/domain-policy";
 import { withTimeout } from "../src/proxy";
 import { DIRECT_WITNESS_MAPPING, startDirectWitness, type DirectWitness, type DirectWitnessEnrollment } from "./domain-direct-witness";
+import type { ChromeObserverFailure } from "./domain-recovery";
 
 const PROOF_MS = 30000;
 
@@ -56,6 +57,7 @@ export interface EnrolledChrome {
   // policy or forward ownership transition, even between reads.
   ownership(): number | null;
   readonly directWitness?: DirectWitnessEnrollment;
+  onObserverFailure?(reason: ChromeObserverFailure): void;
 }
 
 interface ForwardWitness {
@@ -100,24 +102,30 @@ export function createDomainObserver(chrome: EnrolledChrome, now = () => perform
   }
   const alive = () => ownership() !== null;
   const valid = (proof: BrowserEvidence) => ownership() === proof.ownership && now() < proof.expiresAt;
-  function stop() { active = false; pending?.resolve(null); }
-  chrome.output.once("end", stop);
-  chrome.output.once("error", stop);
-  chrome.input.once("error", stop);
+  function stop(reason: ChromeObserverFailure) {
+    if (!active) return;
+    active = false;
+    pending?.resolve(null);
+    chrome.onObserverFailure?.(reason);
+  }
+  const pipeLost = () => stop("cdp_pipe_lost");
+  chrome.output.once("end", pipeLost);
+  chrome.output.once("error", pipeLost);
+  chrome.input.once("error", pipeLost);
   chrome.output.on("data", (chunk: Buffer) => {
     if (!active) return;
     let start = 0;
     while (start < chunk.length) {
       const end = chunk.indexOf(0, start);
       const data = chunk.subarray(start, end < 0 ? chunk.length : end);
-      if (frame.length + data.length > MAX_FRAME) return stop();
+      if (frame.length + data.length > MAX_FRAME) return stop("cdp_invalid_frame");
       if (end < 0) { frame = Buffer.concat([frame, data]); return; }
       try {
         const message = JSON.parse(frame.length ? Buffer.concat([frame, data]).toString() : data.toString());
         if (pending && message.id === pending.id && message.sessionId === pending.sessionId) {
           pending.resolve(message.error ? null : message.result);
         }
-      } catch { return stop(); }
+      } catch { return stop("cdp_invalid_frame"); }
       frame = Buffer.alloc(0);
       start = end + 1;
     }
@@ -128,7 +136,7 @@ export function createDomainObserver(chrome: EnrolledChrome, now = () => perform
     const { promise, resolve } = Promise.withResolvers<Json | null>();
     const id = ++next;
     pending = { id, sessionId, resolve };
-    const timer = setTimeout(() => stop(), CDP_TIMEOUT);
+    const timer = setTimeout(() => stop("cdp_timeout"), CDP_TIMEOUT);
     try {
       chrome.input.write(JSON.stringify({ id, method, params, sessionId }) + "\0");
       const result = await promise;

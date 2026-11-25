@@ -215,6 +215,16 @@ export function openDomainAuthority(enrollment: DomainEnrollment, now = () => pe
   return {
     open, provision, observe, inspectLocal: view,
     inspectPolicyLocal: () => publisher?.inspectPolicy(admin),
+    idleProofHealth() {
+      const v = view();
+      if (closing || !v?.ok || !v.value.editingEnabled || v.value.pending || v.value.recovery) return null;
+      const { epoch, proxyGeneration, lastProven } = v.value;
+      if (policy.read() !== renderDomainPolicy(proxyPort, lastProven.policy)) return null;
+      const scope = { epoch, generation: proxyGeneration };
+      const responsive = forward.responsive(scope);
+      const routed = responsive && current(lastProven, proxyGeneration);
+      return { responsive, routed, browser: routed && ready(v.value) };
+    },
     inspectIdleCandidateLocal: () => !closing && publisher ? publisher.inspectIdleCandidate(admin) : unavailable,
     inspectCompletedIdleWindowLocal: (binding: unknown) => !closing && publisher
       ? publisher.inspectCompletedIdleWindow(admin, binding) : unavailable,
@@ -236,7 +246,10 @@ export function openDomainAuthority(enrollment: DomainEnrollment, now = () => pe
       const checked = view();
       const v = checked?.ok ? checked.value : undefined;
       const scope = recoveryScope ?? (v ? { epoch: v.epoch, generation: v.proxyGeneration } : bootstrap);
-      if (!scope || closing || (!forwardWithoutBrowser(v) && !observer.alive()) || !(await forward.refresh(scope))) return false;
+      const needsBrowser = !forwardWithoutBrowser(v) && !observer.alive();
+      if (!scope || closing || (needsBrowser && (!v?.editingEnabled || v.pending || v.recovery))) return false;
+      // In a closed routing state, a transport response can inform recovery, not authorize a route.
+      if (!(await forward.refresh(scope, !needsBrowser))) return false;
       // Only the protected scheduler can renew the browser baseline. A durable
       // ordinary claim made under still-valid evidence can wait here unchanged;
       // the home runner and begin CAS still require a fresh matching baseline.
