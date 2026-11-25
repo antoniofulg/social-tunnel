@@ -2,11 +2,15 @@
 Description=Protected social-tunnel managed domains supervisor
 After=network.target social-tunnel-domains-sshd.service
 BindsTo=social-tunnel-domains-sshd.service
+StartLimitIntervalSec=10min
+StartLimitBurst=2
 
 [Service]
 Type=simple
 UMask=0077
 ExecStart=/usr/local/bin/st-domains-supervisor serve
+RestartForceExitStatus=75
+RestartSec=5s
 NoNewPrivileges=yes
 CapabilityBoundingSet=CAP_SETUID CAP_SETGID CAP_KILL CAP_CHOWN CAP_DAC_OVERRIDE
 ProtectSystem=strict

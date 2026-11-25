@@ -1,6 +1,6 @@
 {
   "name": "social-tunnel",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "private": true,
   "description": "Route chosen domains from a server's browser through your home internet over an SSH reverse tunnel.",
   "type": "module",

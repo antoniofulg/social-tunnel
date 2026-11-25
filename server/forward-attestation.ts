@@ -20,13 +20,17 @@ interface Probe {
 export function createForwardAttestation(enrollment: string, port: number, ownership: () => number | null, now = () => performance.now()) {
   if (!domainTag(enrollment) || !Number.isInteger(port) || port < 1 || port > 65535) throw new Error("invalid attestation enrollment");
   const probes = new Map<string, Probe>();
-  let live: { owner: number; scope: ForwardScope; snapshot: ProxyPreimage; expires: number } | undefined;
+  let live: { owner: number; scope: ForwardScope; snapshot: ProxyPreimage | null; expires: number } | undefined;
   let refreshing = false;
   let fenceGeneration = 0;
 
-  function current(scope: ForwardScope): ProxyPreimage | null {
+  function liveFor(scope: ForwardScope) {
     if (!live || live.owner !== ownership() || now() >= live.expires) { live = undefined; return null; }
-    return live.scope.epoch === scope.epoch && live.scope.generation === scope.generation ? live.snapshot : null;
+    return live.scope.epoch === scope.epoch && live.scope.generation === scope.generation ? live : null;
+  }
+
+  function current(scope: ForwardScope): ProxyPreimage | null {
+    return liveFor(scope)?.snapshot ?? null;
   }
 
   function freshFor(scope: ForwardScope): number {
@@ -80,7 +84,7 @@ export function createForwardAttestation(enrollment: string, port: number, owner
     return promise;
   }
 
-  async function refresh(scope: ForwardScope): Promise<boolean> {
+  async function refresh(scope: ForwardScope, attestRoute = true): Promise<boolean> {
     if (refreshing || ownership() === null) return false;
     refreshing = true;
     const started = fenceGeneration;
@@ -89,12 +93,15 @@ export function createForwardAttestation(enrollment: string, port: number, owner
     try {
       probe = arm(host, scope);
       const [refused, snapshot] = await Promise.all([connectCanary(host), probe.promise]);
-      if (!refused || !snapshot || started !== fenceGeneration || ownership() !== probe.owner || now() >= probe.expires) {
+      if (!refused || started !== fenceGeneration || ownership() !== probe.owner) {
         live = undefined;
         return false;
       }
-      live = { owner: probe.owner, scope, snapshot, expires: now() + LIVE_MS };
-      return true;
+      // A raw response distinguishes a live transport from a stale SSH listener.
+      // Only a fresh authenticated snapshot can be used as route evidence.
+      const verified = attestRoute && now() < probe.expires ? snapshot : null;
+      live = { owner: probe.owner, scope, snapshot: verified, expires: now() + LIVE_MS };
+      return verified !== null;
     } catch { live = undefined; return false; }
     finally { probe?.close(); refreshing = false; }
   }
@@ -116,5 +123,5 @@ export function createForwardAttestation(enrollment: string, port: number, owner
     for (const probe of probes.values()) probe.resolve(null);
     probes.clear();
   }
-  return { attest, current, freshFor, refresh, watch, fence };
+  return { attest, current, freshFor, responsive: (scope: ForwardScope) => liveFor(scope) !== null, refresh, watch, fence };
 }

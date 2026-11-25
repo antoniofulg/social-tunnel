@@ -1,10 +1,12 @@
 import { expect, test } from "bun:test";
+import { once } from "node:events";
 import { request } from "node:http";
 import { createConnection, createServer } from "node:net";
 import { PassThrough } from "node:stream";
 import { DIRECT_WITNESS_MAPPING, listenDirectWitness, type DirectWitness } from "../server/domain-direct-witness";
 import { createDomainCohort, createDomainObserver, type EnrolledChrome } from "../server/domain-observer";
 import { createForwardAttestation } from "../server/forward-attestation";
+import { createDomainRecovery } from "../server/domain-recovery";
 import { renderDomainPolicy } from "../src/domain-policy";
 import { parseManagedDomainSnapshot } from "../src/managed-domains";
 import { createManagedProxy, withTimeout } from "../src/proxy";
@@ -113,6 +115,80 @@ function cdpFixture(fault?: Fault, oldReceipt?: string, name = "fixture") {
     nextOwnership() { generation++; }, close() { sink?.close(); input.end(); output.end(); },
   };
 }
+
+test("[domains C11] a silent CDP pipe is fenced and requests recovery only with a responding home proxy", async () => {
+  const input = new PassThrough();
+  const output = new PassThrough();
+  const offline = { responsive: false, routed: false, browser: false };
+  const online = { ...offline, responsive: true };
+  const decision = createDomainRecovery(() => {});
+  const restarts: (string | undefined)[] = [];
+  const observer = createDomainObserver({
+    generation: "silent", input, output, ownership: () => 1, directWitness: settings,
+    onObserverFailure(reason) {
+      restarts.push(decision(offline, 1, reason), decision(null, 1, reason), decision(online, 1, reason));
+    },
+  });
+  try {
+    expect(await observer.prove(policy, bytes, () => { throw new Error("silent Chrome must not certify a route"); },
+      () => { throw new Error("silent Chrome must not reach the witness"); })).toBeNull();
+    expect(observer.alive()).toBe(false);
+    expect(restarts).toEqual([undefined, undefined, "cdp_timeout"]);
+  } finally { input.destroy(); output.destroy(); }
+}, 8000);
+
+test("[domains C11] only sustained proof loss on the same responding forward requests a restart", () => {
+  let now = 0;
+  const warnings: string[] = [];
+  const decision = createDomainRecovery((reason) => warnings.push(reason), () => now);
+  const online = { responsive: true, routed: false, browser: false };
+  expect(decision(online, 1)).toBeUndefined();
+  now = 60_000;
+  expect(decision(online, 2)).toBeUndefined();
+  now += 59_999;
+  expect(decision({ ...online, routed: true }, 2)).toBeUndefined();
+  now += 1;
+  expect(decision(online, 2)).toBe("forward_receipt_unproven");
+  expect(decision(null, 2)).toBeUndefined();
+  expect(decision(online, 2)).toBeUndefined();
+  const offline = { ...online, responsive: false };
+  expect(decision(offline, 2)).toBeUndefined();
+  now += 60_000;
+  expect(decision(offline, 2)).toBeUndefined();
+  expect(decision(offline, 2)).toBeUndefined();
+  expect(warnings).toEqual(["forward_unreachable"]);
+  const browserStale = { ...online, routed: true };
+  expect(decision(browserStale, 2)).toBeUndefined();
+  now += 60_000;
+  expect(decision(browserStale, 2)).toBe("browser_proof_stale");
+  expect(decision({ ...browserStale, browser: true }, 2)).toBeUndefined();
+  expect(decision(browserStale, 2)).toBeUndefined();
+});
+
+test("[domains C11] a responding transport in recovery mode does not grant proof even with an authenticated receipt", async () => {
+  const identity = { enrollment: "proof", epoch: 1, generation: "proxy" };
+  const revision = { revision: 2, domainsDigest: "a".repeat(64) };
+  let owner = 1;
+  const server = createServer((socket) => socket.once("data", (data) => {
+    const host = data.toString().split(" ")[1]!.split(":")[0]!;
+    attestation.attest(identity, { ...identity, ...revision, host });
+    socket.end("HTTP/1.1 403 Forbidden\r\n\r\n");
+  }));
+  await once(server.listen(0, loopback), "listening");
+  const address = server.address();
+  if (!address || typeof address === "string") throw new Error("fixture did not bind");
+  const attestation = createForwardAttestation(identity.enrollment, address.port, () => owner);
+  try {
+    expect(await attestation.refresh(identity, false)).toBe(false);
+    expect(attestation.responsive(identity)).toBe(true);
+    expect(attestation.current(identity)).toBeNull();
+    expect(attestation.freshFor(identity)).toBe(0);
+    expect(await attestation.refresh(identity)).toBe(true);
+    expect(attestation.current(identity)).toEqual({ generation: identity.generation, ...revision });
+    owner++;
+    expect(attestation.responsive(identity)).toBe(false);
+  } finally { await once(server.close(), "close"); }
+});
 
 test("[domains C11] affirmative visits need current policy, exact browser context, fresh sink receipt and provisioned source", async () => {
   let priorReceipt: string | null = null;
