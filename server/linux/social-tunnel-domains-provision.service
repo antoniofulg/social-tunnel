@@ -2,6 +2,7 @@
 Description=Provision the social-tunnel bind guard and start the protected services
 After=network-online.target
 Wants=network-online.target
+ConditionPathExists=!/run/social-tunnel-domains-provision-inhibited
 
 [Service]
 Type=oneshot

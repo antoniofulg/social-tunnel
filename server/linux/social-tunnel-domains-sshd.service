@@ -1,6 +1,7 @@
 [Unit]
 Description=Dedicated social-tunnel OpenSSH authorization and forward
 After=network.target
+OnFailure=social-tunnel-domains-recover.service
 
 [Service]
 Type=simple

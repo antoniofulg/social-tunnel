@@ -1,0 +1,44 @@
+#!/bin/bash
+set -euo pipefail
+export LC_ALL=C
+
+host=${ST_PROBE_HOST:-}
+port=${ST_PROXY_PORT:-}
+if [[ ! $host =~ ^([a-zA-Z0-9][a-zA-Z0-9-]*\.)+[a-zA-Z][a-zA-Z0-9-]*$ ||
+      ! $port =~ ^[1-9][0-9]{0,4}$ ]] || (( port > 65535 )); then
+  echo 'Social Tunnel health: invalid ST_PROBE_HOST or ST_PROXY_PORT' >&2
+  exit 1
+fi
+
+rc=0
+result=$(curl -q --silent --output /dev/null --connect-timeout 5 --max-time 10 \
+  --head --proto '=https' --noproxy '' --proxy "http://127.0.0.1:$port" \
+  --write-out '%{http_connect}/%{http_code}' --url "https://$host/") || rc=$?
+case "$result" in
+  200/[23][0-9][0-9])
+    if (( rc == 0 )); then status=ok; else status=origin_transport_error; fi ;;
+  200/000) status=origin_transport_error ;;
+  200/[0-9][0-9][0-9]) status=origin_http_error ;;
+  000/000) status=proxy_unreachable_or_no_connect_response ;;
+  [0-9][0-9][0-9]/[0-9][0-9][0-9]) status=proxy_rejected_connect ;;
+  *) status=probe_error; result=unknown ;;
+esac
+if [[ $status != ok ]]; then
+  printf 'Social Tunnel health: %s (CONNECT/origin %s, curl %d)\n' "$status" "$result" "$rc" >&2
+  exit 1
+fi
+
+credential=${CREDENTIALS_DIRECTORY:-/run/credentials/social-tunnel-domains-health.service}/social-tunnel-heartbeat.url
+[[ -f $credential ]] || exit 0
+url=$(<"$credential")
+if [[ ! $url =~ ^https://incidents\.betterstack\.com/api/v1/heartbeat/[a-zA-Z0-9_-]+$ ]]; then
+  echo 'Social Tunnel health: invalid Better Stack heartbeat credential' >&2
+  exit 1
+fi
+# Keep the heartbeat URL out of process arguments and error output.
+code=$(printf 'url = "%s"\n' "$url" | curl -q --config - --silent --output /dev/null \
+  --noproxy '*' --proto '=https' --connect-timeout 5 --max-time 10 --write-out '%{http_code}') || code=000
+if [[ ! $code =~ ^2[0-9]{2}$ ]]; then
+  printf 'Social Tunnel health: Better Stack heartbeat was not accepted (%s)\n' "$code" >&2
+  exit 1
+fi
