@@ -2,7 +2,6 @@
 Description=Provision the social-tunnel bind guard and start the protected services
 After=network-online.target
 Wants=network-online.target
-Before=social-tunnel-domains-sshd.service social-tunnel-domains.service
 
 [Service]
 Type=oneshot
