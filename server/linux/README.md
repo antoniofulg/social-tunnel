@@ -68,6 +68,16 @@ The cgroup ID is the live kernel leaf identity, not its name. If systemd removes
 
 Enable `social-tunnel-domains-provision.service` for boot; leave the dedicated SSH and supervisor units disabled. For a manual restart, run `systemctl start social-tunnel-domains-provision.service`, not `systemctl restart social-tunnel-domains-sshd.service`. Do not order the provisioning unit `Before=` the units its script starts: the script waits for them to start after attestation.
 
+Install `social-tunnel-domains-recover.service` with the other units; do not enable it. The dedicated SSH unit starts it on failure. It requests one provisioning run while that SSH unit is failed, with at most two recovery starts in ten minutes. Notifications that arrive during an active recovery are coalesced, not queued for another attempt. A clean stop does not trigger recovery, but a stop that times out or an already queued recovery can. For a maintenance stop, run as root:
+
+```sh
+touch /run/social-tunnel-domains-provision-inhibited &&
+  systemctl --job-mode=replace-irreversibly stop social-tunnel-domains-recover.service social-tunnel-domains-provision.service &&
+  systemctl stop social-tunnel-domains.service social-tunnel-domains-sshd.service
+```
+
+To resume, remove `/run/social-tunnel-domains-provision-inhibited` and start `social-tunnel-domains-provision.service`. The flag lasts until reboot and also blocks provisioning requested by package hooks. If recovery is exhausted or refused, inspect the SSH, recovery and provisioning journals before starting provisioning manually; do not restart SSH directly.
+
 On APT hosts, install `80-social-tunnel-domains.apt.conf` in `/etc/apt/apt.conf.d` to start the provisioning unit when Chrome or OpenSSH changes. Where `needrestart` is installed, install `needrestart/social-tunnel-domains-sshd.service` as `/etc/needrestart/restart.d/social-tunnel-domains-sshd.service` (root-owned, mode `0755`). It replaces the direct SSH restart that can follow shared-library updates even when the Chrome and OpenSSH digests are unchanged.
 
 Do not set `User=root` in the units. On systemd 259 (Ubuntu 26.04) it removed `CAP_SETUID` from the service's permitted set, so the unprivileged bind probe failed with `setresuid failed: Operation not permitted`.
@@ -86,6 +96,12 @@ For an existing agentes-runner install, a Linux administrator can run `st-domain
 4. On stop, close ingress and invalidate leases before reaping owned Chrome, leaving PAC and journal intact. On abrupt service loss, use systemd cgroup cleanup, confirm no owned processes/old authorities survive, and inspect stale socket artifacts under the fixed `/run` directories before restart. Do not unlink a socket used by a live owner. There is no automatic policy rollback, migration of existing Chrome data, or production bootstrap through `doctor`.
 
 The supervisor restarts automatically when the owned forward responds but the Chrome observer has stopped, or when proxy/browser proof has been unavailable for 60 seconds on the same responding forward. The diagnostic response does not authorize traffic. It does not restart for a missing or unresponsive home forward, during an edit or recovery, or for protected configuration failures. The unit waits five seconds before restarting and permits at most two starts per ten minutes. If that limit is reached, inspect `journalctl -u social-tunnel-domains.service` for the reason before resetting the unit's failed state.
+
+## End-to-end monitoring
+
+Install `st-domains-health` in `/usr/local/sbin` (mode `0755`) and install `social-tunnel-domains-health.service` and `.timer` with the other units. Set `ST_PROXY_PORT` to the enrolled loopback proxy port and `ST_PROBE_HOST` to an allowlisted public DNS hostname in `/etc/social-tunnel-domains/health.conf`. Choose a homepage that answers unauthenticated HTTPS `HEAD` with `2xx` or `3xx`. Enable and start the timer. The unprivileged probe runs once a minute, requires HTTP `CONNECT 200` plus a successful HTTPS response, and never tries the probe host directly. It logs whether the proxy did not answer, refused the tunnel, or the origin did not respond successfully. It does not restart services.
+
+For notifications, create a dedicated Better Stack heartbeat with a 1-minute period and a 2-minute grace period. Store only its `https://incidents.betterstack.com/api/v1/heartbeat/…` URL in the root-owned credential `/etc/credstore/social-tunnel-heartbeat.url` (mode `0600`). The service sends a heartbeat only after a successful tunneled probe. Better Stack opens an incident when the pings stop and closes it when they resume. Without that credential, the systemd check and journal still work, but no external alert is sent.
 
 ## Proof level
 

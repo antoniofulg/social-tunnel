@@ -1,0 +1,11 @@
+[Unit]
+Description=Recover the dedicated Social Tunnel SSH service through provisioning
+ConditionPathExists=!/run/social-tunnel-domains-provision-inhibited
+StartLimitIntervalSec=10min
+StartLimitBurst=2
+
+[Service]
+Type=oneshot
+ExecCondition=/usr/bin/systemctl is-failed --quiet social-tunnel-domains-sshd.service
+ExecStart=/usr/bin/systemctl start social-tunnel-domains-provision.service
+TimeoutStartSec=100
