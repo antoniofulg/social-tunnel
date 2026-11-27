@@ -1,0 +1,3 @@
+#!/bin/sh
+# A direct SSH restart invalidates the attestation for its cgroup.
+exec /bin/systemctl start social-tunnel-domains-provision.service
