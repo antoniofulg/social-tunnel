@@ -18,6 +18,7 @@ export const PROGRAM = "/usr/local/bin/st-domains-supervisor";
 export const COMMAND = "/usr/local/bin/st-domains-command";
 export const SETPRIV = "/usr/bin/setpriv";
 const SSHD = "/usr/sbin/sshd";
+const SSH_KEEPALIVE = ["-o", "ClientAliveInterval=15", "-o", "ClientAliveCountMax=3"];
 const SSH_CONFIG = `${ROOT}/sshd.conf`;
 export const SSH_RUN = `${RUN}/sshd`;
 export const SSH_SNAPSHOT = `${SSH_RUN}/sshd.conf`;
@@ -224,10 +225,10 @@ function sshSettings(m: Manifest, config: string) {
     if (entry && authorities.some((a) => a.user === entry[1])) options = matchOptions;
     else if (!options.has(/^([a-z][a-z0-9]*)\s+\S/i.exec(text)?.[1]?.toLowerCase() ?? "")) throw new Error("unsupported managed SSH directive");
   }
-  invoke(SSHD, ["-t", "-f", config]);
+  invoke(SSHD, ["-t", "-f", config, ...SSH_KEEPALIVE]);
   for (const who of authorities) {
     const n = who.user;
-    const text = invoke(SSHD, ["-T", "-f", config, "-C", `user=${n},addr=127.0.0.1,host=localhost,laddr=127.0.0.1,lport=${m.sshPort}`]);
+    const text = invoke(SSHD, ["-T", "-f", config, ...SSH_KEEPALIVE, "-C", `user=${n},addr=127.0.0.1,host=localhost,laddr=127.0.0.1,lport=${m.sshPort}`]);
     const lines = text.split("\n");
     const expected = ["pubkeyauthentication yes", "authenticationmethods publickey", "passwordauthentication no", "kbdinteractiveauthentication no",
       "permitrootlogin no", "permitemptypasswords no", "usepam no", "permittty no", "x11forwarding no", "allowagentforwarding no", "allowstreamlocalforwarding no",
@@ -335,7 +336,7 @@ export function guardedSshd(m: Manifest, cfg: Buffer) {
     check,
     start() {
       check();
-      return spawn(SSHD, ["-D", "-f", SSH_SNAPSHOT], { env: SSH_ENV, stdio: ["ignore", "inherit", "inherit"] });
+      return spawn(SSHD, ["-D", "-f", SSH_SNAPSHOT, ...SSH_KEEPALIVE], { env: SSH_ENV, stdio: ["ignore", "inherit", "inherit"] });
     },
     evidence(pid: number) {
       const child = proc(pid);
